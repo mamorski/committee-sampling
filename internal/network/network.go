@@ -21,7 +21,8 @@ type Message struct {
 }
 
 type Network interface {
-	Connect(ctx context.Context, conf config.Network) error
+	Init(ctx context.Context, conf config.Network) error
 	SendMessageToAllPeers(msg Message) error
 	ReceiveMessages(t MessageType) <-chan Message
+	RelayMessage(msg string)
 }
