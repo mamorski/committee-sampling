@@ -3,9 +3,11 @@ package network
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -16,8 +18,7 @@ import (
 )
 
 const (
-	ProtocolID  = "/committee-sampling/1.0.0"
-	ServiceName = "committee-sampling"
+	ProtocolID = "/committee-sampling/1.0.0"
 )
 
 type node struct {
@@ -48,7 +49,7 @@ func (n *node) connectToPeer(ctx context.Context, peerAddr peer.AddrInfo) error 
 	}
 
 	n.Mutex.Lock()
-	if len(n.Neighbors) < 3 {
+	if len(n.Neighbors) < 15 {
 		fmt.Printf("Connected to %s\n", peerAddr)
 		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 		n.Neighbors[peerAddr.ID] = rw
@@ -63,6 +64,10 @@ func (n *node) connectToPeer(ctx context.Context, peerAddr peer.AddrInfo) error 
 
 func (n *node) HandlePeerFound(info peer.AddrInfo) {
 	fmt.Printf("Found peer: %s\n", info.ID)
+	if info.ID > n.Host.ID() {
+		fmt.Println("Found peer:", info, " id is greater than us, wait for it to connect to us")
+		return
+	}
 
 	if err := n.connectToPeer(context.Background(), info); err != nil {
 		fmt.Printf("Error connecting to peer: %s\n", err)
@@ -70,7 +75,17 @@ func (n *node) HandlePeerFound(info peer.AddrInfo) {
 }
 
 func (n *node) Init(ctx context.Context, _ config.Network) error {
-	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"))
+
+	r := rand.Reader
+	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+
+	h, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
+		libp2p.Identity(priv),
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -79,7 +94,7 @@ func (n *node) Init(ctx context.Context, _ config.Network) error {
 
 	h.SetStreamHandler(ProtocolID, n.handleStream)
 
-	mdnsService := mdns.NewMdnsService(h, ServiceName, n)
+	mdnsService := mdns.NewMdnsService(h, ProtocolID, n)
 	if err := mdnsService.Start(); err != nil {
 		panic(err)
 	}
@@ -108,7 +123,7 @@ func (n *node) handleStream(s network.Stream) {
 	}(s)
 
 	n.Mutex.Lock()
-	if len(n.Neighbors) < 3 {
+	if len(n.Neighbors) < 15 {
 		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 		n.Neighbors[peerID] = rw
 	} else {
@@ -139,7 +154,7 @@ func Run(ctx context.Context) {
 		panic(err)
 	}
 
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
