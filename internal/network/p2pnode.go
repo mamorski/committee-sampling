@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"github.com/multiformats/go-multiaddr"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,21 +29,36 @@ type node struct {
 	Neighbors     sync.Map
 	messageQueues map[MessageType]chan Message
 	ctx           context.Context
+	nCnt          int
+	lock          sync.Mutex
+}
+
+func (n *node) addNeighbor(addrInfo peer.AddrInfo) {
+	err := n.Host.Connect(n.ctx, addrInfo)
+	if err != nil {
+		//fmt.Printf("I'm %s, got error when trying to connect to peer: %s\n", n.Host, err)
+		return
+	}
+	n.Neighbors.Store(addrInfo.ID, addrInfo)
+	n.nCnt++
 }
 
 func (n *node) HandlePeerFound(info peer.AddrInfo) {
-	fmt.Printf("Found peer: %s\n", info.ID)
+	//fmt.Printf("Found peer: %s\n", info.ID)
 	if info.ID > n.Host.ID() {
-		fmt.Println("Found peer:", info, " id is greater than us, wait for it to connect to us")
+		//fmt.Println("Found peer:", info, " id is greater than us, wait for it to connect to us")
 		return
 	}
 
-	err := n.Host.Connect(n.ctx, info)
-	if err != nil {
-		fmt.Printf("I'm %s, got error when trying to connect to peer: %s\n", n.Host, err)
+	n.lock.Lock()
+	defer n.lock.Unlock()
+	if n.nCnt >= 1 {
+		//fmt.Printf("I'm %s, already connected to %d peers, not connecting to %s\n", n.Host.ID(), n.nCnt, info.ID)
 		return
 	}
-	n.Neighbors.Store(info.ID, info)
+
+	fmt.Printf("[HandlePeerFound] I'm %s, connecting to %s\n", n.Host.ID(), info.ID)
+	n.addNeighbor(info)
 }
 
 func (n *node) Init(ctx context.Context, _ config.Network) error {
@@ -59,7 +76,7 @@ func (n *node) Init(ctx context.Context, _ config.Network) error {
 		panic(err)
 	}
 
-	fmt.Printf("Host created. We are: %s, address: %s\n", h.ID(), h.Addrs())
+	//fmt.Printf("Host created. We are: %s, address: %s\n", h.ID(), h.Addrs())
 
 	h.SetStreamHandler(ProtocolID, n.handleStream)
 
@@ -90,10 +107,22 @@ func (n *node) handleStream(s network.Stream) {
 		_ = s.Close()
 	}(s)
 	buf := bufio.NewReader(s)
+	if _, ok := n.Neighbors.Load(s.Conn().RemotePeer()); !ok {
+		//fmt.Printf("New connection from %s, adding to neighbors\n", s.Conn().RemotePeer().String())
+		peerInfo := peer.AddrInfo{
+			ID:    s.Conn().RemotePeer(),
+			Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+		}
+
+		n.lock.Lock()
+		fmt.Printf("[handleStream] I'm %s, connecting to %d peers\n", n.Host.ID(), n.nCnt)
+		n.addNeighbor(peerInfo)
+		n.lock.Unlock()
+	}
 	for {
 		str, err := buf.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Stream closed by %s\n", s.Conn().RemotePeer().String())
+			//fmt.Printf("Stream closed by %s\n", s.Conn().RemotePeer().String())
 			_ = s.Reset()
 			return
 		}
@@ -116,6 +145,12 @@ func Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			var nb []string
+			n.(*node).Neighbors.Range(func(key, value interface{}) bool {
+				nb = append(nb, key.(peer.ID).String())
+				return true
+			})
+			fmt.Printf("Shutting down node %s, I have %d neighbors and they are %s\n", n.(*node).Host.ID(), n.(*node).nCnt, strings.Join(nb, ", "))
 			return
 		case <-ticker.C:
 			n.(*node).Neighbors.Range(func(key, value interface{}) bool {
@@ -154,6 +189,7 @@ func New(ctx context.Context) Network {
 			ExAnte: make(chan Message),
 			ExPost: make(chan Message),
 		},
-		ctx: ctx,
+		ctx:  ctx,
+		nCnt: 0,
 	}
 }
