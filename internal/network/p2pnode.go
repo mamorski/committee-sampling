@@ -5,16 +5,17 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/libp2p/go-libp2p"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+
 	"github.com/mamorski/committee-sampling/pkg/config"
-	"sync"
-	"time"
 )
 
 const (
@@ -23,43 +24,9 @@ const (
 
 type node struct {
 	Host          host.Host
-	DHT           *dht.IpfsDHT
-	Neighbors     map[peer.ID]*bufio.ReadWriter
-	lock          sync.Mutex
+	Neighbors     sync.Map
 	messageQueues map[MessageType]chan Message
-	Mutex         sync.Mutex
-}
-
-func (n *node) connectToPeer(ctx context.Context, peerAddr peer.AddrInfo) error {
-	if n.Host.ID() == peerAddr.ID {
-		return nil
-	}
-
-	err := n.Host.Connect(ctx, peerAddr)
-	if err != nil {
-		fmt.Printf("Error connecting to peer: %s\n", err)
-		return err
-	}
-
-	// open a stream, this stream will be handled by handleStream other end
-	s, err := n.Host.NewStream(ctx, peerAddr.ID, ProtocolID)
-	if err != nil {
-		fmt.Printf("Error opening stream: %s\n", err)
-		return err
-	}
-
-	n.Mutex.Lock()
-	if len(n.Neighbors) < 15 {
-		fmt.Printf("Connected to %s\n", peerAddr)
-		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-		n.Neighbors[peerAddr.ID] = rw
-	} else {
-		fmt.Printf("Too many neighbors, rejecting %s\n", peerAddr)
-		//_ = s.Reset()
-	}
-	n.Mutex.Unlock()
-
-	return nil
+	ctx           context.Context
 }
 
 func (n *node) HandlePeerFound(info peer.AddrInfo) {
@@ -69,9 +36,12 @@ func (n *node) HandlePeerFound(info peer.AddrInfo) {
 		return
 	}
 
-	if err := n.connectToPeer(context.Background(), info); err != nil {
-		fmt.Printf("Error connecting to peer: %s\n", err)
+	err := n.Host.Connect(n.ctx, info)
+	if err != nil {
+		fmt.Printf("I'm %s, got error when trying to connect to peer: %s\n", n.Host, err)
+		return
 	}
+	n.Neighbors.Store(info.ID, info)
 }
 
 func (n *node) Init(ctx context.Context, _ config.Network) error {
@@ -83,7 +53,6 @@ func (n *node) Init(ctx context.Context, _ config.Network) error {
 	}
 
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
 		libp2p.Identity(priv),
 	)
 	if err != nil {
@@ -98,6 +67,7 @@ func (n *node) Init(ctx context.Context, _ config.Network) error {
 	if err := mdnsService.Start(); err != nil {
 		panic(err)
 	}
+
 	go func() {
 		<-ctx.Done()
 		_ = mdnsService.Close()
@@ -116,40 +86,26 @@ func (n *node) ReceiveMessages(t MessageType) <-chan Message {
 }
 
 func (n *node) handleStream(s network.Stream) {
-	peerID := s.Conn().RemotePeer()
-	fmt.Printf("Got a new stream from %s\n", peerID)
 	defer func(s network.Stream) {
 		_ = s.Close()
 	}(s)
-
-	n.Mutex.Lock()
-	if len(n.Neighbors) < 15 {
-		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-		n.Neighbors[peerID] = rw
-	} else {
-		fmt.Printf("Too many neighbors, rejecting %s\n", peerID)
-		//_ = s.Reset()
-	}
-	n.Mutex.Unlock()
-
-	reader := bufio.NewReader(s)
+	buf := bufio.NewReader(s)
 	for {
-		msg, err := reader.ReadString('\n')
+		str, err := buf.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Error reading from stream: %s\n", err)
-			break
+			fmt.Printf("Stream closed by %s\n", s.Conn().RemotePeer().String())
+			_ = s.Reset()
+			return
 		}
-		// TODO: implement handling message functionality
-		fmt.Printf("Received message from %s: %s\n", peerID, msg)
+		fmt.Printf("Received message from %s: %s", s.Conn().RemotePeer().String(), str)
+		if n.ctx.Done() != nil {
+			return
+		}
 	}
-
-	n.Mutex.Lock()
-	delete(n.Neighbors, peerID)
-	n.Mutex.Unlock()
 }
 
 func Run(ctx context.Context) {
-	n := New()
+	n := New(ctx)
 	if err := n.Init(ctx, config.Network{}); err != nil {
 		panic(err)
 	}
@@ -162,36 +118,42 @@ func Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n.RelayMessage("Hello from " + n.(*node).Host.ID().String())
+			n.(*node).Neighbors.Range(func(key, value interface{}) bool {
+				peerID := key.(peer.ID)
+				addrInfo := value.(peer.AddrInfo)
+
+				err := n.(*node).Host.Connect(ctx, addrInfo)
+				if err != nil {
+					fmt.Printf("Failed to connect to peer: %s\n", err)
+					return true
+				}
+
+				stream, err := n.(*node).Host.NewStream(ctx, peerID, ProtocolID)
+				if err != nil {
+					fmt.Printf("Failed to create stream: %s\n", err)
+					return true
+				}
+				_, err = stream.Write([]byte("Hello from " + n.(*node).Host.ID().String() + "\n"))
+				if err != nil {
+					fmt.Printf("Failed to send message: %s\n", err)
+					_ = stream.Reset()
+				} else {
+					_ = stream.Close()
+				}
+
+				return true
+			})
 		}
 	}
 }
 
-func (n *node) RelayMessage(msg string) {
-	n.Mutex.Lock()
-	for _, rw := range n.Neighbors {
-		_, err := rw.WriteString(msg)
-		if err != nil {
-			fmt.Printf("Error writing to buffer: %s\n", err)
-			panic(err)
-		}
-
-		err = rw.Flush()
-		if err != nil {
-			fmt.Printf("Error flushing buffer: %s\n", err)
-			panic(err)
-		}
-	}
-	n.Mutex.Unlock()
-}
-
-func New() Network {
+func New(ctx context.Context) Network {
 	return &node{
-		Neighbors: make(map[peer.ID]*bufio.ReadWriter),
 		messageQueues: map[MessageType]chan Message{
 			MDAG:   make(chan Message),
 			ExAnte: make(chan Message),
 			ExPost: make(chan Message),
 		},
+		ctx: ctx,
 	}
 }

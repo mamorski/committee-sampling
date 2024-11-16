@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
+	p2pnode "github.com/mamorski/committee-sampling/internal/network"
+	"os"
+	"os/signal"
 	"sync"
-	"time"
-
-	"github.com/mamorski/committee-sampling/internal/p2pchat"
+	"syscall"
 )
 
 func main() {
@@ -19,30 +19,14 @@ func main() {
 		wg.Add(1)
 		go func(nodeIndex int) {
 			defer wg.Done()
-
-			notifier, err := p2pchat.CreateHost(ctx)
-			if err != nil {
-				fmt.Printf("Node %d: failed to create host: %s\n", nodeIndex, err)
-				return
-			}
-
-			err = notifier.StartDHT(ctx, dht.DefaultBootstrapPeers)
-			if err != nil {
-				fmt.Printf("Node %d: failed to set up DHT: %s\n", nodeIndex, err)
-				return
-			}
-
-			notifier.SetStreamHandler(notifier.Host)
-			p2pchat.SendPeriodicMessages(ctx, notifier.Host, &notifier.Neighbors)
-			fmt.Printf("Node %d: host down\n", nodeIndex)
+			p2pnode.Run(ctx)
 		}(i)
 		fmt.Printf("Node %d started\n", i)
 	}
 
-	time.Sleep(120 * time.Second)
-	fmt.Println("#########################")
-	fmt.Println("Shutting down")
-	fmt.Println("#########################")
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
 	cancel()
 	wg.Wait()
 }

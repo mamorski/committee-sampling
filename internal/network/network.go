@@ -24,5 +24,4 @@ type Network interface {
 	Init(ctx context.Context, conf config.Network) error
 	SendMessageToAllPeers(msg Message) error
 	ReceiveMessages(t MessageType) <-chan Message
-	RelayMessage(msg string)
 }
