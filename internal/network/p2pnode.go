@@ -34,9 +34,13 @@ type node struct {
 }
 
 func (n *node) addNeighbor(addrInfo peer.AddrInfo) {
+	// Check if already connected
+	if _, ok := n.Neighbors.Load(addrInfo.ID); ok {
+		return
+	}
+
 	err := n.Host.Connect(n.ctx, addrInfo)
 	if err != nil {
-		//fmt.Printf("I'm %s, got error when trying to connect to peer: %s\n", n.Host, err)
 		return
 	}
 	n.Neighbors.Store(addrInfo.ID, addrInfo)
@@ -44,15 +48,13 @@ func (n *node) addNeighbor(addrInfo peer.AddrInfo) {
 }
 
 func (n *node) HandlePeerFound(info peer.AddrInfo) {
-	//fmt.Printf("Found peer: %s\n", info.ID)
 	if info.ID > n.Host.ID() {
-		//fmt.Println("Found peer:", info, " id is greater than us, wait for it to connect to us")
 		return
 	}
 
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	if n.nCnt >= 1 {
+	if n.nCnt >= 2 {
 		//fmt.Printf("I'm %s, already connected to %d peers, not connecting to %s\n", n.Host.ID(), n.nCnt, info.ID)
 		return
 	}
@@ -94,6 +96,10 @@ func (n *node) Init(ctx context.Context, _ config.Network) error {
 	return nil
 }
 
+func (n *node) SendMessageToPeer(peerID peer.ID, msg Message) error {
+	return nil
+}
+
 func (n *node) SendMessageToAllPeers(msg Message) error {
 	return nil
 }
@@ -107,30 +113,26 @@ func (n *node) handleStream(s network.Stream) {
 		_ = s.Close()
 	}(s)
 	buf := bufio.NewReader(s)
-	if _, ok := n.Neighbors.Load(s.Conn().RemotePeer()); !ok {
-		//fmt.Printf("New connection from %s, adding to neighbors\n", s.Conn().RemotePeer().String())
-		peerInfo := peer.AddrInfo{
-			ID:    s.Conn().RemotePeer(),
-			Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
-		}
 
-		n.lock.Lock()
-		fmt.Printf("[handleStream] I'm %s, connecting to %d peers\n", n.Host.ID(), n.nCnt)
-		n.addNeighbor(peerInfo)
-		n.lock.Unlock()
+	n.lock.Lock()
+	n.addNeighbor(peer.AddrInfo{
+		ID:    s.Conn().RemotePeer(),
+		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+	})
+	n.lock.Unlock()
+
+	str, err := buf.ReadString('\n')
+	if err != nil {
+		_ = s.Reset()
+		fmt.Println("Stream closed")
+		return
 	}
-	for {
-		str, err := buf.ReadString('\n')
-		if err != nil {
-			//fmt.Printf("Stream closed by %s\n", s.Conn().RemotePeer().String())
-			_ = s.Reset()
-			return
-		}
-		fmt.Printf("Received message from %s: %s", s.Conn().RemotePeer().String(), str)
-		if n.ctx.Done() != nil {
-			return
-		}
-	}
+
+	fmt.Printf("Received message from %s: %s", s.Conn().RemotePeer().String(), str)
+}
+
+func (n *node) serializeMessage(msg Message) []byte {
+	return nil
 }
 
 func Run(ctx context.Context) {
