@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"github.com/libp2p/go-libp2p/core/network"
 	"log"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	p2p "github.com/mamorski/internal/network/proto"
+	p2p "github.com/mamorski/committee-sampling/internal/network/proto"
 
 	ggio "github.com/gogo/protobuf/io"
 	"github.com/gogo/protobuf/proto"
@@ -26,7 +27,7 @@ type Node struct {
 	// add other protocols here...
 }
 
-// Create a new node with its implemented protocols
+// NewNode Create a new node with its implemented protocols
 func NewNode(host host.Host, done chan bool) *Node {
 	node := &Node{Host: host}
 	//node.PingProtocol = NewPingProtocol(node, done)
@@ -62,7 +63,7 @@ func (n *Node) authenticateMessage(message proto.Message, data *p2p.MessageData)
 
 	// verify the data was authored by the signing peer identified by the public key
 	// and signature included in the message
-	return n.verifyData(bin, []byte(sign), peerId, data.NodePubKey)
+	return n.verifyData(bin, sign, peerId, data.NodePubKey)
 }
 
 // sign an outgoing p2p message payload
@@ -144,13 +145,15 @@ func (n *Node) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) b
 		log.Println(err)
 		return false
 	}
-	defer s.Close()
+	defer func(s network.Stream) {
+		_ = s.Close()
+	}(s)
 
 	writer := ggio.NewFullWriter(s)
 	err = writer.WriteMsg(data)
 	if err != nil {
 		log.Println(err)
-		s.Reset()
+		_ = s.Reset()
 		return false
 	}
 	return true

@@ -3,10 +3,12 @@ module github.com/mamorski/committee-sampling
 go 1.22.2
 
 require (
+	github.com/gogo/protobuf v1.3.2
 	github.com/libp2p/go-libp2p v0.37.0
 	github.com/libp2p/go-libp2p-kad-dht v0.27.0
 	github.com/multiformats/go-multiaddr v0.13.0
 	github.com/vechain/go-ecvrf v0.0.0-20220525125849-96fa0442e765
+	google.golang.org/protobuf v1.35.1
 )
 
 require (
@@ -26,7 +28,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/pprof v0.0.0-20241017200806-017d972448fc // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -128,7 +129,6 @@ require (
 	golang.org/x/text v0.19.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
 	gonum.org/v1/gonum v0.15.0 // indirect
-	google.golang.org/protobuf v1.35.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )

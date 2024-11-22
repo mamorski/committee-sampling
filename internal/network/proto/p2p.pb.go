@@ -114,30 +114,29 @@ func (x *MessageData) GetSign() []byte {
 	return nil
 }
 
-type NegotiationRequest struct {
+type NegotiationMessage struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
 	MessageData *MessageData `protobuf:"bytes,1,opt,name=messageData,proto3" json:"messageData,omitempty"`
-	Method      string       `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"` // method to be called
-	Data        []byte       `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`     // method specific data
+	Accepted    bool         `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"` // true if the request is accepted
 }
 
-func (x *NegotiationRequest) Reset() {
-	*x = NegotiationRequest{}
+func (x *NegotiationMessage) Reset() {
+	*x = NegotiationMessage{}
 	mi := &file_p2p_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NegotiationRequest) String() string {
+func (x *NegotiationMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NegotiationRequest) ProtoMessage() {}
+func (*NegotiationMessage) ProtoMessage() {}
 
-func (x *NegotiationRequest) ProtoReflect() protoreflect.Message {
+func (x *NegotiationMessage) ProtoReflect() protoreflect.Message {
 	mi := &file_p2p_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -149,26 +148,72 @@ func (x *NegotiationRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NegotiationRequest.ProtoReflect.Descriptor instead.
-func (*NegotiationRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use NegotiationMessage.ProtoReflect.Descriptor instead.
+func (*NegotiationMessage) Descriptor() ([]byte, []int) {
 	return file_p2p_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *NegotiationRequest) GetMessageData() *MessageData {
+func (x *NegotiationMessage) GetMessageData() *MessageData {
 	if x != nil {
 		return x.MessageData
 	}
 	return nil
 }
 
-func (x *NegotiationRequest) GetMethod() string {
+func (x *NegotiationMessage) GetAccepted() bool {
 	if x != nil {
-		return x.Method
+		return x.Accepted
 	}
-	return ""
+	return false
 }
 
-func (x *NegotiationRequest) GetData() []byte {
+type ProtocolMessage struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	MessageData *MessageData `protobuf:"bytes,1,opt,name=messageData,proto3" json:"messageData,omitempty"`
+	Data        []byte       `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"` // method specific data
+}
+
+func (x *ProtocolMessage) Reset() {
+	*x = ProtocolMessage{}
+	mi := &file_p2p_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtocolMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtocolMessage) ProtoMessage() {}
+
+func (x *ProtocolMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_p2p_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtocolMessage.ProtoReflect.Descriptor instead.
+func (*ProtocolMessage) Descriptor() ([]byte, []int) {
+	return file_p2p_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ProtocolMessage) GetMessageData() *MessageData {
+	if x != nil {
+		return x.MessageData
+	}
+	return nil
+}
+
+func (x *ProtocolMessage) GetData() []byte {
 	if x != nil {
 		return x.Data
 	}
@@ -191,15 +236,20 @@ var file_p2p_proto_rawDesc = []byte{
 	0x64, 0x65, 0x49, 0x64, 0x12, 0x1e, 0x0a, 0x0a, 0x6e, 0x6f, 0x64, 0x65, 0x50, 0x75, 0x62, 0x4b,
 	0x65, 0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x0a, 0x6e, 0x6f, 0x64, 0x65, 0x50, 0x75,
 	0x62, 0x4b, 0x65, 0x79, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x69, 0x67, 0x6e, 0x18, 0x07, 0x20, 0x01,
-	0x28, 0x0c, 0x52, 0x04, 0x73, 0x69, 0x67, 0x6e, 0x22, 0x74, 0x0a, 0x12, 0x4e, 0x65, 0x67, 0x6f,
-	0x74, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x32,
+	0x28, 0x0c, 0x52, 0x04, 0x73, 0x69, 0x67, 0x6e, 0x22, 0x64, 0x0a, 0x12, 0x4e, 0x65, 0x67, 0x6f,
+	0x74, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x32,
 	0x0a, 0x0b, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x44, 0x61, 0x74, 0x61, 0x18, 0x01, 0x20,
 	0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x70, 0x32, 0x70, 0x2e, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67,
 	0x65, 0x44, 0x61, 0x74, 0x61, 0x52, 0x0b, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x44, 0x61,
-	0x74, 0x61, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, 0x18, 0x02, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x06, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x64, 0x61,
-	0x74, 0x61, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x04, 0x64, 0x61, 0x74, 0x61, 0x62, 0x06,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x74, 0x61, 0x12, 0x1a, 0x0a, 0x08, 0x61, 0x63, 0x63, 0x65, 0x70, 0x74, 0x65, 0x64, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x08, 0x52, 0x08, 0x61, 0x63, 0x63, 0x65, 0x70, 0x74, 0x65, 0x64, 0x22, 0x59,
+	0x0a, 0x0f, 0x50, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67,
+	0x65, 0x12, 0x32, 0x0a, 0x0b, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x44, 0x61, 0x74, 0x61,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x70, 0x32, 0x70, 0x2e, 0x4d, 0x65, 0x73,
+	0x73, 0x61, 0x67, 0x65, 0x44, 0x61, 0x74, 0x61, 0x52, 0x0b, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67,
+	0x65, 0x44, 0x61, 0x74, 0x61, 0x12, 0x12, 0x0a, 0x04, 0x64, 0x61, 0x74, 0x61, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x0c, 0x52, 0x04, 0x64, 0x61, 0x74, 0x61, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+	0x33,
 }
 
 var (
@@ -214,18 +264,20 @@ func file_p2p_proto_rawDescGZIP() []byte {
 	return file_p2p_proto_rawDescData
 }
 
-var file_p2p_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_p2p_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_p2p_proto_goTypes = []any{
 	(*MessageData)(nil),        // 0: p2p.MessageData
-	(*NegotiationRequest)(nil), // 1: p2p.NegotiationRequest
+	(*NegotiationMessage)(nil), // 1: p2p.NegotiationMessage
+	(*ProtocolMessage)(nil),    // 2: p2p.ProtocolMessage
 }
 var file_p2p_proto_depIdxs = []int32{
-	0, // 0: p2p.NegotiationRequest.messageData:type_name -> p2p.MessageData
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: p2p.NegotiationMessage.messageData:type_name -> p2p.MessageData
+	0, // 1: p2p.ProtocolMessage.messageData:type_name -> p2p.MessageData
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_p2p_proto_init() }
@@ -239,7 +291,7 @@ func file_p2p_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_p2p_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
