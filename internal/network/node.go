@@ -2,8 +2,14 @@ package network
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
+	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/mamorski/committee-sampling/pkg/config"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -18,21 +24,92 @@ import (
 
 // node client version
 const clientVersion = "go-p2p-node/0.0.1"
+const protocolID = "/committee-sampling/mdns/1.0.0"
 
 // Node type - a p2p host implementing one or more p2p protocols
 type Node struct {
 	host.Host // lib-p2p host
-	//*PingProtocol // ping protocol impl
-	//*EchoProtocol // echo protocol impl
-	// add other protocols here...
+	*ExAnteProtocol
+	*ExPostProtocol
+	*NeighborhoodProtocol
+	*MDAGProtocol
+	Neighbors    sync.Map
+	ctx          context.Context
+	nCnt         int
+	maxNeighbors int
+	lock         sync.Mutex
 }
 
 // NewNode Create a new node with its implemented protocols
-func NewNode(host host.Host, done chan bool) *Node {
-	node := &Node{Host: host}
-	//node.PingProtocol = NewPingProtocol(node, done)
-	//node.EchoProtocol = NewEchoProtocol(node, done)
+// host: lib-p2p host
+// ctx: context for the node
+// maxNeighbors: maximum number of neighbors to connect to, used only by HandlePeerFound, all incoming connections are accepted
+func NewNode(ctx context.Context, conf config.Network) *Node {
+	node := &Node{ctx: ctx, nCnt: 0, maxNeighbors: conf.MaxNeighbors}
+	_ = node.Init(ctx, conf)
+	node.ExAnteProtocol = NewExAnteProtocol(node)
+	node.ExPostProtocol = NewExPostProtocol(node)
+	node.NeighborhoodProtocol = NewNeighborhoodProtocol(node)
+	node.MDAGProtocol = NewMDAGProtocol(node)
 	return node
+}
+
+func (n *Node) Init(ctx context.Context, _ config.Network) error {
+
+	r := rand.Reader
+	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+
+	h, err := libp2p.New(
+		libp2p.Identity(priv),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	mdnsService := mdns.NewMdnsService(h, protocolID, n)
+	if err := mdnsService.Start(); err != nil {
+		panic(err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		_ = mdnsService.Close()
+	}()
+
+	n.Host = h
+	return nil
+}
+
+func (n *Node) HandlePeerFound(info peer.AddrInfo) {
+	if info.ID > n.Host.ID() {
+		return
+	}
+
+	n.lock.Lock()
+	defer n.lock.Unlock()
+	if n.nCnt >= n.maxNeighbors {
+		return
+	}
+
+	fmt.Printf("[HandlePeerFound] I'm %s, connecting to %s\n", n.Host.ID(), info.ID)
+	_ = n.NeighborRequest(info)
+}
+
+func (n *Node) addNeighbor(addrInfo peer.AddrInfo) error {
+	// Check if already connected
+	if _, ok := n.Neighbors.Load(addrInfo.ID); ok {
+		return nil
+	}
+
+	err := n.Host.Connect(n.ctx, addrInfo)
+	if err != nil {
+		return err
+	}
+	n.Neighbors.Store(addrInfo.ID, addrInfo)
+	return nil
 }
 
 // Authenticate incoming p2p message
@@ -140,7 +217,23 @@ func (n *Node) NewMessageData(messageId string, gossip bool) *p2p.MessageData {
 // data: reference of protobuf go data object to send (not the object itself)
 // s: network stream to write the data to
 func (n *Node) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool {
-	s, err := n.NewStream(context.Background(), id, p)
+	addrInfo, ok := n.Neighbors.Load(id)
+	if !ok {
+		fmt.Printf("Failed to find peer %s\n", id)
+		return false
+	}
+
+	return n.send(addrInfo.(peer.AddrInfo), p, data)
+}
+
+func (n *Node) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
+	err := n.Connect(context.Background(), addrInfo)
+	if err != nil {
+		fmt.Printf("Failed to connect to peer: %s\n", err)
+		return false
+	}
+
+	s, err := n.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
 		log.Println(err)
 		return false
