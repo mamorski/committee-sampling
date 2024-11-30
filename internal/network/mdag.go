@@ -16,9 +16,18 @@ import (
 const mDAGProtocol = "/merkle_dag/1.0.0"
 
 type MDAGProtocol struct {
-	node     *Node
+	node     NodeInterface
 	messages chan []byte
 	logger   *zap.Logger
+}
+
+func NewMDAGProtocol(node NodeInterface) *MDAGProtocol {
+	l := node.GetLogger().Named("mdag")
+	m := MDAGProtocol{node: node, logger: l, messages: make(chan []byte)}
+
+	node.SetStreamHandler(mDAGProtocol, m.onMDAG)
+
+	return &m
 }
 
 func (m *MDAGProtocol) onMDAG(s network.Stream) {
@@ -43,15 +52,6 @@ func (m *MDAGProtocol) onMDAG(s network.Stream) {
 		return
 	}
 	m.messages <- data.Data
-}
-
-func NewMDAGProtocol(node *Node) *MDAGProtocol {
-	l := node.logger.Named("mdag")
-	m := MDAGProtocol{node: node, logger: l, messages: make(chan []byte)}
-
-	node.SetStreamHandler(mDAGProtocol, m.onMDAG)
-
-	return &m
 }
 
 // SendMDAGMessage TODO: Add specific message data instead of byte array

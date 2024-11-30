@@ -18,12 +18,12 @@ const neighborhoodRequest = "/neighborhood/req/1.0.0"
 const neighborhoodResponse = "/neighborhood/resp/1.0.0"
 
 type NeighborhoodProtocol struct {
-	node   *Node
+	node   NodeInterface
 	logger *zap.Logger
 }
 
-func NewNeighborhoodProtocol(node *Node) *NeighborhoodProtocol {
-	l := node.logger.Named("neighborhood")
+func NewNeighborhoodProtocol(node NodeInterface) *NeighborhoodProtocol {
+	l := node.GetLogger().Named("neighborhood")
 	n := NeighborhoodProtocol{node: node, logger: l}
 
 	node.SetStreamHandler(neighborhoodRequest, n.onNeighborhoodRequest)

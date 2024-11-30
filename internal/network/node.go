@@ -24,13 +24,25 @@ import (
 const clientVersion = "go-p2p-node/0.0.1"
 const protocolID = "/committee-sampling/mdns/1.0.0"
 
+type NodeInterface interface {
+	authenticateMessage(message proto.Message, data *p2p.MessageData) bool
+	newMessageData(messageId string, gossip bool) *p2p.MessageData
+	signProtoMessage(message proto.Message) ([]byte, error)
+	sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool
+	GetLogger() *zap.Logger
+	SetStreamHandler(protocolID protocol.ID, handler network.StreamHandler)
+	addNeighbor(addrInfo peer.AddrInfo) error
+	send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool
+}
+
 // Node type - a p2p host implementing one or more p2p protocols
 type Node struct {
-	host.Host // lib-p2p host
 	*MDAGProtocol
 	*ExAnteProtocol
 	*ExPostProtocol
 	*NeighborhoodProtocol
+
+	host         host.Host // lib-p2p host
 	ctx          context.Context
 	nCnt         int
 	lock         sync.Mutex
@@ -140,7 +152,7 @@ func (n *Node) init(ctx context.Context, _ config.Network) error {
 		}
 	}()
 
-	n.Host = h
+	n.host = h
 	return nil
 }
 
@@ -148,7 +160,7 @@ func (n *Node) HandlePeerFound(info peer.AddrInfo) {
 	// TODO: remove this sleep, it's only for testing purposes
 	time.Sleep(2 * time.Second)
 
-	if info.ID > n.Host.ID() {
+	if info.ID > n.host.ID() {
 		n.logger.Debug("Ignoring peer with higher ID", zap.String("peer", info.ID.String()))
 		return
 	}
@@ -182,7 +194,7 @@ func (n *Node) addNeighbor(addrInfo peer.AddrInfo) error {
 		return nil
 	}
 
-	err := n.Host.Connect(n.ctx, addrInfo)
+	err := n.host.Connect(n.ctx, addrInfo)
 	if err != nil {
 		n.logger.Error("Failed to connect to neighbor", zap.Error(err))
 		return err
@@ -237,7 +249,7 @@ func (n *Node) signProtoMessage(message proto.Message) ([]byte, error) {
 
 // sign binary data using the local node's private key
 func (n *Node) signData(data []byte) ([]byte, error) {
-	key := n.Peerstore().PrivKey(n.ID())
+	key := n.host.Peerstore().PrivKey(n.host.ID())
 	res, err := key.Sign(data)
 	return res, err
 }
@@ -282,14 +294,14 @@ func (n *Node) verifyData(data []byte, signature []byte, peerId peer.ID, pubKeyD
 func (n *Node) newMessageData(messageId string, gossip bool) *p2p.MessageData {
 	// Add protobuf bin data for message author public key
 	// this is useful for authenticating  messages forwarded by a node authored by another node
-	nodePubKey, err := crypto.MarshalPublicKey(n.Peerstore().PubKey(n.ID()))
+	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
 
 	if err != nil {
 		n.logger.Fatal("Failed to get public key for sender from local peer store", zap.Error(err))
 	}
 
 	return &p2p.MessageData{ClientVersion: clientVersion,
-		NodeId:     n.ID().String(),
+		NodeId:     n.host.ID().String(),
 		NodePubKey: nodePubKey,
 		Timestamp:  time.Now().Unix(),
 		Id:         messageId,
@@ -310,13 +322,13 @@ func (n *Node) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) b
 }
 
 func (n *Node) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
-	err := n.Connect(context.Background(), addrInfo)
+	err := n.host.Connect(context.Background(), addrInfo)
 	if err != nil {
 		n.logger.Error("Failed to connect to peer", zap.Error(err))
 		return false
 	}
 
-	s, err := n.NewStream(context.Background(), addrInfo.ID, p)
+	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
 		n.logger.Error("Failed to create stream", zap.Error(err))
 		return false
@@ -341,4 +353,12 @@ func (n *Node) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) b
 		return false
 	}
 	return true
+}
+
+func (n *Node) GetLogger() *zap.Logger {
+	return n.logger
+}
+
+func (n *Node) SetStreamHandler(protocolID protocol.ID, handler network.StreamHandler) {
+	n.host.SetStreamHandler(protocolID, handler)
 }

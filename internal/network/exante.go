@@ -16,9 +16,18 @@ import (
 const exAnteProtocol = "/ex_ante/1.0.0"
 
 type ExAnteProtocol struct {
-	node     *Node
+	node     NodeInterface
 	messages chan []byte
 	logger   *zap.Logger
+}
+
+func NewExAnteProtocol(node NodeInterface) *ExAnteProtocol {
+	l := node.GetLogger().Named("ex_ante")
+	e := ExAnteProtocol{node: node, logger: l}
+
+	node.SetStreamHandler(exAnteProtocol, e.onExAnte)
+
+	return &e
 }
 
 func (e *ExAnteProtocol) onExAnte(s network.Stream) {
@@ -43,15 +52,6 @@ func (e *ExAnteProtocol) onExAnte(s network.Stream) {
 		return
 	}
 	e.messages <- data.Data
-}
-
-func NewExAnteProtocol(node *Node) *ExAnteProtocol {
-	l := node.logger.Named("ex_ante")
-	e := ExAnteProtocol{node: node, logger: l}
-
-	node.SetStreamHandler(exAnteProtocol, e.onExAnte)
-
-	return &e
 }
 
 // SendExAnteMessage TODO: Add specific message data instead of byte array

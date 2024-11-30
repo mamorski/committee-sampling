@@ -16,9 +16,18 @@ import (
 const exPostProtocol = "/ex_post/1.0.0"
 
 type ExPostProtocol struct {
-	node     *Node
+	node     NodeInterface
 	messages chan []byte
 	logger   *zap.Logger
+}
+
+func NewExPostProtocol(node NodeInterface) *ExPostProtocol {
+	l := node.GetLogger().Named("ex_post")
+	e := ExPostProtocol{node: node, logger: l}
+
+	node.SetStreamHandler(exPostProtocol, e.onExPost)
+
+	return &e
 }
 
 func (e *ExPostProtocol) onExPost(s network.Stream) {
@@ -43,15 +52,6 @@ func (e *ExPostProtocol) onExPost(s network.Stream) {
 		return
 	}
 	e.messages <- data.Data
-}
-
-func NewExPostProtocol(node *Node) *ExPostProtocol {
-	l := node.logger.Named("ex_post")
-	e := ExPostProtocol{node: node, logger: l}
-
-	node.SetStreamHandler(exPostProtocol, e.onExPost)
-
-	return &e
 }
 
 // SendExPostMessage TODO: Add specific message data instead of byte array
