@@ -7,4 +7,5 @@ type Config struct {
 type Network struct {
 	BootstrapPeers []string
 	LogLevel       string
+	MaxNeighbors   int
 }

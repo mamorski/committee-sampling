@@ -13,8 +13,22 @@ message MessageData {
   bytes sign = 7;         // signature of message data + method specific data by message authoring node.
 }
 
-message NegotiationRequest {
+message NeighborhoodMessage {
   MessageData messageData = 1;
-  string method = 2; // method to be called
-  bytes data = 3;   // method specific data
+  bool accepted = 2; // true if the request is accepted
+}
+
+message ExAnteMessage {
+  MessageData messageData = 1;
+  bytes data = 2; // method specific data
+}
+
+message ExPostMessage {
+  MessageData messageData = 1;
+  bytes data = 2; // method specific data
+}
+
+message MDAGMessage {
+  MessageData messageData = 1;
+  bytes data = 2; // method specific data
 }
