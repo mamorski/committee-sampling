@@ -47,7 +47,7 @@ type Node struct {
 	nCnt         int
 	lock         sync.Mutex
 	logger       *zap.Logger
-	Neighbors    sync.Map
+	neighbors    sync.Map
 	maxNeighbors int
 }
 
@@ -74,7 +74,7 @@ func New(ctx context.Context, conf config.Network, logger *zap.Logger) *Node {
 
 func (n *Node) GetPeers() []string {
 	var peers []string
-	n.Neighbors.Range(func(key, value interface{}) bool {
+	n.neighbors.Range(func(key, value interface{}) bool {
 		peers = append(peers, key.(peer.ID).String())
 		return true
 	})
@@ -190,7 +190,7 @@ func (n *Node) HandlePeerFound(info peer.AddrInfo) {
 
 func (n *Node) addNeighbor(addrInfo peer.AddrInfo) error {
 	// Check if already connected
-	if _, ok := n.Neighbors.Load(addrInfo.ID); ok {
+	if _, ok := n.neighbors.Load(addrInfo.ID); ok {
 		return nil
 	}
 
@@ -200,7 +200,7 @@ func (n *Node) addNeighbor(addrInfo peer.AddrInfo) error {
 		return err
 	}
 
-	n.Neighbors.Store(addrInfo.ID, addrInfo)
+	n.neighbors.Store(addrInfo.ID, addrInfo)
 	n.nCnt++
 	return nil
 }
@@ -312,7 +312,7 @@ func (n *Node) newMessageData(messageId string, gossip bool) *p2p.MessageData {
 // data: reference of protobuf go data object to send (not the object itself)
 // s: network stream to write the data to
 func (n *Node) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool {
-	addrInfo, ok := n.Neighbors.Load(id)
+	addrInfo, ok := n.neighbors.Load(id)
 	if !ok {
 		n.logger.Error("Failed to find peer", zap.String("peer", id.String()))
 		return false
