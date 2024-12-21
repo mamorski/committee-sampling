@@ -1,0 +1,314 @@
+package network
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/multiformats/go-multiaddr"
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	pproto "github.com/mamorski/committee-sampling/pkg/proto"
+)
+
+const (
+	neighborhoodRequest  = "/neighborhood/req/1.0.0"
+	neighborhoodResponse = "/neighborhood/resp/1.0.0"
+	clientVersion        = "go-p2p-node/0.0.1"
+)
+
+type P2PNode struct {
+	host              host.Host
+	ctx               context.Context
+	cancel            context.CancelFunc
+	logger            *zap.Logger
+	neighbors         sync.Map
+	discovery         discovery.PeerDiscovery
+	maxOutbound       int
+	numOfNeighbors    int
+	heartbeatInterval time.Duration
+	key               crypto.PrivKey
+}
+
+func NewP2PNode(ctx context.Context, cfg Config, logger *zap.Logger) (*P2PNode, error) {
+	c, cancel := context.WithCancel(ctx)
+
+	// Generate private key
+	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to generate key pair: %w", err)
+	}
+
+	// Create multiaddress for listening
+	listenAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", cfg.ListenPort))
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create multiaddr: %w", err)
+	}
+
+	// Create libp2p h
+	h, err := libp2p.New(
+		libp2p.ListenAddrs(listenAddr),
+		libp2p.Identity(priv),
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create h: %w", err)
+	}
+
+	// Create d service
+	d, err := discovery.NewDiscovery(h, cfg.DiscoveryConfig)
+	if err != nil {
+		_ = h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to create d service: %w", err)
+	}
+
+	node := &P2PNode{
+		host:              h,
+		ctx:               c,
+		cancel:            cancel,
+		maxOutbound:       cfg.MaxOutboundDegree,
+		heartbeatInterval: cfg.HeartbeatInterval,
+		discovery:         d,
+		logger:            logger,
+		numOfNeighbors:    0,
+		key:               priv,
+	}
+
+	// Set stream handler
+	h.SetStreamHandler(neighborhoodRequest, node.onNeighborRequest)
+	h.SetStreamHandler(neighborhoodResponse, node.onNeighborResponse)
+
+	// Start d
+	if err := d.Start(c); err != nil {
+		_ = node.Close()
+		return nil, fmt.Errorf("failed to start d: %w", err)
+	}
+
+	go node.handleDiscoveredPeers()
+
+	return node, nil
+}
+
+func (n *P2PNode) Close() error {
+	n.cancel()
+	if err := n.discovery.Stop(); err != nil {
+		return fmt.Errorf("failed to stop discovery: %w", err)
+	}
+	return n.host.Close()
+}
+
+func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
+	n.host.SetStreamHandler(protocol.ID(protocolID), func(s network.Stream) {
+		data := &pproto.ProtocolMessage{}
+		buf, err := io.ReadAll(s)
+		if err != nil {
+			n.logger.Error("Failed to read message", zap.Error(err))
+			return
+		}
+		_ = s.Close()
+
+		err = proto.Unmarshal(buf, data)
+		if err != nil {
+			n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
+			return
+		}
+
+		if !n.authenticateMessage(data, data.MessageData) {
+			n.logger.Error("Failed to authenticate message")
+			return
+		}
+
+		err = handler(s.Conn().RemotePeer().String(), data.Payload)
+		if err != nil {
+			n.logger.Error("Failed to handle message", zap.Error(err))
+		}
+	})
+}
+
+func (n *P2PNode) handleDiscoveredPeers() {
+	ch := n.discovery.DiscoveredPeers()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case pi := <-ch:
+			n.sendRequestToNeighbor(pi)
+		}
+	}
+
+}
+
+func (n *P2PNode) onNeighborRequest(s network.Stream) {
+	data := &pproto.NeighborMessage{}
+	buf, err := io.ReadAll(s)
+	if err != nil {
+		n.logger.Error("Failed to read neighbor request message", zap.Error(err))
+		return
+	}
+	_ = s.Close()
+
+	err = proto.Unmarshal(buf, data)
+	if err != nil {
+		n.logger.Error("Failed to unmarshal negotiation message", zap.Error(err))
+		return
+	}
+
+	n.logger.Debug("Received negotiation request", zap.Any("data", data))
+
+	if !n.authenticateMessage(data, data.MessageData) {
+		n.logger.Error("Failed to authenticate message")
+		return
+	}
+
+	resp := &pproto.NeighborMessageResponse{
+		MessageData: n.newMessageData(data.MessageData.Id, false),
+		Success:     true,
+	}
+
+	err = n.addNeighbor(peer.AddrInfo{
+		ID:    s.Conn().RemotePeer(),
+		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+	})
+	if err != nil {
+		resp.Success = false
+	}
+
+	signature, err := n.signProtoMessage(resp)
+	if err != nil {
+		n.logger.Error("Failed to sign response", zap.Error(err))
+		return
+	}
+
+	resp.MessageData.Sign = signature
+	ok := n.sendProtoMessage(s.Conn().RemotePeer(), neighborhoodResponse, resp)
+	if !ok {
+		n.logger.Error("Failed to send response")
+	}
+}
+
+func (n *P2PNode) onNeighborResponse(s network.Stream) {
+	data := &pproto.NeighborMessageResponse{}
+	buf, err := io.ReadAll(s)
+	if err != nil {
+		n.logger.Error("Failed to read negotiation message", zap.Error(err))
+		return
+	}
+	_ = s.Close()
+
+	err = proto.Unmarshal(buf, data)
+	if err != nil {
+		n.logger.Error("Failed to unmarshal negotiation message", zap.Error(err))
+		return
+	}
+
+	n.logger.Debug("Received negotiation response", zap.Any("data", data))
+
+	if !n.authenticateMessage(data, data.MessageData) {
+		n.logger.Error("Failed to authenticate message")
+		return
+	}
+
+	if !data.Success {
+		n.logger.Debug("Neighbor rejected", zap.String("peer", s.Conn().RemotePeer().String()))
+		return
+	}
+
+	err = n.addNeighbor(peer.AddrInfo{
+		ID:    s.Conn().RemotePeer(),
+		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+	})
+	if err != nil {
+		n.logger.Error("Failed to add neighbor", zap.Error(err))
+	}
+
+}
+
+func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
+	if info.ID > n.host.ID() {
+		n.logger.Debug("Ignoring peer with higher ID", zap.String("peer", info.ID.String()))
+		return
+	}
+
+	if n.numOfNeighbors >= n.maxOutbound {
+		n.logger.Debug(
+			"Already connected to max number of neighbors",
+			zap.Int("max", n.maxOutbound),
+			zap.Int("current", n.numOfNeighbors),
+		)
+		return
+	}
+
+	if _, ok := n.neighbors.Load(info.ID); ok {
+		n.logger.Debug("Already connected to peer", zap.String("peer", info.ID.String()))
+		return
+	}
+
+	msg := &pproto.NeighborMessage{
+		MessageData: n.newMessageData(uuid.New().String(), false),
+	}
+
+	signature, err := n.signProtoMessage(msg)
+	if err != nil {
+		n.logger.Error("Failed to sign request", zap.Error(err))
+		return
+	}
+
+	msg.MessageData.Sign = signature
+	if ok := n.send(info, neighborhoodRequest, msg); !ok {
+		n.logger.Error("Failed to send request to neighbor", zap.String("peer", info.ID.String()))
+		return
+	}
+}
+
+func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
+	// Check if already connected
+	if _, ok := n.neighbors.Load(addrInfo.ID); ok {
+		return nil
+	}
+
+	err := n.host.Connect(n.ctx, addrInfo)
+	if err != nil {
+		n.logger.Error("Failed to connect to neighbor", zap.Error(err))
+		return err
+	}
+
+	n.neighbors.Store(addrInfo.ID, addrInfo)
+	n.numOfNeighbors++
+	return nil
+}
+
+func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
+	n.neighbors.Range(func(key, value interface{}) bool {
+		addrInfo := value.(peer.AddrInfo)
+
+		m := &pproto.ProtocolMessage{
+			Payload:     data,
+			MessageData: n.newMessageData(uuid.New().String(), false),
+		}
+
+		signature, err := n.signProtoMessage(m)
+		if err != nil {
+			n.logger.Error("Failed to sign message", zap.Error(err))
+			return true
+		}
+
+		m.MessageData.Sign = signature
+		n.send(addrInfo, protocol.ID(protocolID), m)
+		return true
+	})
+}

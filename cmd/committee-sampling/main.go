@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -11,7 +10,8 @@ import (
 	"time"
 
 	p2pnode "github.com/mamorski/committee-sampling/internal/network"
-	"github.com/mamorski/committee-sampling/pkg/config"
+	"github.com/mamorski/committee-sampling/internal/network/discovery"
+
 	"go.uber.org/zap"
 )
 
@@ -24,9 +24,19 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	conf := config.Network{MaxNeighbors: 2}
-	rand.Seed(time.Now().UnixNano())
-	//messageTypes := []p2pnode.MessageType{p2pnode.MDAG, p2pnode.ExAnte, p2pnode.ExPost}
+	conf := p2pnode.Config{
+		ListenPort:        0,
+		MaxOutboundDegree: 2,
+		HeartbeatInterval: 0,
+		ConnectTimeout:    0,
+		DiscoveryConfig: discovery.Config{
+			BootstrapPeers: []string{},
+			DiscoveryType:  "mdns",
+			Interval:       0,
+			ProtocolID:     "committee-sampling",
+			ServiceTag:     "committee-sampling",
+		},
+	}
 
 	nodeCount := 5
 	for i := 0; i < nodeCount; i++ {
@@ -34,27 +44,17 @@ func main() {
 		wg.Add(1)
 		go func(nodeIndex int) {
 			n := createNode(ctx, conf, logger)
+			n.RegisterHandler("/committee-sampling/test", messageHandler)
 			ticker := time.NewTicker(5 * time.Second)
-			ch := n.ReceiveMessages(p2pnode.MDAG)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					wg.Done()
 					return
-				case data := <-ch:
-					fmt.Printf("Node %d received message: %s\n", nodeIndex, string(data))
 				case <-ticker.C:
-					message := p2pnode.Message{
-						Type: p2pnode.MDAG,
-						Data: []byte(fmt.Sprintf("Hello from node %d", nodeIndex)),
-					}
-					//}
-					//	n.SendMessageToPeers(message, n.GetPeers())
-					//	fmt.Println("Sending message", message)
-					//	message := p2pnode.Message{Type: m, Data: []byte("Hello")}
-					//for _, m := range messageTypes {
-					n.SendMessageToPeers(message, n.GetPeers())
+					message := fmt.Sprintf("Hello from node %d", nodeIndex)
+					n.SendProtocolMessage("/committee-sampling/test", []byte(message))
 				}
 			}
 		}(i)
@@ -68,6 +68,12 @@ func main() {
 	wg.Wait()
 }
 
-func createNode(ctx context.Context, conf config.Network, logger *zap.Logger) *p2pnode.Node {
-	return p2pnode.New(ctx, conf, logger)
+func createNode(ctx context.Context, conf p2pnode.Config, logger *zap.Logger) *p2pnode.P2PNode {
+	n, _ := p2pnode.NewP2PNode(ctx, conf, logger)
+	return n
+}
+
+func messageHandler(from string, payload []byte) error {
+	fmt.Printf("Received message from %s: %s\n", from, string(payload))
+	return nil
 }
