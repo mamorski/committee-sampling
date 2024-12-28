@@ -1,6 +1,7 @@
 syntax = "proto3";
+package proto;
 
-package p2p;
+option go_package = "committee/proto";
 
 message MessageData {
   // shared between all requests
@@ -13,22 +14,16 @@ message MessageData {
   bytes sign = 7;         // signature of message data + method specific data by message authoring node.
 }
 
-message NeighborhoodMessage {
+message NeighborMessage {
   MessageData messageData = 1;
-  bool accepted = 2; // true if the request is accepted
 }
 
-message ExAnteMessage {
+message NeighborMessageResponse {
   MessageData messageData = 1;
-  bytes data = 2; // method specific data
+  bool success = 2;
 }
 
-message ExPostMessage {
+message ProtocolMessage {
   MessageData messageData = 1;
-  bytes data = 2; // method specific data
-}
-
-message MDAGMessage {
-  MessageData messageData = 1;
-  bytes data = 2; // method specific data
+  bytes payload = 2; // serialized protobufs of the method specific data
 }
