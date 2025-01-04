@@ -29,6 +29,13 @@ const (
 	clientVersion        = "go-p2p-node/0.0.1"
 )
 
+type Network interface {
+	RegisterHandler(protocolID string, handler MessageHandler)
+	SendProtocolMessage(protocolID string, data []byte)
+	GetNeighbors() []string
+	Close() error
+}
+
 type P2PNode struct {
 	host              host.Host
 	ctx               context.Context
@@ -110,6 +117,37 @@ func (n *P2PNode) Close() error {
 		return fmt.Errorf("failed to stop discovery: %w", err)
 	}
 	return n.host.Close()
+}
+
+func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
+	n.neighbors.Range(func(key, value interface{}) bool {
+		addrInfo := value.(peer.AddrInfo)
+
+		m := &pproto.ProtocolMessage{
+			Payload:     data,
+			MessageData: n.newMessageData(uuid.New().String(), false),
+		}
+
+		signature, err := n.signProtoMessage(m)
+		if err != nil {
+			n.logger.Error("Failed to sign message", zap.Error(err))
+			return true
+		}
+
+		m.MessageData.Sign = signature
+		n.send(addrInfo, protocol.ID(protocolID), m)
+		return true
+	})
+}
+
+func (n *P2PNode) GetNeighbors() []string {
+	neighbors := make([]string, 0)
+	n.neighbors.Range(func(key, value interface{}) bool {
+		neighbors = append(neighbors, key.(peer.ID).String())
+		return true
+	})
+
+	return neighbors
 }
 
 func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
@@ -290,25 +328,4 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	n.neighbors.Store(addrInfo.ID, addrInfo)
 	n.numOfNeighbors++
 	return nil
-}
-
-func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
-	n.neighbors.Range(func(key, value interface{}) bool {
-		addrInfo := value.(peer.AddrInfo)
-
-		m := &pproto.ProtocolMessage{
-			Payload:     data,
-			MessageData: n.newMessageData(uuid.New().String(), false),
-		}
-
-		signature, err := n.signProtoMessage(m)
-		if err != nil {
-			n.logger.Error("Failed to sign message", zap.Error(err))
-			return true
-		}
-
-		m.MessageData.Sign = signature
-		n.send(addrInfo, protocol.ID(protocolID), m)
-		return true
-	})
 }
