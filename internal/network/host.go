@@ -33,6 +33,7 @@ type Network interface {
 	RegisterHandler(protocolID string, handler MessageHandler)
 	SendProtocolMessage(protocolID string, data []byte)
 	GetNeighbors() []string
+	GetNodeID() string
 	Close() error
 }
 
@@ -176,6 +177,10 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 			n.logger.Error("Failed to handle message", zap.Error(err))
 		}
 	})
+}
+
+func (n *P2PNode) GetNodeID() string {
+	return n.host.ID().String()
 }
 
 func (n *P2PNode) handleDiscoveredPeers() {

@@ -1,0 +1,19 @@
+syntax = "proto3";
+package proto;
+
+option go_package = "mdag/proto";
+
+// MDAGMessage represents a single message in the MDAG protocol
+message MDAGMessage {
+  // Unique identifier for the protocol session
+  bytes session_id = 1;
+
+  // Round number starting from 0
+  uint32 round = 2;
+
+  // The node's label for this round
+  bytes label = 3;
+
+  // Identity of the sending node
+  string from = 4;
+}
