@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +21,7 @@ const protocolID = "/mdag/1.0.0"
 type HashOracle func([]byte) []byte
 
 type MerkleDAG interface {
-	Gen() error
+	Gen(sid, vki string, vi ...string) (map[int][]string, error)
 	Verify() bool
 }
 
@@ -33,12 +34,15 @@ type MDAG struct {
 	round  int
 	rounds int
 
-	currentLabel []byte
-	roundLabels  map[int][]byte
-	receivedMsgs map[int]map[string][]byte
+	currentLabel string
+	roundLabels  map[int]string
+	receivedMsgs map[int]map[string]string
 	roundDone    map[int]chan struct{}
 	roundTimeout time.Duration
 	neighbors    []string
+
+	state  map[string][][]string // Stores received messages for each peer and round.
+	labels map[string][]string   // Stores computed labels for each round.
 }
 
 func New(rounds int, oracle HashOracle, network network.Network, timeout time.Duration, logger *zap.Logger) *MDAG {
@@ -47,8 +51,8 @@ func New(rounds int, oracle HashOracle, network network.Network, timeout time.Du
 		rounds:       rounds,
 		oracle:       oracle,
 		network:      network,
-		roundLabels:  make(map[int][]byte),
-		receivedMsgs: make(map[int]map[string][]byte),
+		roundLabels:  make(map[int]string),
+		receivedMsgs: make(map[int]map[string]string),
 		roundDone:    make(map[int]chan struct{}),
 		roundTimeout: timeout,
 		neighbors:    network.GetNeighbors(),
@@ -66,13 +70,14 @@ func New(rounds int, oracle HashOracle, network network.Network, timeout time.Du
 	return m
 }
 
-// TODO: Return not sorted map, and not concatanated. Consider using strings instead of bytes
-func (m *MDAG) Gen(sid, vki []byte, vi ...[]byte) (map[int][]byte, error) {
-	input := append(append(append([]byte{}, sid...), vki...))
+// Gen TODO: Return not sorted map, and not concatenated.
+func (m *MDAG) Gen(sid, vki string, vi ...string) (map[int]string, error) {
+	input := sid + vki
 	for _, v := range vi {
-		input = append(input, v...)
+		input += v
 	}
-	m.currentLabel = m.oracle(input)
+
+	m.currentLabel = string(m.oracle([]byte(input)))
 	m.roundLabels[m.round] = m.currentLabel
 
 	// Broadcast the label to all neighbors
@@ -94,13 +99,12 @@ func (m *MDAG) Gen(sid, vki []byte, vi ...[]byte) (map[int][]byte, error) {
 		}
 
 		// Get messages from previous round
-		prevMsgs := sortMapToSlice(m.receivedMsgs[r-1])
-		m.currentLabel = make([]byte, 0)
-		for _, msg := range prevMsgs {
-			m.currentLabel = append(m.currentLabel, msg...)
+		prevMsgs := make([]string, 0, len(m.receivedMsgs[r-1]))
+		for _, msg := range m.receivedMsgs[r-1] {
+			prevMsgs = append(prevMsgs, msg)
 		}
-
-		m.currentLabel = m.oracle(m.currentLabel)
+		sort.Strings(prevMsgs)
+		m.currentLabel = string(m.oracle([]byte(strings.Join(prevMsgs, ""))))
 		m.roundLabels[m.round] = m.currentLabel
 
 		// Broadcast the label to all neighbors
@@ -113,7 +117,7 @@ func (m *MDAG) Gen(sid, vki []byte, vi ...[]byte) (map[int][]byte, error) {
 	return m.roundLabels, nil
 }
 
-func (m *MDAG) GetLastLabel() []byte {
+func (m *MDAG) GetLastLabel() string {
 	return m.currentLabel
 }
 
@@ -140,6 +144,37 @@ func (m *MDAG) Verify(startLabel []byte, path [][]byte, endLabel []byte) bool {
 
 	// Final label should match endLabel
 	return bytes.Equal(currentLabel, endLabel)
+}
+
+// handleMessage handles incoming messages.
+func (m *MDAG) handleMessage(from string, payload []byte) error {
+	var msg pb.MDAGMessage
+	if err := proto.Unmarshal(payload, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %v", err)
+	}
+
+	// Validate that the From field matches the network-level from
+	if msg.From != from {
+		return fmt.Errorf("message From field %s does not match network from %s", msg.From, from)
+	}
+
+	round := int(msg.Round)
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if len(m.state[from]) <= round {
+		m.state[from] = append(m.state[from], make([][]string, round-len(m.state[from])+1)...) // Extend state.
+	}
+
+	m.state[from][msg.Round] = msg.Label
+
+	// Check if the round is complete (all peers have sent their messages).
+	if m.isRoundComplete(msg.Round) {
+		close(m.roundEnd[msg.Round])
+	}
+
+	return nil
 }
 
 func (m *MDAG) handleMessage(from string, data []byte) error {
@@ -182,7 +217,7 @@ func (m *MDAG) handleMessage(from string, data []byte) error {
 	return nil
 }
 
-func (m *MDAG) broadcast(round int, from string, sid, label []byte) error {
+func (m *MDAG) broadcast(round int, from, sid, label string) error {
 	msg := &pb.MDAGMessage{
 		From:      from,
 		Round:     uint32(round),
