@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/signal"
@@ -9,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/mdag"
 	p2pnode "github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
 
@@ -40,23 +42,30 @@ func main() {
 
 	nodeCount := 5
 	for i := 0; i < nodeCount; i++ {
-
 		wg.Add(1)
 		go func(nodeIndex int) {
-			n := createNode(ctx, conf, logger)
-			n.RegisterHandler("/committee-sampling/test", messageHandler)
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					wg.Done()
-					return
-				case <-ticker.C:
-					message := fmt.Sprintf("Hello from node %d", nodeIndex)
-					n.SendProtocolMessage("/committee-sampling/test", []byte(message))
+			fmt.Println("Creating node", nodeIndex)
+			n, _ := p2pnode.NewP2PNode(ctx, conf, logger)
+			time.Sleep(10 * time.Second)
+			m := mdag.New(10, oracle, n, 5*time.Second, logger)
+			sid := "test"
+			vki := "test"
+			vi := []string{"test"}
+			labels, err := m.Gen(sid, vki, vi...)
+			if err != nil {
+				fmt.Println("Error generating labels")
+				fmt.Println(err)
+			} else {
+				for _, l := range labels {
+					// Concatenate the sorted labels.
+					var concatenated []byte
+					for _, lab := range l {
+						concatenated = append(concatenated, lab...)
+					}
+					fmt.Println(string(concatenated))
 				}
 			}
+			wg.Done()
 		}(i)
 		fmt.Printf("Node %d started\n", i)
 	}
@@ -68,12 +77,18 @@ func main() {
 	wg.Wait()
 }
 
-func createNode(ctx context.Context, conf p2pnode.Config, logger *zap.Logger) *p2pnode.P2PNode {
-	n, _ := p2pnode.NewP2PNode(ctx, conf, logger)
-	return n
-}
+//func createNode(ctx context.Context, conf p2pnode.Config, logger *zap.Logger) *p2pnode.P2PNode {
+//	n, _ := p2pnode.NewP2PNode(ctx, conf, logger)
+//	return n
+//}
+//
+//func messageHandler(from string, payload []byte) error {
+//	fmt.Printf("Received message from %s: %s\n", from, string(payload))
+//	return nil
+//}
 
-func messageHandler(from string, payload []byte) error {
-	fmt.Printf("Received message from %s: %s\n", from, string(payload))
-	return nil
+func oracle(data []byte) []byte {
+	h := sha256.New()
+	h.Write(data)
+	return h.Sum(nil)
 }
