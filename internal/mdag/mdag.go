@@ -2,17 +2,17 @@ package mdag
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/hex"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/network"
+	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/mamorski/committee-sampling/internal/network"
-	pb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
 const protocolID = "/mdag/1.0.0"
@@ -21,229 +21,179 @@ const protocolID = "/mdag/1.0.0"
 type HashOracle func([]byte) []byte
 
 type MerkleDAG interface {
-	Gen(sid, vki string, vi ...string) (map[int][]string, error)
-	Verify() bool
+	Gen(sid, vki string, vi ...string) (map[int][][]byte, error)
 }
 
 type MDAG struct {
-	network network.Network
-	oracle  HashOracle
-	lock    sync.Mutex
-	logger  *zap.Logger
+	rounds       int             // total number of rounds (round 1...rounds; round 0 is initialization)
+	oracle       HashOracle      // hash oracle (random oracle)
+	network      network.Network // network interface for asynchronous messaging
+	roundTimeout time.Duration   // time to wait each round before computing the next label
+	logger       *zap.Logger     // zap logger for logging events
+	isRunning    bool            // flag indicating if the protocol is running
 
-	round  int
-	rounds int
-
-	currentLabel string
-	roundLabels  map[int]string
-	receivedMsgs map[int]map[string]string
-	roundDone    map[int]chan struct{}
-	roundTimeout time.Duration
-	neighbors    []string
-
-	state  map[string][][]string // Stores received messages for each peer and round.
-	labels map[string][]string   // Stores computed labels for each round.
+	mu             sync.Mutex
+	messages       map[int][][]byte // messages received from the network, keyed by round number
+	state          [][][]byte       // state: bucket S_{i,r} of labels received in round (r-1)
+	computedLabels [][]byte         // computed label for each round (r >= 1)
+	currentLabel   []byte           // label computed in the most recent round
+	sessionID      string           // current protocol session id
 }
 
-func New(rounds int, oracle HashOracle, network network.Network, timeout time.Duration, logger *zap.Logger) *MDAG {
+// New constructs and returns a new MDAG instance.
+// The MDAG instance is initialized with the given number of rounds, hash oracle, network interface, round timeout, and logger.
+func New(rounds int, oracle HashOracle, network network.Network, roundTimeout time.Duration, logger *zap.Logger) *MDAG {
 	m := &MDAG{
-		round:        0,
-		rounds:       rounds,
-		oracle:       oracle,
-		network:      network,
-		roundLabels:  make(map[int]string),
-		receivedMsgs: make(map[int]map[string]string),
-		roundDone:    make(map[int]chan struct{}),
-		roundTimeout: timeout,
-		neighbors:    network.GetNeighbors(),
-		logger:       logger,
+		rounds:         rounds,
+		oracle:         oracle,
+		network:        network,
+		roundTimeout:   roundTimeout,
+		logger:         logger,
+		messages:       make(map[int][][]byte),
+		computedLabels: make([][]byte, rounds),
+		state:          make([][][]byte, rounds),
+		isRunning:      true,
 	}
-
-	// Initialize round completion channels
-	for i := 0; i <= rounds; i++ {
-		m.roundDone[i] = make(chan struct{})
-	}
-
-	// Register message handler
+	// Register the message handler for the "mdag-protocol".
 	network.RegisterHandler(protocolID, m.handleMessage)
-
+	m.logger.Info("MDAG instance created", zap.Int("rounds", rounds))
 	return m
 }
 
-// Gen TODO: Return not sorted map, and not concatenated.
-func (m *MDAG) Gen(sid, vki string, vi ...string) (map[int]string, error) {
-	input := sid + vki
-	for _, v := range vi {
-		input += v
-	}
+// Gen implements the MerkleDAG interface.
+// It runs the protocol, broadcasting the initial label (round 0) and then for each round r = 1...rounds:
+//   - waits for incoming messages from round (r–1)
+//   - sorts and concatenates them
+//   - applies the hash oracle to compute a new label
+//   - stores the bucket (state) and broadcasts the new label
+//
+// It returns the state as a map from round number to the slice of raw labels ([]byte).
+func (m *MDAG) Gen(sid, vki string, vi ...string) ([][][]byte, error) {
+	// Save the session id.
+	m.sessionID = sid
 
-	m.currentLabel = string(m.oracle([]byte(input)))
-	m.roundLabels[m.round] = m.currentLabel
+	// Compute the initial label: sid || vki || (concatenation of vi)
+	input := sid + vki + strings.Join(vi, "")
+	m.currentLabel = []byte(input)
+	m.mu.Lock()
+	m.messages[0] = append(m.messages[0], m.currentLabel)
+	m.mu.Unlock()
 
-	// Broadcast the label to all neighbors
-	if err := m.broadcast(m.round, m.network.GetNodeID(), sid, m.currentLabel); err != nil {
-		m.logger.Error("failed to broadcast label", zap.Error(err))
-		return nil, fmt.Errorf("failed to broadcast label: %v", err)
-	}
+	m.logger.Info("Starting MDAG protocol",
+		zap.String("session_id", sid),
+		zap.String("node_id", m.network.GetNodeID()))
 
+	// Broadcast the initial label (round 0).
+	m.broadcast(0, m.currentLabel)
+
+	// Process rounds 1 through m.rounds.
 	for r := 1; r <= m.rounds; r++ {
-		m.round = r
+		m.logger.Info("Starting round", zap.Int("round", r))
+		// Wait for messages to arrive for the previous round.
+		time.Sleep(m.roundTimeout)
 
-		// Wait for all neighbors to respond
-		select {
-		case <-m.roundDone[r-1]:
-			// Round is complete
-			m.logger.Info("round complete", zap.Int("round", r-1))
-		case <-time.After(m.roundTimeout):
-			m.logger.Error("round timeout", zap.Int("round", r))
+		// Retrieve and remove the bucket of messages from round r-1.
+		m.mu.Lock()
+		bucket, found := m.messages[r-1]
+		if !found {
+			m.logger.Warn("No messages received for round", zap.Int("round", r-1))
+			bucket = [][]byte{}
+		}
+		m.mu.Unlock()
+
+		// Sort the received labels in canonical order.
+		sortedLabels := make([][]byte, len(bucket))
+		copy(sortedLabels, bucket)
+		sort.Slice(sortedLabels, func(i, j int) bool {
+			return bytes.Compare(sortedLabels[i], sortedLabels[j]) < 0
+		})
+
+		// Concatenate the sorted labels.
+		var concatenated []byte
+		for _, lab := range sortedLabels {
+			concatenated = append(concatenated, lab...)
 		}
 
-		// Get messages from previous round
-		prevMsgs := make([]string, 0, len(m.receivedMsgs[r-1]))
-		for _, msg := range m.receivedMsgs[r-1] {
-			prevMsgs = append(prevMsgs, msg)
+		// Compute the new label using the oracle.
+		newLabel := m.oracle(concatenated)
+
+		// Save the bucket (state) and computed label.
+		m.state[r-1] = bucket
+		m.computedLabels[r-1] = newLabel
+		m.currentLabel = newLabel
+
+		// Broadcast the new label with round r.
+		if r < m.rounds {
+			m.broadcast(r, newLabel)
 		}
-		sort.Strings(prevMsgs)
-		m.currentLabel = string(m.oracle([]byte(strings.Join(prevMsgs, ""))))
-		m.roundLabels[m.round] = m.currentLabel
-
-		// Broadcast the label to all neighbors
-		if err := m.broadcast(m.round, m.network.GetNodeID(), sid, m.currentLabel); err != nil {
-			m.logger.Error("failed to broadcast label", zap.Error(err))
-			return nil, fmt.Errorf("failed to broadcast label: %v", err)
-		}
+		m.logger.Info("Completed round",
+			zap.Int("round", r),
+			zap.String("new_label", string(newLabel)))
 	}
 
-	return m.roundLabels, nil
+	// Mark the protocol as completed.
+	m.mu.Lock()
+	m.isRunning = false
+	m.mu.Unlock()
+	m.logger.Info("MDAG protocol completed")
+	return m.state, nil
 }
 
-func (m *MDAG) GetLastLabel() string {
-	return m.currentLabel
-}
-
-// Verify implements the verification functionality from the paper
-func (m *MDAG) Verify(startLabel []byte, path [][]byte, endLabel []byte) bool {
-	if len(path) == 0 {
-		return false
-	}
-
-	// First element in path should match startLabel
-	if !bytes.Equal(path[0], startLabel) {
-		return false
-	}
-
-	currentLabel := startLabel
-	// For each set of labels in the path
-	for i := 1; i < len(path); i++ {
-		labels := path[i]
-
-		// Add currentLabel and all path labels
-		input := append(append([]byte{}, currentLabel...), labels...)
-		currentLabel = m.oracle(input)
-	}
-
-	// Final label should match endLabel
-	return bytes.Equal(currentLabel, endLabel)
-}
-
-// handleMessage handles incoming messages.
-func (m *MDAG) handleMessage(from string, payload []byte) error {
-	var msg pb.MDAGMessage
-	if err := proto.Unmarshal(payload, &msg); err != nil {
-		return fmt.Errorf("failed to unmarshal message: %v", err)
-	}
-
-	// Validate that the From field matches the network-level from
-	if msg.From != from {
-		return fmt.Errorf("message From field %s does not match network from %s", msg.From, from)
-	}
-
-	round := int(msg.Round)
-
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	if len(m.state[from]) <= round {
-		m.state[from] = append(m.state[from], make([][]string, round-len(m.state[from])+1)...) // Extend state.
-	}
-
-	m.state[from][msg.Round] = msg.Label
-
-	// Check if the round is complete (all peers have sent their messages).
-	if m.isRoundComplete(msg.Round) {
-		close(m.roundEnd[msg.Round])
-	}
-
-	return nil
-}
-
-func (m *MDAG) handleMessage(from string, data []byte) error {
-	var msg pb.MDAGMessage
-	if err := proto.Unmarshal(data, &msg); err != nil {
-		return fmt.Errorf("failed to unmarshal message: %v", err)
-	}
-
-	// Validate that the From field matches the network-level from
-	if msg.From != from {
-		return fmt.Errorf("message From field %s does not match network from %s", msg.From, from)
-	}
-
-	round := int(msg.Round)
-
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	// Store the message
-	if m.receivedMsgs[round] == nil {
-		m.receivedMsgs[round] = make(map[string][]byte)
-	}
-	if _, ok := m.receivedMsgs[round][msg.From]; ok {
-		m.logger.Warn("duplicate message received", zap.String("from", msg.From), zap.Int("round", round))
+// handleMessage processes incoming messages from the network.
+func (m *MDAG) handleMessage(_ string, payload []byte) error {
+	// Check if the protocol is running to prevent processing messages after completion.
+	// Adversaries may still send messages after the protocol has completed.
+	m.mu.Lock()
+	if !m.isRunning {
+		m.logger.Warn("Received message while protocol is not running")
+		m.mu.Unlock()
 		return nil
 	}
+	m.mu.Unlock()
 
-	m.receivedMsgs[round][msg.From] = msg.Label
-
-	// Check if round is complete (received from all neighbors)
-	if len(m.receivedMsgs[round]) >= len(m.neighbors) {
-		select {
-		case <-m.roundDone[round]:
-			// Channel already closed
-		default:
-			close(m.roundDone[round])
-		}
+	var pbMsg mdagpb.MDAGMessage
+	if err := proto.Unmarshal(payload, &pbMsg); err != nil {
+		m.logger.Error("Failed to unmarshal message", zap.Error(err))
+		return err
 	}
 
+	// Check that the session id matches (if already set).
+	if m.sessionID != "" && pbMsg.SessionId != m.sessionID {
+		err := errors.New("session id mismatch")
+		m.logger.Warn("Received message with mismatched session id",
+			zap.String("expected", m.sessionID),
+			zap.String("received", pbMsg.SessionId))
+		return err
+	}
+
+	// Decode the hex-encoded label.
+	lab := []byte(pbMsg.Label)
+	round := int(pbMsg.Round)
+	m.mu.Lock()
+	m.messages[round] = append(m.messages[round], lab)
+	m.mu.Unlock()
+	m.logger.Debug("Received message",
+		zap.String("from", pbMsg.From),
+		zap.Int("round", round),
+		zap.String("label", pbMsg.Label))
 	return nil
 }
 
-func (m *MDAG) broadcast(round int, from, sid, label string) error {
-	msg := &pb.MDAGMessage{
-		From:      from,
+// broadcast sends a message over the network using protobuf.
+func (m *MDAG) broadcast(round int, label []byte) {
+	pbMsg := &mdagpb.MDAGMessage{
+		SessionId: m.sessionID,
 		Round:     uint32(round),
-		Label:     label,
-		SessionId: sid,
+		Label:     hex.EncodeToString(label),
+		From:      m.network.GetNodeID(),
 	}
-
-	data, err := proto.Marshal(msg)
+	data, err := proto.Marshal(pbMsg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %v", err)
+		m.logger.Error("Failed to marshal message", zap.Error(err))
+		return
 	}
-
 	m.network.SendProtocolMessage(protocolID, data)
-	return nil
-}
-
-func sortMapToSlice(m map[string][]byte) [][]byte {
-	s := make([][]byte, len(m))
-	i := 0
-	for _, v := range m {
-		s[i] = v
-		i++
-	}
-	sort.Slice(s, func(i, j int) bool {
-		return bytes.Compare(s[i], s[j]) < 0
-	})
-
-	return s
+	m.logger.Debug("Broadcast message",
+		zap.Int("round", round),
+		zap.String("label", pbMsg.Label))
 }
