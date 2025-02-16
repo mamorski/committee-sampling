@@ -1,0 +1,172 @@
+package gce
+
+import (
+	"crypto/sha256"
+	"errors"
+)
+
+type VRF interface {
+	Gen(lambda int) (sk []byte, vk []byte, err error)
+	Eval(message, sk []byte) (output []byte, proof []byte, err error)
+}
+
+type VDF interface {
+	Setup(lambda, delta int) (vdfVk []byte, err error)
+	Eval(message, vk []byte, delay int) (phiVDF []byte, piVDF []byte, err error)
+}
+
+type RBExp interface {
+	Gen(sid string, data []byte) (challenge []byte, proof *RBExpProof, err error)
+	Ver(session string, identityData []byte, auxKey *RBExpAuxKey, weight float64) ([]*RBExpOutput, error)
+}
+
+// RBExpProof represents the proof state returned by RB-ExP.Gen.
+// It contains three components: π(rp), σ(exp), and σ(exa).
+type RBExpProof struct {
+	PiRP     []byte
+	SigmaExp []byte
+	SigmaExa []byte
+}
+
+// LocalState holds the party’s local state after the initialization phase.
+type LocalState struct {
+	VRFSecret []byte
+	VRFPublic []byte
+
+	Challenge  []byte
+	RBExpProof *RBExpProof
+
+	PhiVDF []byte
+	PiVDF  []byte
+}
+
+// RBExpAuxKey holds the auxiliary public values used in the RB-ExP verification.
+type RBExpAuxKey struct {
+	// Output and proof from the VRF evaluation in the committee-election phase.
+	PhiVRF []byte
+	PiVRF  []byte
+
+	// VDF values from the initialization phase.
+	PhiVDF []byte
+	PiVDF  []byte
+}
+
+// RBExpOutput represents one output element returned by RBExp.Ver.
+// Each output corresponds to a candidate (or committee member) along with an associated grade.
+type RBExpOutput struct {
+	SessionID    string
+	IdentityData []byte
+	Challenge    []byte
+	AuxKey       *RBExpAuxKey
+	Grade        int
+}
+
+// CommitteeOutput is the final output for an elected candidate: a pair (id||vk, grade).
+type CommitteeOutput struct {
+	IdentityData []byte
+	Grade        int
+}
+
+// hashData concatenates all input byte slices and returns their SHA-256 hash.
+func hashData(data ...[]byte) []byte {
+	h := sha256.New()
+	for _, d := range data {
+		h.Write(d)
+	}
+	return h.Sum(nil)
+}
+
+// Initialize executes the initialization phase of GCE.
+// Inputs:
+//   - id: the party’s identifier (e.g. its network or application id).
+//   - sid: the session identifier.
+//   - vrf: an implementation of the VRF interface.
+//   - rbexp: an implementation of the RBExp interface.
+//   - vdf: an implementation of the VDF interface.
+//   - vdfVk: the verification key for the VDF.
+//   - delay: the VDF delay parameter.
+//
+// Returns the party’s LocalState or an error.
+func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
+	// Step 1: Sample a VRF key pair.
+	sk, vk, err := vrf.Gen(lambda)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Run the resource-bounded ex-post generation.
+	identityData := append([]byte(id), vk...)
+	challenge, rbExpProof, err := rbexp.Gen(sid, identityData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: Start the VDF evaluation.
+	vdfVk, err := vdf.Setup(lambda, delay)
+	if err != nil {
+		return nil, err
+	}
+	vdfInput := hashData([]byte(id), vk, challenge)
+	phiVDF, piVDF, err := vdf.Eval(vdfInput, vdfVk, delay)
+	if err != nil {
+		return nil, err
+	}
+
+	state := &LocalState{
+		VRFSecret:  sk,
+		VRFPublic:  vk,
+		Challenge:  challenge,
+		RBExpProof: rbExpProof,
+		PhiVDF:     phiVDF,
+		PiVDF:      piVDF,
+	}
+	return state, nil
+}
+
+// CommitteeElection executes the committee-election phase of ΠGCE.
+// Inputs:
+//   - id: the party’s identifier.
+//   - sid: the session identifier.
+//   - state: the LocalState output from the initialization phase.
+//   - weight: the party’s local estimation (W_i) of the expected total RP weight.
+//   - vrf: an implementation of the VRF interface (for evaluation).
+//   - rbexp: an implementation of the RBExp interface (for verification).
+//
+// Returns a slice of CommitteeOutput representing elected committee members.
+func CommitteeElection(id string, sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
+	if state == nil || len(state.VRFSecret) == 0 {
+		return nil, errors.New("invalid local state")
+	}
+
+	// Step 1: Compute the VRF evaluation.
+	hashInput := hashData(state.PhiVDF, []byte(sid))
+	phiVrf, piVrf, err := vrf.Eval(hashInput, state.VRFSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	auxKey := &RBExpAuxKey{
+		PhiVRF: phiVrf,
+		PiVRF:  piVrf,
+		PhiVDF: state.PhiVDF,
+		PiVDF:  state.PiVDF,
+	}
+
+	// Step 2: Run RB-ExP.Ver.
+	identityData := append([]byte(id), state.VRFPublic...)
+	outputs, err := rbexp.Ver(sid, identityData, auxKey, weight)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: Process the outputs.
+	var committee []CommitteeOutput
+	for _, out := range outputs {
+		committee = append(committee, CommitteeOutput{
+			IdentityData: out.IdentityData,
+			Grade:        out.Grade,
+		})
+	}
+
+	return committee, nil
+}
