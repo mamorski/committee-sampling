@@ -16,16 +16,16 @@ type VDF interface {
 }
 
 type RBExp interface {
-	Gen(sid string, data []byte) (challenge []byte, proof *RBExpProof, err error)
-	Ver(session string, identityData []byte, auxKey *RBExpAuxKey, weight float64) ([]*RBExpOutput, error)
+	Gen(sid string, vk []byte) (challenge []byte, proof *RBExpProof, err error)
+	Ver(sid string, vk, ch []byte, proof *RBExpProof, auxKey *AuxKey, auxLocal float64) ([]*RBExpOutput, error)
 }
 
 // RBExpProof represents the proof state returned by RB-ExP.Gen.
 // It contains three components: π(rp), σ(exp), and σ(exa).
 type RBExpProof struct {
 	PiRP     []byte
-	SigmaExp []byte
-	SigmaExa []byte
+	SigmaExp [][][]byte
+	SigmaExa [][][]byte
 }
 
 // LocalState holds the party’s local state after the initialization phase.
@@ -40,8 +40,8 @@ type LocalState struct {
 	PiVDF  []byte
 }
 
-// RBExpAuxKey holds the auxiliary public values used in the RB-ExP verification.
-type RBExpAuxKey struct {
+// AuxKey holds the auxiliary public values used in the RB-ExP verification.
+type AuxKey struct {
 	// Output and proof from the VRF evaluation in the committee-election phase.
 	PhiVRF []byte
 	PiVRF  []byte
@@ -57,7 +57,7 @@ type RBExpOutput struct {
 	SessionID    string
 	IdentityData []byte
 	Challenge    []byte
-	AuxKey       *RBExpAuxKey
+	AuxKey       *AuxKey
 	Grade        int
 }
 
@@ -145,7 +145,7 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 		return nil, err
 	}
 
-	auxKey := &RBExpAuxKey{
+	auxKey := &AuxKey{
 		PhiVRF: phiVrf,
 		PiVRF:  piVrf,
 		PhiVDF: state.PhiVDF,
@@ -154,7 +154,7 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 
 	// Step 2: Run RB-ExP.Ver.
 	identityData := append([]byte(id), state.VRFPublic...)
-	outputs, err := rbexp.Ver(sid, identityData, auxKey, weight)
+	outputs, err := rbexp.Ver(sid, identityData, state.Challenge, state.RBExpProof, auxKey, weight)
 	if err != nil {
 		return nil, err
 	}
