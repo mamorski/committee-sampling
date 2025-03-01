@@ -1,0 +1,22 @@
+syntax = "proto3";
+package proto;
+
+option go_package = "expost/proto";
+
+message AuxData {
+  bytes phi_vrf = 1;
+  bytes pi_vrf = 2;
+  bytes phi_vdf = 3;
+  bytes pi_vdf = 4;
+}
+
+// ExPostMessage represents a single message in the ex‐post timestamp protocol.
+message ExPostMessage {
+  string session_id = 1;
+  uint32 round = 2;
+  string vk = 3;
+  string challenge = 4;
+  AuxData aux = 5;
+  repeated string sigma_parts = 6;
+  string from = 7;
+}

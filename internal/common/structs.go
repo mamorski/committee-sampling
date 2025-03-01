@@ -1,5 +1,9 @@
 package common
 
+import (
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
+)
+
 type RBExpProof struct {
 	PiRP     []byte
 	SigmaExp [][][]byte
@@ -15,6 +19,15 @@ type AuxKey struct {
 	// VDF values from the initialization phase.
 	PhiVDF []byte
 	PiVDF  []byte
+}
+
+func (a *AuxKey) ToProto() *pb.AuxData {
+	return &pb.AuxData{
+		PhiVrf: a.PhiVRF,
+		PiVrf:  a.PiVRF,
+		PhiVdf: a.PhiVDF,
+		PiVdf:  a.PiVDF,
+	}
 }
 
 // RBExpOutput represents one output element returned by RBExp.Ver.
