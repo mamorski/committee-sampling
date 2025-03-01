@@ -1,4 +1,3 @@
-// Package expost implements the ex‐post timestamp protocol.
 package expost
 
 import (
@@ -23,7 +22,6 @@ type filterTagFunc func(session string, vk, v []byte, aux *common.AuxTag) bool
 
 type gradeFunc func(string, []byte, []byte, *common.AuxKey, float64) int
 
-// Network defines the network interface.
 type Network interface {
 	RegisterHandler(protocolID string, handler MessageHandler)
 	SendProtocolMessage(protocolID string, data []byte)
@@ -32,10 +30,8 @@ type Network interface {
 	Close() error
 }
 
-// MessageHandler is a handler for incoming protocol messages.
 type MessageHandler func(from string, payload []byte) error
 
-// MDAG defines the interface for MDAG.Gen.
 type MDAG interface {
 	Gen(session string, vk []byte, r []byte) ([][][]byte, []byte, error)
 }
