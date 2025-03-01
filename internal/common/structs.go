@@ -6,13 +6,19 @@ type RBExpProof struct {
 	SigmaExa [][][]byte
 }
 
+// AuxKey holds the auxiliary public values used in the RB-ExP verification.
 type AuxKey struct {
+	// Output and proof from the VRF evaluation in the committee-election phase.
 	PhiVRF []byte
 	PiVRF  []byte
+
+	// VDF values from the initialization phase.
 	PhiVDF []byte
 	PiVDF  []byte
 }
 
+// RBExpOutput represents one output element returned by RBExp.Ver.
+// Each output corresponds to a candidate (or committee member) along with an associated grade.
 type RBExpOutput struct {
 	SID       string
 	VK        []byte
