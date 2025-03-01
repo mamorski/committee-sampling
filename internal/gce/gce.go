@@ -3,6 +3,8 @@ package gce
 import (
 	"crypto/sha256"
 	"errors"
+
+	"github.com/mamorski/committee-sampling/internal/common"
 )
 
 type VRF interface {
@@ -16,16 +18,8 @@ type VDF interface {
 }
 
 type RBExp interface {
-	Gen(sid string, data []byte) (challenge []byte, proof *RBExpProof, err error)
-	Ver(session string, identityData []byte, auxKey *RBExpAuxKey, weight float64) ([]*RBExpOutput, error)
-}
-
-// RBExpProof represents the proof state returned by RB-ExP.Gen.
-// It contains three components: π(rp), σ(exp), and σ(exa).
-type RBExpProof struct {
-	PiRP     []byte
-	SigmaExp []byte
-	SigmaExa []byte
+	Gen(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
+	Ver(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.RBExpOutput, error)
 }
 
 // LocalState holds the party’s local state after the initialization phase.
@@ -34,31 +28,10 @@ type LocalState struct {
 	VRFPublic []byte
 
 	Challenge  []byte
-	RBExpProof *RBExpProof
+	RBExpProof *common.RBExpProof
 
 	PhiVDF []byte
 	PiVDF  []byte
-}
-
-// RBExpAuxKey holds the auxiliary public values used in the RB-ExP verification.
-type RBExpAuxKey struct {
-	// Output and proof from the VRF evaluation in the committee-election phase.
-	PhiVRF []byte
-	PiVRF  []byte
-
-	// VDF values from the initialization phase.
-	PhiVDF []byte
-	PiVDF  []byte
-}
-
-// RBExpOutput represents one output element returned by RBExp.Ver.
-// Each output corresponds to a candidate (or committee member) along with an associated grade.
-type RBExpOutput struct {
-	SessionID    string
-	IdentityData []byte
-	Challenge    []byte
-	AuxKey       *RBExpAuxKey
-	Grade        int
 }
 
 // CommitteeOutput is the final output for an elected candidate: a pair (id||vk, grade).
@@ -145,7 +118,7 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 		return nil, err
 	}
 
-	auxKey := &RBExpAuxKey{
+	auxKey := &common.AuxKey{
 		PhiVRF: phiVrf,
 		PiVRF:  piVrf,
 		PhiVDF: state.PhiVDF,
@@ -154,7 +127,7 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 
 	// Step 2: Run RB-ExP.Ver.
 	identityData := append([]byte(id), state.VRFPublic...)
-	outputs, err := rbexp.Ver(sid, identityData, auxKey, weight)
+	outputs, err := rbexp.Ver(sid, identityData, state.Challenge, state.RBExpProof, auxKey, weight)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +136,7 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 	var committee []CommitteeOutput
 	for _, out := range outputs {
 		committee = append(committee, CommitteeOutput{
-			IdentityData: out.IdentityData,
+			IdentityData: out.VK,
 			Grade:        out.Grade,
 		})
 	}
