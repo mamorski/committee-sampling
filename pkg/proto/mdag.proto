@@ -12,7 +12,7 @@ message MDAGMessage {
   uint32 round = 2;
 
   // The node's label for this round
-  string label = 3;
+  bytes label = 3;
 
   // Identity of the sending node
   string from = 4;

@@ -2,15 +2,15 @@ package mdag
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
+	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
+
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -20,10 +20,6 @@ const protocolID = "/mdag/1.0.0"
 // HashOracle defines the interface for the hashing function
 type HashOracle func([]byte) []byte
 
-type MerkleDAG interface {
-	Gen(sid, vki string, vi ...string) (map[int][][]byte, error)
-}
-
 type MDAG struct {
 	rounds       int             // total number of rounds (round 1...rounds; round 0 is initialization)
 	oracle       HashOracle      // hash oracle (random oracle)
@@ -31,6 +27,8 @@ type MDAG struct {
 	roundTimeout time.Duration   // time to wait each round before computing the next label
 	logger       *zap.Logger     // zap logger for logging events
 	isRunning    bool            // flag indicating if the protocol is running
+	startTime    time.Time       // time when the protocol should start
+	neighbors    map[string]bool // set of allowed neighbor node IDs
 
 	mu             sync.Mutex
 	messages       map[int][][]byte // messages received from the network, keyed by round number
@@ -41,8 +39,30 @@ type MDAG struct {
 }
 
 // New constructs and returns a new MDAG instance.
-// The MDAG instance is initialized with the given number of rounds, hash oracle, network interface, round timeout, and logger.
-func New(rounds int, oracle HashOracle, network network.Network, roundTimeout time.Duration, logger *zap.Logger) *MDAG {
+// It initializes the MDAG protocol with the specified parameters and registers a message handler.
+//
+// Parameters:
+//   - rounds: The total number of rounds to run in the protocol (excluding initialization round 0)
+//   - sid: Session identifier for this protocol instance
+//   - oracle: Hash oracle function that implements the random oracle model
+//   - network: Network interface for sending and receiving messages
+//   - roundTimeout: Duration to wait for each round before proceeding
+//   - logger: Structured logger for recording protocol events
+//   - startTime: Time when the protocol should start execution
+//
+// The function also initializes internal data structures and registers a message handler
+// with the network interface. It stores the list of neighbors from the network for
+// message validation.
+//
+// Returns a configured MDAG instance ready to run the protocol.
+func New(rounds int, sid string, oracle HashOracle, network network.Network, roundTimeout time.Duration, logger *zap.Logger, startTime time.Time) *MDAG {
+	// Get the list of neighbors from the network
+	neighborsList := network.GetNeighbors()
+	neighbors := make(map[string]bool, len(neighborsList))
+	for _, neighbor := range neighborsList {
+		neighbors[neighbor] = true
+	}
+
 	m := &MDAG{
 		rounds:         rounds,
 		oracle:         oracle,
@@ -53,28 +73,59 @@ func New(rounds int, oracle HashOracle, network network.Network, roundTimeout ti
 		computedLabels: make([][]byte, rounds),
 		state:          make([][][]byte, rounds),
 		isRunning:      true,
+		sessionID:      sid,
+		startTime:      startTime,
+		neighbors:      neighbors,
 	}
+
 	// Register the message handler for the "mdag-protocol".
-	network.RegisterHandler(protocolID, m.handleMessage)
-	m.logger.Info("MDAG instance created", zap.Int("rounds", rounds))
+	network.RegisterHandler(fmt.Sprintf("%s/%s", protocolID, sid), m.handleMessage)
+	m.logger.Info("MDAG instance created",
+		zap.Int("rounds", rounds),
+		zap.Int("neighbors", len(neighbors)))
 	return m
 }
 
-// Gen implements the MerkleDAG interface.
-// It runs the protocol, broadcasting the initial label (round 0) and then for each round r = 1...rounds:
-//   - waits for incoming messages from round (r–1)
-//   - sorts and concatenates them
-//   - applies the hash oracle to compute a new label
-//   - stores the bucket (state) and broadcasts the new label
+// Generate implements the MerkleDAG protocol.
+// It generates a Merkle DAG by running the protocol for the specified number of rounds.
 //
-// It returns the state as a map from round number to the slice of raw labels ([]byte).
-func (m *MDAG) Gen(sid, vki string, vi ...string) ([][][]byte, error) {
+// The protocol operates as follows:
+// 1. Computes and broadcasts the initial label (round 0) using sid, vki, and vi
+// 2. For each round r = 1...rounds:
+//   - Waits for incoming messages from round (r-1)
+//   - Sorts and concatenates the received labels
+//   - Applies the hash oracle to compute a new label
+//   - Stores the bucket (state) and broadcasts the new label
+//
+// Parameters:
+//   - sid: Session identifier that must match the one used to initialize the MDAG
+//   - vki: Verification key for the initial label
+//   - vi: Additional input values for the initial label
+//
+// The function uses optimized buffer management to reduce memory allocations and
+// minimizes lock contention by creating copies of data for processing.
+//
+// Returns:
+//   - The complete state of the protocol as a 3D slice of labels
+//   - An error if the session ID doesn't match or other issues occur
+func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error) {
 	// Save the session id.
-	m.sessionID = sid
+	if m.sessionID != sid {
+		return nil, errors.New("session ID does not match")
+	}
+
+	// Pre-allocate a buffer for concatenation
+	var buffer bytes.Buffer
+	buffer.Grow(1024) // Initial capacity - adjust based on expected label sizes
 
 	// Compute the initial label: sid || vki || (concatenation of vi)
-	input := sid + vki + strings.Join(vi, "")
-	m.currentLabel = []byte(input)
+	buffer.WriteString(sid)
+	buffer.Write(vki)
+	for _, v := range vi {
+		buffer.Write(v)
+	}
+	m.currentLabel = m.oracle(buffer.Bytes())
+
 	m.mu.Lock()
 	m.messages[0] = append(m.messages[0], m.currentLabel)
 	m.mu.Unlock()
@@ -85,42 +136,49 @@ func (m *MDAG) Gen(sid, vki string, vi ...string) ([][][]byte, error) {
 
 	// Broadcast the initial label (round 0).
 	m.broadcast(0, m.currentLabel)
+	time.Sleep(time.Until(m.startTime))
 
 	// Process rounds 1 through m.rounds.
 	for r := 1; r <= m.rounds; r++ {
 		m.logger.Info("Starting round", zap.Int("round", r))
 		// Wait for messages to arrive for the previous round.
-		time.Sleep(m.roundTimeout)
+		time.Sleep(time.Until(m.startTime.Add(time.Duration(r) * m.roundTimeout)))
 
-		// Retrieve and remove the bucket of messages from round r-1.
+		// Get messages for the previous round with minimal lock time
 		m.mu.Lock()
 		bucket, found := m.messages[r-1]
 		if !found {
-			m.logger.Warn("No messages received for round", zap.Int("round", r-1))
 			bucket = [][]byte{}
 		}
+		// Create a copy to avoid holding the lock while processing
+		bucketCopy := make([][]byte, len(bucket))
+		copy(bucketCopy, bucket)
 		m.mu.Unlock()
 
 		// Sort the received labels in canonical order.
-		sortedLabels := make([][]byte, len(bucket))
-		copy(sortedLabels, bucket)
-		sort.Slice(sortedLabels, func(i, j int) bool {
-			return bytes.Compare(sortedLabels[i], sortedLabels[j]) < 0
+		// Sort in-place since we're working on a copy
+		sort.Slice(bucketCopy, func(i, j int) bool {
+			return bytes.Compare(bucketCopy[i], bucketCopy[j]) < 0
 		})
 
-		// Concatenate the sorted labels.
-		var concatenated []byte
-		for _, lab := range sortedLabels {
-			concatenated = append(concatenated, lab...)
+		// Concatenate the sorted labels efficiently
+		buffer.Reset()
+		for _, lab := range bucketCopy {
+			buffer.Write(lab)
 		}
 
 		// Compute the new label using the oracle.
-		newLabel := m.oracle(concatenated)
+		newLabel := m.oracle(buffer.Bytes())
 
 		// Save the bucket (state) and computed label.
 		m.state[r-1] = bucket
 		m.computedLabels[r-1] = newLabel
 		m.currentLabel = newLabel
+
+		// Save the new label for the next round.
+		m.mu.Lock()
+		m.messages[r] = append(m.messages[r], newLabel)
+		m.mu.Unlock()
 
 		// Broadcast the new label with round r.
 		if r < m.rounds {
@@ -128,7 +186,7 @@ func (m *MDAG) Gen(sid, vki string, vi ...string) ([][][]byte, error) {
 		}
 		m.logger.Info("Completed round",
 			zap.Int("round", r),
-			zap.String("new_label", string(newLabel)))
+			zap.Binary("new_label", newLabel))
 	}
 
 	// Mark the protocol as completed.
@@ -140,16 +198,31 @@ func (m *MDAG) Gen(sid, vki string, vi ...string) ([][][]byte, error) {
 }
 
 // handleMessage processes incoming messages from the network.
+// It validates and stores messages received from neighbors for use in the protocol.
+//
+// The function performs several validation steps:
+// 1. Verifies the protocol is running
+// 2. Validates the message format via protobuf unmarshaling
+// 3. Confirms the message is from a known neighbor
+// 4. Checks that the session ID matches
+//
+// The implementation uses optimized lock management to reduce contention:
+// - Quick checks are performed without holding locks
+// - The lock is only acquired when updating shared state
+// - Pre-allocation is used to reduce memory allocations
+//
+// Parameters:
+//   - _: Protocol ID (unused but required by the handler interface)
+//   - payload: Raw message bytes received from the network
+//
+// Returns an error if any validation fails, nil otherwise.
 func (m *MDAG) handleMessage(_ string, payload []byte) error {
-	// Check if the protocol is running to prevent processing messages after completion.
-	// Adversaries may still send messages after the protocol has completed.
-	m.mu.Lock()
+	// Quick check if the protocol is running without holding the lock
+	// This is a performance optimization that avoids lock contention
+	// It's safe because isRunning only transitions from true to false, never back
 	if !m.isRunning {
-		m.logger.Warn("Received message while protocol is not running")
-		m.mu.Unlock()
-		return nil
+		return errors.New("protocol not running")
 	}
-	m.mu.Unlock()
 
 	var pbMsg mdagpb.MDAGMessage
 	if err := proto.Unmarshal(payload, &pbMsg); err != nil {
@@ -157,7 +230,17 @@ func (m *MDAG) handleMessage(_ string, payload []byte) error {
 		return err
 	}
 
+	// Check if the message is from a known neighbor
+	// This is a fast check that doesn't require locking
+	if !m.neighbors[pbMsg.From] {
+		err := errors.New("message from unknown neighbor")
+		m.logger.Warn("Received message from unknown neighbor",
+			zap.String("from", pbMsg.From))
+		return err
+	}
+
 	// Check that the session id matches (if already set).
+	// This is also a fast check that doesn't require locking
 	if m.sessionID != "" && pbMsg.SessionId != m.sessionID {
 		err := errors.New("session id mismatch")
 		m.logger.Warn("Received message with mismatched session id",
@@ -166,34 +249,142 @@ func (m *MDAG) handleMessage(_ string, payload []byte) error {
 		return err
 	}
 
-	// Decode the hex-encoded label.
-	lab := []byte(pbMsg.Label)
-	round := int(pbMsg.Round)
+	// Now do a proper check with the lock to ensure the protocol is still running
 	m.mu.Lock()
-	m.messages[round] = append(m.messages[round], lab)
+	if !m.isRunning {
+		m.mu.Unlock()
+		m.logger.Warn("Received message while protocol is not running")
+		return errors.New("protocol not running")
+	}
+
+	// Process the message
+	round := int(pbMsg.Round)
+
+	// Append the message to the appropriate round
+	// Pre-allocate the slice if it doesn't exist to reduce allocations
+	if _, exists := m.messages[round]; !exists {
+		m.messages[round] = make([][]byte, 0, 16) // Initial capacity of 16
+	}
+	m.messages[round] = append(m.messages[round], pbMsg.Label)
 	m.mu.Unlock()
+
 	m.logger.Debug("Received message",
 		zap.String("from", pbMsg.From),
 		zap.Int("round", round),
-		zap.String("label", pbMsg.Label))
+		zap.Binary("label", pbMsg.Label))
 	return nil
 }
 
 // broadcast sends a message over the network using protobuf.
 func (m *MDAG) broadcast(round int, label []byte) {
+	// Pre-allocate the message structure to reduce allocations
 	pbMsg := &mdagpb.MDAGMessage{
 		SessionId: m.sessionID,
 		Round:     uint32(round),
-		Label:     hex.EncodeToString(label),
+		Label:     label,
 		From:      m.network.GetNodeID(),
 	}
+
+	// Marshal the message once
 	data, err := proto.Marshal(pbMsg)
 	if err != nil {
 		m.logger.Error("Failed to marshal message", zap.Error(err))
 		return
 	}
+
+	// Send the message
 	m.network.SendProtocolMessage(protocolID, data)
-	m.logger.Debug("Broadcast message",
-		zap.Int("round", round),
-		zap.String("label", pbMsg.Label))
+
+	// Log at debug level to reduce overhead in production
+	if m.logger.Core().Enabled(zap.DebugLevel) {
+		m.logger.Debug("Broadcast message",
+			zap.Int("round", round),
+			zap.Binary("label", label))
+	}
+}
+
+// Verify checks if a given Merkle path is valid with respect to any of the target labels.
+// The path P is encoded as a sequence of label sets P = (L0, ..., Ln),
+// where Li = {ℓi,1, ..., ℓi,ki} are the labels of the leaves adjacent to the i-th vertex on the central path.
+// The algorithm verifies if P encodes a valid Merkle path with respect to any of the target labels.
+//
+// Algorithm:
+// 1. Compute m0 ← H(sort(L0)).
+// 2. For all i in {1, ..., n+1} compute mi ← H(sort({mi−1} ∪ Li)).
+// 3. Return true iff mn+1 is in the set of target labels.
+//
+// Parameters:
+// - path: A sequence of label sets, where each set contains the labels of adjacent leaves
+// - targetLabels: A map of target labels to verify against (using map for O(1) lookup)
+//
+// Returns:
+// - true if the path is valid with respect to any of the target labels, false otherwise
+func (m *MDAG) Verify(path [][][]byte, targetLabels map[string]bool) bool {
+	if len(path) == 0 {
+		m.logger.Error("Empty path provided for verification")
+		return false
+	}
+
+	if len(targetLabels) == 0 {
+		m.logger.Error("No target labels provided for verification")
+		return false
+	}
+
+	// Pre-allocate a buffer for concatenation with a reasonable initial capacity
+	var buffer bytes.Buffer
+	buffer.Grow(1024) // Initial capacity - adjust based on expected label sizes
+
+	// Step 1: Compute m0 ← H(sort(L0))
+	L0 := path[0]
+	sortedL0 := make([][]byte, len(L0))
+	copy(sortedL0, L0)
+	sort.Slice(sortedL0, func(i, j int) bool {
+		return bytes.Compare(sortedL0[i], sortedL0[j]) < 0
+	})
+
+	// Concatenate the sorted labels efficiently
+	buffer.Reset()
+	for _, lab := range sortedL0 {
+		buffer.Write(lab)
+	}
+
+	// Compute m0
+	currentLabel := m.oracle(buffer.Bytes())
+
+	// Step 2: For all i in {1, ..., n+1} compute mi ← H(sort({mi−1} ∪ Li))
+	for i := 1; i < len(path); i++ {
+		Li := path[i]
+
+		// Create a new set with mi-1 and all labels in Li
+		labelSet := make([][]byte, len(Li)+1)
+		labelSet[0] = currentLabel
+		copy(labelSet[1:], Li)
+
+		// Sort the combined set
+		sort.Slice(labelSet, func(i, j int) bool {
+			return bytes.Compare(labelSet[i], labelSet[j]) < 0
+		})
+
+		// Concatenate the sorted labels efficiently
+		buffer.Reset()
+		for _, lab := range labelSet {
+			buffer.Write(lab)
+		}
+
+		// Compute mi
+		currentLabel = m.oracle(buffer.Bytes())
+	}
+
+	// Step 3: Return true iff mn+1 is in the set of target labels
+	result := targetLabels[string(currentLabel)]
+
+	if result {
+		m.logger.Info("Merkle path verification successful",
+			zap.Binary("computed_label", currentLabel))
+	} else {
+		m.logger.Warn("Merkle path verification failed",
+			zap.Binary("computed_label", currentLabel))
+	}
+
+	return result
 }
