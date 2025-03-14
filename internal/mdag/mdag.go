@@ -2,6 +2,7 @@ package mdag
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -86,39 +87,36 @@ func New(rounds int, sid string, oracle HashOracle, network network.Network, rou
 	return m
 }
 
-// Generate implements the MerkleDAG protocol.
-// It generates a Merkle DAG by running the protocol for the specified number of rounds.
-//
-// The protocol operates as follows:
-// 1. Computes and broadcasts the initial label (round 0) using sid, vki, and vi
-// 2. For each round r = 1...rounds:
-//   - Waits for incoming messages from round (r-1)
-//   - Sorts and concatenates the received labels
-//   - Applies the hash oracle to compute a new label
-//   - Stores the bucket (state) and broadcasts the new label
-//
-// Parameters:
-//   - sid: Session identifier that must match the one used to initialize the MDAG
-//   - vki: Verification key for the initial label
-//   - vi: Additional input values for the initial label
-//
-// The function uses optimized buffer management to reduce memory allocations and
-// minimizes lock contention by creating copies of data for processing.
-//
-// Returns:
-//   - The complete state of the protocol as a 3D slice of labels
-//   - An error if the session ID doesn't match or other issues occur
+// Generate runs the MDAG protocol for the specified session ID and inputs.
+// It returns the state (sequence of labels received from neighbors during all rounds)
+// and any error that occurred during the protocol.
 func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error) {
-	// Save the session id.
-	if m.sessionID != sid {
-		return nil, errors.New("session ID does not match")
+	// Check if the protocol is already running
+	m.mu.Lock()
+	if m.isRunning {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("protocol is already running")
 	}
 
-	// Pre-allocate a buffer for concatenation
-	var buffer bytes.Buffer
-	buffer.Grow(1024) // Initial capacity - adjust based on expected label sizes
+	// Check if the session ID matches
+	if m.sessionID != "" && m.sessionID != sid {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", m.sessionID, sid)
+	}
+
+	// Initialize the protocol state
+	m.isRunning = true
+	m.sessionID = sid
+	m.messages = make(map[int][][]byte)
+	m.state = make([][][]byte, m.rounds)
+	m.computedLabels = make([][]byte, 0, m.rounds)
+	m.mu.Unlock()
+
+	// Log the start of the protocol
+	m.logger.Info("Starting MDAG protocol", zap.String("session_id", sid), zap.String("node_id", m.network.GetNodeID()))
 
 	// Compute the initial label: sid || vki || (concatenation of vi)
+	var buffer bytes.Buffer
 	buffer.WriteString(sid)
 	buffer.Write(vki)
 	for _, v := range vi {
@@ -130,71 +128,102 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	m.messages[0] = append(m.messages[0], m.currentLabel)
 	m.mu.Unlock()
 
-	m.logger.Info("Starting MDAG protocol",
-		zap.String("session_id", sid),
-		zap.String("node_id", m.network.GetNodeID()))
-
-	// Broadcast the initial label (round 0).
+	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
+
+	// Wait for the protocol to start
 	time.Sleep(time.Until(m.startTime))
 
-	// Process rounds 1 through m.rounds.
+	// Run the protocol for rounds 1 to m.rounds
 	for r := 1; r <= m.rounds; r++ {
 		m.logger.Info("Starting round", zap.Int("round", r))
-		// Wait for messages to arrive for the previous round.
-		time.Sleep(time.Until(m.startTime.Add(time.Duration(r) * m.roundTimeout)))
 
-		// Get messages for the previous round with minimal lock time
+		// Wait for messages to arrive for this round
+		time.Sleep(m.roundTimeout)
+
+		// Lock to safely access messages
 		m.mu.Lock()
-		bucket, found := m.messages[r-1]
-		if !found {
-			bucket = [][]byte{}
-		}
-		// Create a copy to avoid holding the lock while processing
-		bucketCopy := make([][]byte, len(bucket))
-		copy(bucketCopy, bucket)
-		m.mu.Unlock()
 
-		// Sort the received labels in canonical order.
-		// Sort in-place since we're working on a copy
-		sort.Slice(bucketCopy, func(i, j int) bool {
-			return bytes.Compare(bucketCopy[i], bucketCopy[j]) < 0
-		})
-
-		// Concatenate the sorted labels efficiently
-		buffer.Reset()
-		for _, lab := range bucketCopy {
-			buffer.Write(lab)
+		// Get messages received in the previous round
+		prevRoundMsgs, exists := m.messages[r-1]
+		if !exists || len(prevRoundMsgs) == 0 {
+			m.mu.Unlock()
+			m.logger.Warn("No messages received in previous round", zap.Int("round", r-1))
+			continue
 		}
 
-		// Compute the new label using the oracle.
-		newLabel := m.oracle(buffer.Bytes())
-
-		// Save the bucket (state) and computed label.
+		// Create a bucket for this round's state
+		bucket := make([][]byte, len(prevRoundMsgs))
+		copy(bucket, prevRoundMsgs)
 		m.state[r-1] = bucket
-		m.computedLabels[r-1] = newLabel
-		m.currentLabel = newLabel
 
-		// Save the new label for the next round.
-		m.mu.Lock()
-		m.messages[r] = append(m.messages[r], newLabel)
+		// MODIFIED: Compute the new label using the Verify algorithm approach
+		// For round 1, compute m0 ← H(sort(L0))
+		if r == 1 {
+			// Sort the labels from round 0
+			sortedLabels := make([][]byte, len(prevRoundMsgs))
+			copy(sortedLabels, prevRoundMsgs)
+			sort.Slice(sortedLabels, func(i, j int) bool {
+				return bytes.Compare(sortedLabels[i], sortedLabels[j]) < 0
+			})
+
+			// Concatenate and hash
+			var concatenated []byte
+			for _, lab := range sortedLabels {
+				concatenated = append(concatenated, lab...)
+			}
+			newLabel := m.oracle(concatenated)
+			m.computedLabels = append(m.computedLabels, newLabel)
+			m.currentLabel = newLabel
+		} else {
+			// For rounds > 1, compute mi ← H(sort({mi-1} ∪ Li))
+			// Include the previous round's computed label
+			labelSet := make([][]byte, len(prevRoundMsgs)+1)
+			labelSet[0] = m.currentLabel
+			copy(labelSet[1:], prevRoundMsgs)
+
+			// Sort the labels
+			sort.Slice(labelSet, func(i, j int) bool {
+				return bytes.Compare(labelSet[i], labelSet[j]) < 0
+			})
+
+			// Concatenate and hash
+			var concatenated []byte
+			for _, lab := range labelSet {
+				concatenated = append(concatenated, lab...)
+			}
+			newLabel := m.oracle(concatenated)
+			m.computedLabels = append(m.computedLabels, newLabel)
+			m.currentLabel = newLabel
+		}
+
 		m.mu.Unlock()
 
-		// Broadcast the new label with round r.
+		// Log the completion of this round
+		m.logger.Info("Completed round", zap.Int("round", r), zap.String("new_label", base64.StdEncoding.EncodeToString(m.currentLabel)))
+
+		// Broadcast the new label if not the last round
 		if r < m.rounds {
-			m.broadcast(r, newLabel)
+			m.broadcast(r, m.currentLabel)
 		}
-		m.logger.Info("Completed round",
-			zap.Int("round", r),
-			zap.Binary("new_label", newLabel))
 	}
 
-	// Mark the protocol as completed.
+	// Mark the protocol as completed
 	m.mu.Lock()
 	m.isRunning = false
+
+	// Create a copy of the state to return
+	stateCopy := make([][][]byte, len(m.state))
+	for i, bucket := range m.state {
+		if bucket != nil {
+			stateCopy[i] = make([][]byte, len(bucket))
+			copy(stateCopy[i], bucket)
+		}
+	}
 	m.mu.Unlock()
+
 	m.logger.Info("MDAG protocol completed")
-	return m.state, nil
+	return stateCopy, nil
 }
 
 // handleMessage processes incoming messages from the network.
@@ -387,4 +416,35 @@ func (m *MDAG) Verify(path [][][]byte, targetLabels map[string]bool) bool {
 	}
 
 	return result
+}
+
+// GetComputedLabel returns the computed label for a specific round index.
+// Round index should be between 0 and rounds-1, where 0 corresponds to the initial label
+// and rounds-1 corresponds to the final label.
+//
+// Parameters:
+//   - roundIndex: The round index for which to retrieve the computed label (0-based)
+//
+// Returns:
+//   - The computed label for the specified round, or nil if the round index is invalid
+//     or the label has not been computed yet
+func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
+	// Acquire lock to safely access the computed labels
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if the round index is valid
+	if roundIndex < 0 || roundIndex >= m.rounds {
+		m.logger.Warn("Invalid round index for GetComputedLabel",
+			zap.Int("requested_index", roundIndex),
+			zap.Int("max_valid_index", m.rounds-1))
+		return nil
+	}
+
+	// Return the computed label for the requested round
+	if roundIndex < len(m.computedLabels) {
+		return m.computedLabels[roundIndex]
+	}
+
+	return nil
 }
