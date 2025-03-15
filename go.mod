@@ -7,6 +7,7 @@ require (
 	github.com/libp2p/go-libp2p v0.37.0
 	github.com/libp2p/go-libp2p-kad-dht v0.28.1
 	github.com/multiformats/go-multiaddr v0.13.0
+	github.com/stretchr/testify v1.9.0
 	github.com/vechain/go-ecvrf v0.0.0-20220525125849-96fa0442e765
 	go.uber.org/zap v1.27.0
 	google.golang.org/protobuf v1.35.1
@@ -109,7 +110,7 @@ require (
 	github.com/quic-go/webtransport-go v0.8.1-0.20241018022711-4ac2c9250e66 // indirect
 	github.com/raulk/go-watchdog v1.3.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/stretchr/testify v1.9.0 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opencensus.io v0.24.0 // indirect
