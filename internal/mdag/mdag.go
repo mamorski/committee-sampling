@@ -127,15 +127,12 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
 
-	// Wait for the protocol to start
-	time.Sleep(time.Until(m.startTime))
-
 	// Run the protocol for rounds 1 to m.rounds
 	for r := 1; r <= m.rounds; r++ {
-		m.logger.Info("Starting round", zap.Int("round", r))
-
 		// Wait for messages to arrive for this round
-		time.Sleep(m.roundTimeout)
+		time.Sleep(time.Until(m.startTime.Add(time.Duration(r) * m.roundTimeout)))
+
+		m.logger.Info("Starting round", zap.Int("round", r))
 
 		// Lock to safely access messages
 		m.mu.Lock()
@@ -177,7 +174,9 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.computedLabels[r-1] = newLabel
 		m.currentLabel = newLabel
 
-		m.logger.Info("Completed round", zap.Int("round", r), zap.String("new_label", base64.StdEncoding.EncodeToString(m.currentLabel)))
+		m.logger.Info("Completed round",
+			zap.Int("round", r),
+			zap.String("new_label", base64.StdEncoding.EncodeToString(m.currentLabel)))
 
 		// Broadcast the new label if not the last round
 		if r < m.rounds {
@@ -230,15 +229,9 @@ func (m *MDAG) handleMessage(_ string, payload []byte) error {
 		return err
 	}
 
-	m.mu.Lock()
-	if !m.isRunning {
-		m.mu.Unlock()
-		m.logger.Warn("Received message while protocol is not running")
-		return errors.New("protocol not running")
-	}
-
 	round := int(pbMsg.Round)
 
+	m.mu.Lock()
 	if _, exists := m.messages[round]; !exists {
 		m.messages[round] = make([][]byte, 0, 16)
 	}
@@ -281,7 +274,7 @@ func (m *MDAG) broadcast(round int, label []byte) {
 //
 // Algorithm:
 // 1. Compute m0 ← H(sort(L0)).
-// 2. For all i in {1, ..., n} compute mi ← H(sort({mi−1} ∪ Li)).
+// 2. For all i in {1, ..., n} compute m_i ← H(sort({m_i−1} ∪ L_i)).
 // 3. Return true if the final computed label is in the set of target labels.
 //
 // Parameters:

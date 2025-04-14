@@ -1,0 +1,62 @@
+syntax = "proto3";
+package proto;
+
+option go_package = "github.com/mamorski/committee-sampling/pkg/proto";
+
+// ExAnteMessage represents a message in the Ex-Ante protocol
+message ExAnteMessage {
+  // Session identifier for this protocol instance
+  string session_id = 1;
+  
+  // The sender's verification key
+  bytes verification_key = 2;
+  
+  // The value associated with the verification key
+  bytes value = 3;
+  
+  // Auxiliary key data
+  AuxKeyMessage aux_key = 4;
+  
+  // Merkle path
+  repeated State merkle_path = 5;
+  
+  // Round number
+  uint32 round = 6;
+  
+  // Identity of the sending node
+  string from = 7;
+}
+
+message State {
+  repeated bytes row = 1;
+}
+
+// AuxKeyMessage represents the auxiliary key data
+message AuxKeyMessage {
+  // VRF output
+  bytes phi_vrf = 1;
+  
+  // VRF proof
+  bytes pi_vrf = 2;
+  
+  // VDF output
+  bytes phi_vdf = 3;
+  
+  // VDF proof
+  bytes pi_vdf = 4;
+}
+
+// ExAnteVerificationResult represents the output of the verification phase
+message ExAnteVerificationResult {
+  // Verification key
+  bytes verification_key = 1;
+  
+  // Value
+  bytes value = 2;
+  
+  // Auxiliary key
+  bytes aux_key = 3;
+  
+  // Grade
+  int32 grade = 4;
+} 
