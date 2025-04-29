@@ -23,6 +23,7 @@ type MDAG interface {
 	GetStateForRound(round int) [][]byte
 	GetComputedLabel(roundIndex int) []byte
 	Verify(merkleRoot []byte, path [][]byte) bool
+	Oracle(h ...[]byte) []byte
 }
 
 // ExAnte implements the Ex-Ante Timestamp protocol
@@ -33,30 +34,31 @@ type ExAnte struct {
 	roundTimeout  time.Duration
 	startTime     time.Time
 	diameter      int
+	D             int
 	gradeFunction common.GradeFunc
 	isRunning     bool
 	sid           string
 	challenge     []byte
 
-	mu               sync.Mutex
-	verifiedValues   map[string]map[string]*verifiedTuple
-	processedSenders map[string]map[uint32]bool
-	messages         map[int]map[string]receivedMessage
-	neighbors        map[string]bool // set of allowed neighbor node IDs
+	mu             sync.Mutex
+	verifiedValues map[string]verifiedTuple
+	messages       map[int]map[string]receivedMessage
+	neighbors      map[string]bool // set of allowed neighbor node IDs
+	state          [][][]byte
 }
 
 type verifiedTuple struct {
-	verificationKey []byte
-	value           []byte
-	auxKey          *common.AuxKey
-	grade           int
+	vk    []byte
+	v     []byte
+	aux   *common.AuxTag
+	grade int
 }
 
 type receivedMessage struct {
 	sid        string
 	vk         []byte
 	ch         []byte
-	auxKey     *common.AuxKey
+	aux        *common.AuxTag
 	merklePath [][][]byte
 }
 
@@ -68,23 +70,24 @@ func New(
 	startTime time.Time,
 	roundTimeout time.Duration,
 	diameter int,
+	D int,
 	gradeFunction common.GradeFunc,
 	logger *zap.Logger) *ExAnte {
 
 	e := &ExAnte{
-		network:          net,
-		logger:           logger,
-		mdag:             mdag,
-		roundTimeout:     roundTimeout,
-		startTime:        startTime,
-		diameter:         diameter,
-		gradeFunction:    gradeFunction,
-		verifiedValues:   make(map[string]map[string]*verifiedTuple),
-		processedSenders: make(map[string]map[uint32]bool),
-		messages:         make(map[int]map[string]receivedMessage),
-		neighbors:        make(map[string]bool),
-		sid:              sid,
-		isRunning:        true,
+		network:        net,
+		logger:         logger,
+		mdag:           mdag,
+		roundTimeout:   roundTimeout,
+		startTime:      startTime,
+		diameter:       diameter,
+		D:              D,
+		gradeFunction:  gradeFunction,
+		verifiedValues: make(map[string]verifiedTuple),
+		messages:       make(map[int]map[string]receivedMessage),
+		neighbors:      make(map[string]bool),
+		sid:            sid,
+		isRunning:      true,
 	}
 
 	neighborsList := net.GetNeighbors()
@@ -104,7 +107,7 @@ func New(
 }
 
 // Generate implements the ExAnte Generate method using MDAG
-func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, rpProof []byte) ([][][]byte, error) {
+func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []byte) ([][][]byte, error) {
 
 	if e.sid != "" && e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -114,7 +117,9 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, rpProof [
 		zap.String("session_id", session),
 		zap.String("node_id", e.network.GetNodeID()))
 
-	state, err := e.mdag.Generate(session, vk, challenge, rpProof)
+	state, err := e.mdag.Generate(session, vk, challenge, piRP)
+	e.state = make([][][]byte, len(state))
+	e.state = state
 	if err != nil {
 		e.isRunning = false
 		return nil, fmt.Errorf("MDAG generation failed: %w", err)
@@ -150,7 +155,7 @@ func (e *ExAnte) Verify(
 
 	// Check if P_i is also acts like a prover
 	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.diameter+1 &&
-		filterFn(session, vk, auxTag.AuxKey.PhiVRF, auxTag) {
+		filterFn(session, vk, e.challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 
@@ -158,18 +163,20 @@ func (e *ExAnte) Verify(
 			SessionId:       session,
 			VerificationKey: vk,
 			Value:           e.challenge,
-			AuxKey: &pb.AuxKeyMessage{
-				PhiVrf: auxTag.AuxKey.PhiVRF,
-				PiVrf:  auxTag.AuxKey.PiVRF,
-				PhiVdf: auxTag.AuxKey.PhiVDF,
-				PiVdf:  auxTag.AuxKey.PiVDF,
+			Aux: &pb.Aux{
+				PiRP: auxTag.PiRP,
+				AuxKey: &pb.AuxKeyMessage{
+					PhiVrf: auxTag.AuxKey.PhiVRF,
+					PiVrf:  auxTag.AuxKey.PiVRF,
+					PhiVdf: auxTag.AuxKey.PhiVDF,
+					PiVdf:  auxTag.AuxKey.PiVDF,
+				},
 			},
-			MerklePath: nil,
+			MerklePath: make([]*pb.State, 1),
 			Round:      0,
 			From:       e.network.GetNodeID(),
 		}
 
-		msg.MerklePath = make([]*pb.State, 1)
 		msg.MerklePath[0] = &pb.State{
 			Row: sigma[0],
 		}
@@ -184,37 +191,78 @@ func (e *ExAnte) Verify(
 		protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 		e.network.SendProtocolMessage(protocolID, msgBytes)
 	}
+	results := make(map[common.Key]common.O)
 
 	for r := 1; r <= e.diameter; r++ {
 		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
-		time.Sleep(e.roundTimeout)
-	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+		for _, msg := range e.messages[r] {
+			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
+				g := min(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal),
+					e.diameter-int(math.Floor(float64(r)/float64(e.D))))
+				key := e.mdag.Oracle(msg.aux.PiRP, msg.aux.AuxKey.PhiVRF, msg.aux.AuxKey.PiVRF, msg.aux.AuxKey.PhiVDF, msg.aux.AuxKey.PiVDF)
+				if v, exists := e.verifiedValues[string(key)]; !exists {
+					e.verifiedValues[string(key)] = verifiedTuple{
+						vk:    msg.vk,
+						v:     msg.ch,
+						aux:   msg.aux,
+						grade: g,
+					}
+				} else if g > v.grade {
+					e.verifiedValues[string(key)] = verifiedTuple{
+						vk:    msg.vk,
+						v:     msg.ch,
+						aux:   msg.aux,
+						grade: g,
+					}
+				} else {
+					continue
+				}
 
-	sessionValues := e.verifiedValues[session]
-	results := make(map[common.Key]common.O)
+				if _, exists := results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}]; !exists ||
+					g > results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}].Grade {
+					results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}] = common.O{
+						VK:        msg.vk,
+						Challenge: msg.ch,
+						Aux:       msg.aux,
+						Grade:     g,
+					}
+				}
 
-	maxGrades := make(map[string]int)
-	for vkString, tuple := range sessionValues {
-		if maxGrade, exists := maxGrades[vkString]; !exists || tuple.grade > maxGrade {
-			maxGrades[vkString] = tuple.grade
-		}
-	}
+				pMsg := &pb.ExAnteMessage{
+					SessionId:       session,
+					VerificationKey: msg.vk,
+					Value:           msg.ch,
+					Aux: &pb.Aux{
+						PiRP: msg.aux.PiRP,
+						AuxKey: &pb.AuxKeyMessage{
+							PhiVrf: msg.aux.AuxKey.PhiVRF,
+							PiVrf:  msg.aux.AuxKey.PiVRF,
+							PhiVdf: msg.aux.AuxKey.PhiVDF,
+							PiVdf:  msg.aux.AuxKey.PiVDF,
+						},
+					},
+					MerklePath: make([]*pb.State, r+1),
+					Round:      uint32(r),
+					From:       e.network.GetNodeID(),
+				}
 
-	for vkString, tuple := range sessionValues {
-		if tuple.grade == maxGrades[vkString] {
-			key := common.Key{
-				VK: string(tuple.verificationKey),
-				Ch: string(tuple.value),
-			}
-			results[key] = common.O{
-				VK:        tuple.verificationKey,
-				Challenge: tuple.value,
-				Aux:       tuple.auxKey,
-				Grade:     tuple.grade,
+				for i := 0; i < r; i++ {
+					pMsg.MerklePath[i] = &pb.State{
+						Row: msg.merklePath[i],
+					}
+				}
+				pMsg.MerklePath[r] = &pb.State{
+					Row: sigma[r],
+				}
+				pMsgBytes, err := proto.Marshal(pMsg)
+				if err != nil {
+					e.logger.Error("Failed to marshal message", zap.Error(err))
+					continue
+				}
+				protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
+				e.network.SendProtocolMessage(protocolID, pMsgBytes)
 			}
 		}
 	}
@@ -282,11 +330,14 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
 		ch:  msg.Value,
-		auxKey: &common.AuxKey{
-			PhiVRF: msg.AuxKey.PhiVrf,
-			PiVRF:  msg.AuxKey.PiVrf,
-			PhiVDF: msg.AuxKey.PhiVdf,
-			PiVDF:  msg.AuxKey.PiVdf,
+		aux: &common.AuxTag{
+			PiRP: msg.Aux.PiRP,
+			AuxKey: &common.AuxKey{
+				PhiVRF: msg.Aux.AuxKey.PhiVrf,
+				PiVRF:  msg.Aux.AuxKey.PiVrf,
+				PhiVDF: msg.Aux.AuxKey.PhiVdf,
+				PiVDF:  msg.Aux.AuxKey.PiVdf,
+			},
 		},
 		merklePath: convertExAnteMessageToBytes(&msg),
 	}
@@ -294,74 +345,66 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	return nil
 }
 
-// processMessage handles a single message according to the protocol logic
-func (e *ExAnte) processMessage(from string, msg *pb.ExAnteMessage, auxKey *common.AuxKey) {
-	e.logger.Debug("Processing message",
-		zap.String("from", from),
-		zap.String("session", msg.SessionId),
-		zap.Uint32("round", msg.Round))
+func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 
-	if e.filterFunction(e.sid, msg.VerificationKey, msg.Value, auxKey) {
-		grade := e.gradeFunction(e.sid, msg.VerificationKey, msg.Value, auxKey, 0)
-		if grade <= 0 {
-			return
-		}
+	if len(merklePath) < round {
+		e.logger.Error("Invalid Merkle path length",
+			zap.Int("expected", round),
+			zap.Int("actual", len(merklePath)))
+		return false
+	}
+	if len(e.state) < round+1 {
+		e.logger.Error("Invalid state length",
+			zap.Int("expected", round),
+			zap.Int("actual", len(e.state)))
+		return false
+	}
 
-		vkValHash := append([]byte(e.sid), msg.VerificationKey...)
-		vkValHash = append(vkValHash, msg.Value...)
-
-		if !e.validateMerklePath(msg.MerklePath, vkValHash, int(msg.Round)) {
-			return
-		}
-
-		computedGrade := int(math.Min(
-			float64(e.diameter-int(msg.Round))/float64(e.diameter),
-			float64(grade),
-		))
-
-		vkString := string(msg.VerificationKey)
-
-		existing, exists := e.verifiedValues[e.sid][vkString]
-		shouldUpdate := !exists || existing.grade < computedGrade
-
-		if shouldUpdate {
-			e.verifiedValues[e.sid][vkString] = &verifiedTuple{
-				verificationKey: msg.VerificationKey,
-				value:           msg.Value,
-				auxKey:          auxKey,
-				grade:           computedGrade,
-			}
-		}
-
-		if msg.Round < uint32(e.diameter) {
-			e.propagateMessage(msg, auxKey)
+	for i := 0; i < round; i++ {
+		h := e.mdag.Oracle(merklePath[i]...)
+		if i == round-1 {
+			return isValueInState(h, e.state[round])
+		} else if !isValueInState(h, merklePath[i+1]) {
+			return false
 		}
 	}
+
+	return true
 }
 
-// propagateMessage forwards a message to neighbors with updated round and path
-func (e *ExAnte) propagateMessage(msg *pb.ExAnteMessage, auxKey *common.AuxKey) {
-	nextRound := msg.Round + 1
-	nextPath := append(msg.MerklePath, e.mdag.GetComputedLabel(int(nextRound)))
-
-	forwardMsg := &pb.ExAnteMessage{
-		SessionId:       e.sid,
-		VerificationKey: msg.VerificationKey,
-		Value:           msg.Value,
-		AuxKey:          msg.AuxKey,
-		MerklePath:      nextPath,
-		Round:           nextRound,
-		From:            e.network.GetNodeID(),
+func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn common.FilterTagF, r int) bool {
+	if msg == nil {
+		return false
 	}
 
-	msgBytes, err := proto.Marshal(forwardMsg)
-	if err != nil {
-		e.logger.Error("Failed to marshal ExAnte message", zap.Error(err))
-		return
+	if !filterFn(msg.sid, msg.vk, msg.ch, msg.aux) {
+		return false
 	}
 
-	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, e.sid)
-	e.network.SendProtocolMessage(protocolID, msgBytes)
+	if !(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal) > 0) {
+		return false
+	}
+
+	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.ch, msg.aux.PiRP), msg.merklePath[r]) {
+		return false
+	}
+
+	if !e.validateMerklePath(msg.merklePath, r) {
+		return false
+	}
+
+	return true
+}
+
+func isValueInState(value []byte, state [][]byte) bool {
+
+	for _, state := range state {
+		if string(state) == string(value) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func convertExAnteMessageToBytes(msg *pb.ExAnteMessage) [][][]byte {

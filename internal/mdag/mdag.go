@@ -143,10 +143,10 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		}
 		m.mu.Unlock()
 
-		// Create a bucket for this round's state
-		bucket := make([][]byte, len(prevRoundMsgs))
-		copy(bucket, prevRoundMsgs)
-		m.state[r-1] = bucket
+		// // Create a bucket for this round's state
+		// bucket := make([][]byte, len(prevRoundMsgs))
+		// copy(bucket, prevRoundMsgs)
+		// m.state[r-1] = bucket
 
 		var sortedLabels [][]byte
 		if r == 1 {
@@ -164,6 +164,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		sort.Slice(sortedLabels, func(i, j int) bool {
 			return bytes.Compare(sortedLabels[i], sortedLabels[j]) < 0
 		})
+		m.state[r-1] = sortedLabels
 
 		// Concatenate and hash
 		var concatenated []byte
@@ -367,4 +368,13 @@ func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
 	}
 
 	return nil
+}
+
+func (m *MDAG) Oracle(h ...[]byte) []byte {
+	var buffer bytes.Buffer
+	for _, v := range h {
+		buffer.Write(v)
+	}
+
+	return m.oracle(buffer.Bytes())
 }

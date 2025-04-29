@@ -14,8 +14,8 @@ message ExAnteMessage {
   // The value associated with the verification key
   bytes value = 3;
   
-  // Auxiliary key data
-  AuxKeyMessage aux_key = 4;
+  // Auxiliary data
+  Aux aux = 4;
   
   // Merkle path
   repeated State merkle_path = 5;
@@ -29,6 +29,11 @@ message ExAnteMessage {
 
 message State {
   repeated bytes row = 1;
+}
+
+message Aux {
+  bytes PiRP = 1;
+  AuxKeyMessage aux_key = 2;
 }
 
 // AuxKeyMessage represents the auxiliary key data
