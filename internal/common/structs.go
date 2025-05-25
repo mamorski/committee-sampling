@@ -35,7 +35,7 @@ type AuxTag struct {
 type O struct {
 	VK        []byte
 	Challenge []byte
-	Aux       *AuxKey
+	Aux       *AuxTag
 	Grade     int
 }
 

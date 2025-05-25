@@ -6,10 +6,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 )
 
-type filterFunc func(string, []byte, []byte, *common.AuxKey) bool
-
-type filterTagFunc func(string, []byte, []byte, *common.AuxTag) bool
-
 type ResourceProof interface {
 	Setup(vk []byte) ([]byte, error)
 	Prove(vk []byte, weight float64, challenge []byte, aux []byte) ([]byte, error)
@@ -24,7 +20,7 @@ type ExPost interface {
 		fSigmaExp *common.FSigmaExp,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter filterTagFunc) (map[common.Key]common.O, error)
+		filter common.FilterTagF) (map[common.Key]common.O, error)
 }
 
 type ExAnte interface {
@@ -35,7 +31,7 @@ type ExAnte interface {
 		sigma [][][]byte,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter filterTagFunc) (map[common.Key]common.O, error)
+		filter common.FilterTagF) (map[common.Key]common.O, error)
 }
 
 type RbExp struct {
@@ -43,10 +39,10 @@ type RbExp struct {
 	exp     ExPost
 	exa     ExAnte
 	weight  float64
-	ffilter filterFunc
+	ffilter common.FilterF
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter filterFunc, weight float64) *RbExp {
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64) *RbExp {
 	return &RbExp{
 		rp:      rp,
 		exp:     exp,
