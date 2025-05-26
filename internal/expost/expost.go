@@ -1,0 +1,423 @@
+package expost
+
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"sync"
+	"time"
+
+	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/network"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
+
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	expostProtocolID = "/expost/1.0.0"
+	charset          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+// MDAG defines the interface for the MDAG required by ExPost
+type MDAG interface {
+	Generate(sid string, vk []byte, vi ...[]byte) ([][][]byte, error)
+	GetComputedLabel(roundIndex int) []byte
+	Verify(merkleRoot []byte, path [][]byte) bool
+	Oracle(h ...[]byte) []byte
+}
+
+// ExPost implements the Ex-Post Timestamp protocol
+type ExPost struct {
+	network      network.Network
+	logger       *zap.Logger
+	mdag         MDAG
+	roundTimeout time.Duration
+	startTime    time.Time
+	d            int
+	D            int
+	lambda       int
+	gradeFunc    common.GradeFunc
+	filterFunc   common.FilterTagF
+	isRunning    bool
+	sid          string
+	vk           []byte
+
+	mu        sync.Mutex
+	messages  map[int]map[string]receivedMessage
+	neighbors map[string]bool // incoming neighbors
+	state     [][][]byte
+	labelR    []byte
+}
+
+type receivedMessage struct {
+	sid        string
+	vk         []byte
+	v          []byte
+	aux        *common.AuxKey
+	merklePath [][][]byte
+}
+
+// New creates a new ExPost instance
+func New(
+	net network.Network,
+	mdag MDAG,
+	sid string,
+	vk []byte,
+	startTime time.Time,
+	roundTimeout time.Duration,
+	diameter int,
+	D int,
+	lambda int,
+	gradeFunc common.GradeFunc,
+	filterFunc common.FilterTagF,
+	logger *zap.Logger) *ExPost {
+
+	e := &ExPost{
+		network:      net,
+		logger:       logger.Named("expost"),
+		mdag:         mdag,
+		roundTimeout: roundTimeout,
+		startTime:    startTime,
+		d:            diameter,
+		D:            D,
+		lambda:       lambda,
+		gradeFunc:    gradeFunc,
+		filterFunc:   filterFunc,
+		messages:     make(map[int]map[string]receivedMessage),
+		neighbors:    make(map[string]bool),
+		sid:          sid,
+		vk:           vk,
+		isRunning:    true,
+	}
+
+	neighborsList := net.GetNeighbors()
+	for _, neighbor := range neighborsList {
+		e.neighbors[neighbor] = true
+	}
+
+	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
+	net.RegisterHandler(protocolID, e.handleMessage)
+
+	logger.Info("ExPost instance created",
+		zap.String("session_id", sid),
+		zap.Int("d", diameter))
+
+	return e
+}
+
+// Generate implements the ExPost Generation phase
+func (e *ExPost) Generate() ([][][]byte, []byte, error) {
+	// Step 1: Choose random string ri
+	ri, err := secureRandomBytes(e.lambda, charset)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate randomness: %w", err)
+	}
+
+	// Step 2: Run MDAG.Gen(sid, vk, ri) for R = d·D rounds
+	R := e.d * e.D
+	state, err := e.mdag.Generate(e.sid, e.vk, ri)
+	if err != nil {
+		return nil, nil, fmt.Errorf("MDAG generation failed: %w", err)
+	}
+	e.state = state
+
+	// Step 3: Output (σi, ℓi, R)
+	labelR := e.mdag.GetComputedLabel(R - 1)
+	e.labelR = labelR
+	return state, labelR, nil
+}
+
+// Verify implements the ExPost Verification phase
+func (e *ExPost) Verify(
+	session string,
+	vk []byte,
+	sigma [][][]byte,
+	auxTag *common.AuxTag,
+	auxLocal float64,
+	filterFn common.FilterF,
+) (map[common.Key]common.O, error) {
+
+	if e.sid != session {
+		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
+	}
+
+	R := e.d * e.D
+	if len(sigma) < R {
+		e.isRunning = false
+		e.logger.Error("Sigma length is less than required rounds",
+			zap.Int("expected_rounds", R),
+			zap.Int("actual_length", len(sigma)))
+
+		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), R)
+	}
+
+	e.logger.Info("Starting ExPost Verification phase",
+		zap.String("session_id", session),
+		zap.String("node_id", e.network.GetNodeID()))
+
+	results := make(map[common.Key]common.O)
+	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, session)
+
+	// Step 2: Prover logic for round 0
+	if e.gradeFunc(session, vk, e.labelR, auxTag.AuxKey, auxLocal) >= (e.d+1) &&
+		filterFn(session, vk, e.labelR, auxTag.AuxKey) {
+
+		e.logger.Info("Node is a prover, sending initial message")
+		msg := &pb.TimestampMessage{
+			SessionId:       session,
+			VerificationKey: vk,
+			Value:           e.labelR,
+			Aux: &pb.Aux{
+				PiRP: auxTag.PiRP,
+				AuxKey: &pb.AuxKeyMessage{
+					PhiVrf: auxTag.AuxKey.PhiVRF,
+					PiVrf:  auxTag.AuxKey.PiVRF,
+					PhiVdf: auxTag.AuxKey.PhiVDF,
+					PiVdf:  auxTag.AuxKey.PiVDF,
+				},
+			},
+			MerklePath: []*pb.State{{Row: sigma[len(sigma)-1][0:]}},
+			Round:      0,
+			From:       e.network.GetNodeID(),
+		}
+		msgBytes, err := proto.Marshal(msg)
+		if err != nil {
+			e.isRunning = false
+			e.logger.Error("Failed to marshal initial message", zap.Error(err))
+			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
+		}
+
+		e.network.SendProtocolMessage(protocolID, msgBytes)
+	}
+
+	for r := 1; r < R; r++ {
+		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
+		e.logger.Info("ExPost verification round", zap.Int("round", r))
+		e.mu.Lock()
+		msgs := e.messages[r-1]
+		e.mu.Unlock()
+		for _, msg := range msgs {
+			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
+				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux, auxLocal))
+				key := common.Key{VK: string(msg.vk), Ch: string(msg.v)}
+				if v, exists := results[key]; !exists || g > v.Grade {
+					results[key] = common.O{
+						VK:        msg.vk,
+						Challenge: msg.v,
+						Aux: &common.AuxTag{
+							AuxKey: msg.aux,
+						},
+						Grade: g,
+					}
+				} else {
+					e.logger.Debug("Ignoring message with lower grade",
+						zap.String("vk", string(msg.vk)),
+						zap.String("value", string(msg.v)),
+						zap.Int("grade", g),
+						zap.Int("existing_grade", results[key].Grade))
+					continue
+				}
+
+				// Propagate message to incoming neighbors
+				pMsg := &pb.TimestampMessage{
+					SessionId:       session,
+					VerificationKey: msg.vk,
+					Value:           msg.v,
+					Aux: &pb.Aux{
+						AuxKey: &pb.AuxKeyMessage{
+							PhiVrf: msg.aux.PhiVRF,
+							PiVrf:  msg.aux.PiVRF,
+							PhiVdf: msg.aux.PhiVDF,
+							PiVdf:  msg.aux.PiVDF,
+						},
+					},
+					MerklePath: make([]*pb.State, r+1),
+					Round:      uint32(r),
+					From:       e.network.GetNodeID(),
+				}
+				for i := 1; i <= r; i++ {
+					pMsg.MerklePath[i] = &pb.State{Row: msg.merklePath[i]}
+				}
+				pMsg.MerklePath[0] = &pb.State{Row: sigma[R-r]}
+				pMsgBytes, err := proto.Marshal(pMsg)
+				if err != nil {
+					e.logger.Error("Failed to marshal message", zap.Error(err))
+					continue
+				}
+
+				e.network.SendProtocolMessage(protocolID, pMsgBytes)
+			}
+		}
+	}
+
+	e.isRunning = false
+	e.logger.Info("ExPost verification phase completed")
+	return results, nil
+}
+
+func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn common.FilterF, r int) bool {
+	if msg == nil {
+		return false
+	}
+
+	if !filterFn(msg.sid, msg.vk, msg.v, msg.aux) {
+		return false
+	}
+
+	if !(e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux, auxLocal) > 0) {
+		return false
+	}
+
+	if !e.validateMerklePath(msg.merklePath, r) {
+		return false
+	}
+
+	return true
+}
+
+func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
+	R := e.d * e.D
+
+	// Check if we have enough layers in the merkle path
+	// We need layers from R-round+1 to R (inclusive)
+	if len(merklePath) < round {
+		e.logger.Error("Invalid Merkle path length",
+			zap.Int("expected", round),
+			zap.Int("actual", len(merklePath)))
+		return false
+	}
+
+	// Check if we have enough state layers
+	if len(e.state) <= R-round {
+		e.logger.Error("Invalid state length for round",
+			zap.Int("required_index", R-round),
+			zap.Int("actual_length", len(e.state)))
+		return false
+	}
+
+	// Validate that ℓi,R−r+1 ∈ LR−r+1
+	// The local label at round R-round should be in the first layer of merkle path
+	localLabel := e.mdag.GetComputedLabel(R - round)
+	if !isValueInState(localLabel, merklePath[0]) {
+		e.logger.Error("Local label not found in merkle path",
+			zap.Int("round", round),
+			zap.Int("label_round", R-round))
+		return false
+	}
+
+	// Validate the Merkle path structure
+	// Each layer should contain the hash of the previous layer
+	for i := 1; i < round; i++ {
+		// Hash the previous layer (i-1) and check if it's in current layer (i)
+		prevLayerHash := e.mdag.Oracle(merklePath[i-1]...)
+		if !isValueInState(prevLayerHash, merklePath[i]) {
+			e.logger.Error("Invalid Merkle path at layer",
+				zap.Int("layer", i),
+				zap.Int("round", round))
+			return false
+		}
+	}
+
+	return true
+}
+
+func isValueInState(value []byte, state [][]byte) bool {
+	for _, s := range state {
+		if string(s) == string(value) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleMessage processes incoming messages from the network.
+func (e *ExPost) handleMessage(from string, payload []byte) error {
+	if !e.isRunning {
+		return fmt.Errorf("protocol not running")
+	}
+	e.logger.Debug(fmt.Sprintf("Received message from %s", from))
+	var msg pb.TimestampMessage
+	if err := proto.Unmarshal(payload, &msg); err != nil {
+		e.logger.Error("Failed to unmarshal ExPost message", zap.Error(err))
+		return err
+	}
+	if msg.SessionId != e.sid {
+		err := fmt.Errorf("session id mismatch")
+		e.logger.Warn("Received message with mismatched session id",
+			zap.String("expected", e.sid),
+			zap.String("received", msg.SessionId))
+		return err
+	}
+	if msg.From != from {
+		err := fmt.Errorf("sender id mismatch")
+		e.logger.Error("Received message with mismatched sender id",
+			zap.String("expected", from),
+			zap.String("received", msg.From))
+		return err
+	}
+	if !e.neighbors[from] {
+		err := fmt.Errorf("sender not in neighbors list")
+		e.logger.Error("Received message from non-neighbor sender",
+			zap.String("sender", from))
+		return err
+	}
+	round := int(msg.Round)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, exists := e.messages[round]; !exists {
+		e.messages[round] = make(map[string]receivedMessage)
+	}
+	if _, exists := e.messages[round][from]; exists {
+		e.logger.Debug("Ignoring duplicate message from sender for this round",
+			zap.String("from", from),
+			zap.Int("round", round))
+		return nil
+	}
+	e.messages[round][from] = receivedMessage{
+		sid: msg.SessionId,
+		vk:  msg.VerificationKey,
+		v:   msg.Value,
+		aux: &common.AuxKey{
+			PhiVRF: msg.Aux.AuxKey.PhiVrf,
+			PiVRF:  msg.Aux.AuxKey.PiVrf,
+			PhiVDF: msg.Aux.AuxKey.PhiVdf,
+			PiVDF:  msg.Aux.AuxKey.PiVdf,
+		},
+		merklePath: convertTimestampToBytes(&msg),
+	}
+	return nil
+}
+
+func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
+	result := make([][][]byte, len(msg.MerklePath))
+	for i, state := range msg.MerklePath {
+		if state == nil {
+			result[i] = nil
+			continue
+		}
+		if state.Row == nil {
+			result[i] = [][]byte{}
+			continue
+		}
+		result[i] = make([][]byte, len(state.Row))
+		for j, rowBytes := range state.Row {
+			result[i][j] = rowBytes
+		}
+	}
+	return result
+}
+
+func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {
+	result := make([]byte, n)
+	for i := range result {
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(allowedCharset))))
+		if err != nil {
+			return nil, err
+		}
+		result[i] = charset[idx.Int64()]
+	}
+
+	return result, nil
+}
