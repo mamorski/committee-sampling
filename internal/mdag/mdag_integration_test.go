@@ -1,6 +1,7 @@
 package mdag
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"math/rand"
@@ -9,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"bytes"
-
 	"github.com/mamorski/committee-sampling/internal/network"
+
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 )
