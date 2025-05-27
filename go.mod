@@ -5,6 +5,7 @@ go 1.23
 require (
 	github.com/google/uuid v1.6.0
 	github.com/libp2p/go-libp2p v0.37.0
+	github.com/libp2p/go-libp2p-core v0.20.1
 	github.com/libp2p/go-libp2p-kad-dht v0.28.1
 	github.com/multiformats/go-multiaddr v0.13.0
 	github.com/stretchr/testify v1.9.0

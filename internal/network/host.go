@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
@@ -37,8 +37,17 @@ type Network interface {
 	Close() error
 }
 
+type Host interface {
+	ID() peer.ID
+	Close() error
+	SetStreamHandler(proto protocol.ID, handler network.StreamHandler)
+	Connect(ctx context.Context, addrInfo peer.AddrInfo) error
+	NewStream(ctx context.Context, p peer.ID, pids ...protocol.ID) (network.Stream, error)
+	Peerstore() peerstore.Peerstore
+}
+
 type P2PNode struct {
-	host              host.Host
+	host              Host
 	ctx               context.Context
 	cancel            context.CancelFunc
 	logger            *zap.Logger
@@ -50,7 +59,7 @@ type P2PNode struct {
 	key               crypto.PrivKey
 }
 
-func NewP2PNode(ctx context.Context, cfg Config, logger *zap.Logger) (*P2PNode, error) {
+func New(ctx context.Context, cfg Config, logger *zap.Logger) (*P2PNode, error) {
 	c, cancel := context.WithCancel(ctx)
 
 	// Generate private key
