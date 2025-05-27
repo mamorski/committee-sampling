@@ -65,7 +65,7 @@ func New(rounds int, sid string, oracle HashOracle, network network.Network, rou
 		roundTimeout:   roundTimeout,
 		logger:         logger.Named("mdag"),
 		messages:       make(map[int][][]byte),
-		computedLabels: make([][]byte, rounds),
+		computedLabels: make([][]byte, rounds+1),
 		state:          make([][][]byte, rounds),
 		isRunning:      false,
 		sessionID:      sid,
@@ -159,6 +159,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		}
 		newLabel := m.oracle(concatenated)
 		m.currentLabel = newLabel
+		m.computedLabels[r] = newLabel
 
 		m.logger.Info("Completed round",
 			zap.Int("round", r),
@@ -166,7 +167,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 
 		if r < m.rounds {
 			m.broadcast(r, m.currentLabel)
-			m.computedLabels[r] = newLabel
 		}
 	}
 
@@ -341,10 +341,10 @@ func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if roundIndex < 0 || roundIndex >= m.rounds {
+	if roundIndex < 0 || roundIndex > m.rounds {
 		m.logger.Warn("Invalid round index for GetComputedLabel",
 			zap.Int("requested_index", roundIndex),
-			zap.Int("max_valid_index", m.rounds-1))
+			zap.Int("max_valid_index", m.rounds))
 		return nil
 	}
 
