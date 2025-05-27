@@ -3,13 +3,12 @@ package discovery
 import (
 	"context"
 
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 )
 
 type MDNSDiscovery struct {
-	host            host.Host
+	host            Host
 	mdns            mdns.Service
 	config          Config
 	discoveredPeers chan peer.AddrInfo
@@ -17,7 +16,7 @@ type MDNSDiscovery struct {
 	cancel          context.CancelFunc
 }
 
-func NewMDNSDiscovery(host host.Host, config Config) *MDNSDiscovery {
+func NewMDNSDiscovery(host Host, config Config) *MDNSDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MDNSDiscovery{
 		host:            host,
