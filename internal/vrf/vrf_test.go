@@ -3,114 +3,58 @@ package vrf
 import (
 	"crypto/elliptic"
 	"testing"
+
+	"github.com/stretchr/testify/suite"
 )
 
-func TestGen(t *testing.T) {
-	vrfInstance := New()
+type VRFSuite struct {
+	suite.Suite
+	vrf VRF
+}
 
-	// Test with a valid lambda (128, 192, 256).
+func (s *VRFSuite) SetupTest() {
+	s.vrf = New()
+}
+
+func (s *VRFSuite) TestGen() {
 	for _, lambda := range []int{128, 192, 256} {
-		secretKey, verificationKey, err := vrfInstance.Gen(lambda)
-		if err != nil {
-			t.Fatalf("Gen(%d) failed: %v", lambda, err)
-		}
-
-		if len(secretKey) == 0 {
-			t.Errorf("Gen(%d) returned empty secret key", lambda)
-		}
-		if len(verificationKey) == 0 {
-			t.Errorf("Gen(%d) returned empty verification key", lambda)
-		}
+		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+		s.NoError(err)
+		s.NotEmpty(secretKey)
+		s.NotEmpty(verificationKey)
 	}
-
-	// Test with an invalid lambda.
-	_, _, err := vrfInstance.Gen(512)
-	if err == nil {
-		t.Error("Gen(512) should have failed, but it did not")
-	}
+	_, _, err := s.vrf.Gen(512)
+	s.Error(err)
 }
 
-// TestEval tests the VRF evaluation for all supported lambda values.
-func TestEval(t *testing.T) {
-	vrfInstance := New()
-
-	// Test all suitable lambda values: 128, 192, 256.
+func (s *VRFSuite) TestEval() {
 	for _, lambda := range []int{128, 192, 256} {
-		t.Run(lambdaToCurveName(lambda), func(t *testing.T) {
-			// Generate key pair.
-			secretKey, _, err := vrfInstance.Gen(lambda)
-			if err != nil {
-				t.Fatalf("Gen(%d) failed: %v", lambda, err)
-			}
-
-			// Evaluate VRF with a sample input.
-			input := "test-input"
-			phi, pi, err := vrfInstance.Eval(input, secretKey)
-			if err != nil {
-				t.Fatalf("Eval(%d) failed: %v", lambda, err)
-			}
-
-			if len(phi) == 0 || len(pi) == 0 {
-				t.Errorf("Eval(%d) returned empty phi or pi", lambda)
-			}
-		})
+		secretKey, _, err := s.vrf.Gen(lambda)
+		s.Require().NoError(err)
+		phi, pi, err := s.vrf.Eval("test-input", secretKey)
+		s.NoError(err)
+		s.NotEmpty(phi)
+		s.NotEmpty(pi)
 	}
 }
 
-// TestVerify tests the VRF verification for all supported lambda values.
-func TestVerify(t *testing.T) {
-	vrfInstance := New()
-
-	// Test all suitable lambda values: 128, 192, 256.
+func (s *VRFSuite) TestVerify() {
 	for _, lambda := range []int{128, 192, 256} {
-		t.Run(lambdaToCurveName(lambda), func(t *testing.T) {
-			// Generate key pair.
-			secretKey, verificationKey, err := vrfInstance.Gen(lambda)
-			if err != nil {
-				t.Fatalf("Gen(%d) failed: %v", lambda, err)
-			}
-
-			// Evaluate VRF with a sample input.
-			input := "test-input"
-			phi, pi, err := vrfInstance.Eval(input, secretKey)
-			if err != nil {
-				t.Fatalf("Eval(%d) failed: %v", lambda, err)
-			}
-
-			// Verify the VRF output.
-			valid, err := vrfInstance.Verify(input, phi, pi, verificationKey)
-			if err != nil {
-				t.Fatalf("Verify(%d) failed: %v", lambda, err)
-			}
-			if !valid {
-				t.Errorf("Verify(%d) returned false, but it should be true", lambda)
-			}
-
-			// Test with invalid proof (pi).
-			invalidPi := []byte("invalid-proof")
-			valid, err = vrfInstance.Verify(input, phi, invalidPi, verificationKey)
-			if err == nil || valid {
-				t.Errorf("Verify(%d) with invalid proof should have failed", lambda)
-			}
-		})
+		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+		s.Require().NoError(err)
+		phi, pi, err := s.vrf.Eval("test-input", secretKey)
+		s.Require().NoError(err)
+		valid, err := s.vrf.Verify("test-input", phi, pi, verificationKey)
+		s.NoError(err)
+		s.True(valid)
+		invalidPi := []byte("invalid-proof")
+		valid, err = s.vrf.Verify("test-input", phi, invalidPi, verificationKey)
+		s.Error(err)
+		s.False(valid)
 	}
 }
 
-// Helper function to get the curve name based on lambda.
-func lambdaToCurveName(lambda int) string {
-	switch lambda {
-	case 128:
-		return "P256"
-	case 192:
-		return "P384"
-	case 256:
-		return "P521"
-	default:
-		return "Unknown"
-	}
-}
-
-func TestSelectCurve(t *testing.T) {
+func (s *VRFSuite) TestSelectCurve() {
 	tests := []struct {
 		lambda     int
 		expected   elliptic.Curve
@@ -119,22 +63,19 @@ func TestSelectCurve(t *testing.T) {
 		{128, elliptic.P224(), false},
 		{192, elliptic.P384(), false},
 		{256, elliptic.P256(), false},
-		{512, nil, true}, // Invalid lambda.
+		{512, nil, true},
 	}
-
 	for _, test := range tests {
 		curve, _, err := selectCurveAndHash(test.lambda)
 		if test.shouldFail {
-			if err == nil {
-				t.Errorf("selectCurveAndHash(%d) should have failed", test.lambda)
-			}
+			s.Error(err)
 		} else {
-			if err != nil {
-				t.Fatalf("selectCurveAndHash(%d) failed: %v", test.lambda, err)
-			}
-			if curve != test.expected {
-				t.Errorf("selectCurveAndHash(%d) returned wrong curve", test.lambda)
-			}
+			s.NoError(err)
+			s.Equal(test.expected, curve)
 		}
 	}
+}
+
+func TestVRFSuite(t *testing.T) {
+	suite.Run(t, new(VRFSuite))
 }
