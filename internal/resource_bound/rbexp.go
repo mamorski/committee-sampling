@@ -127,7 +127,7 @@ func (r *RbExp) Ver(
 			SID:       sid,
 			VK:        value.VK,
 			Challenge: value.Challenge,
-			AuxKey:    value.Aux,
+			AuxTag:    value.Aux,
 			Grade:     g,
 		})
 	}

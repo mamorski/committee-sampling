@@ -36,7 +36,7 @@ type RBExpOutput struct {
 	SID       string
 	VK        []byte
 	Grade     int
-	AuxKey    *AuxKey
+	AuxTag    *AuxTag
 	Challenge []byte
 }
 

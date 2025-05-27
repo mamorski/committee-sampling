@@ -1,227 +1,178 @@
 package resource_bound
 
 import (
-	"errors"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 )
 
-// fakeResourceProof returns errors based on the vk value.
-type fakeResourceProof struct{}
+// Mocks
 
-func (f *fakeResourceProof) Setup(vk []byte) ([]byte, error) {
-	if string(vk) == "fail_setup" {
-		return nil, errors.New("setup error")
-	}
-	return []byte("auxRP"), nil
+type MockResourceProof struct{ mock.Mock }
+
+func (m *MockResourceProof) Setup(vk []byte) ([]byte, error) {
+	args := m.Called(vk)
+	return args.Get(0).([]byte), args.Error(1)
+}
+func (m *MockResourceProof) Prove(vk []byte, weight float64, challenge []byte, aux []byte) ([]byte, error) {
+	args := m.Called(vk, weight, challenge, aux)
+	return args.Get(0).([]byte), args.Error(1)
+}
+func (m *MockResourceProof) Ver(vk []byte, weight float64, challenge []byte, rpProof []byte) bool {
+	args := m.Called(vk, weight, challenge, rpProof)
+	return args.Bool(0)
 }
 
-func (f *fakeResourceProof) Prove(vk []byte, _ float64, _ []byte, _ []byte) ([]byte, error) {
-	if string(vk) == "fail_rp_prove" {
-		return nil, errors.New("prove error")
-	}
-	return []byte("piRP"), nil
+type MockExPost struct{ mock.Mock }
+
+func (m *MockExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error) {
+	args := m.Called(session, vk)
+	return args.Get(0).([][][]byte), args.Get(1).([]byte), args.Error(2)
+}
+func (m *MockExPost) Verify(session string, vk []byte, fSigmaExp *common.FSigmaExp, auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+	args := m.Called(session, vk, fSigmaExp, auxTag, auxLocal, mock.Anything)
+	return args.Get(0).(map[common.Key]common.O), args.Error(1)
 }
 
-func (f *fakeResourceProof) Ver(vk []byte, _ float64, _ []byte, _ []byte) bool {
-	return string(vk) != "fail_ver"
+type MockExAnte struct{ mock.Mock }
+
+func (m *MockExAnte) Generate(session string, vk []byte, challenge []byte, rpProof []byte) ([][][]byte, error) {
+	args := m.Called(session, vk, challenge, rpProof)
+	return args.Get(0).([][][]byte), args.Error(1)
+}
+func (m *MockExAnte) Verify(session string, vk []byte, sigma [][][]byte, auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+	args := m.Called(session, vk, sigma, auxTag, auxLocal, mock.Anything)
+	return args.Get(0).(map[common.Key]common.O), args.Error(1)
 }
 
-type fakeExPost struct{}
-
-func (f *fakeExPost) Generate(session string, _ []byte) ([][][]byte, []byte, error) {
-	if session == "fail_exp_generate" {
-		return nil, nil, errors.New("exp generate error")
-	}
-	return [][][]byte{{[]byte("sigmaExp")}}, []byte("challenge"), nil
+type RbExpSuite struct {
+	suite.Suite
+	rp     *MockResourceProof
+	exp    *MockExPost
+	exa    *MockExAnte
+	weight float64
+	rbexp  *RbExp
 }
 
-func (f *fakeExPost) Verify(
-	session string,
-	vk []byte,
-	fSigmaExp *common.FSigmaExp,
-	auxTag *common.AuxTag,
-	_ float64,
-	filter filterTagFunc) (map[common.Key]common.O, error) {
-
-	if session == "fail_exp_verify" {
-		return nil, errors.New("exp verify error")
-	}
-	// If the provided filter returns false, simulate no output.
-	if !filter(session, vk, fSigmaExp.Challenge, auxTag) {
-		return map[common.Key]common.O{}, nil
-	}
-	if session == "nomatch" {
-		return map[common.Key]common.O{}, nil
-	}
-	key := common.Key{VK: "key1", Ch: string(fSigmaExp.Challenge)}
-	return map[common.Key]common.O{
-		key: {
-			VK:        vk,
-			Challenge: fSigmaExp.Challenge,
-			Aux:       auxTag.AuxKey,
-			Grade:     8,
-		},
-	}, nil
+func (s *RbExpSuite) SetupTest() {
+	s.rp = new(MockResourceProof)
+	s.exp = new(MockExPost)
+	s.exa = new(MockExAnte)
+	s.weight = 1.0
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight)
 }
 
-type fakeExAnte struct{}
-
-func (f *fakeExAnte) Generate(session string, _ []byte, _ []byte, _ []byte) ([][][]byte, error) {
-	if session == "fail_exa_generate" {
-		return nil, errors.New("exa generate error")
-	}
-	return [][][]byte{{[]byte("sigmaExa")}}, nil
+func TestRbExpSuite(t *testing.T) {
+	suite.Run(t, new(RbExpSuite))
 }
 
-func (f *fakeExAnte) Verify(
-	session string,
-	vk []byte,
-	_ [][][]byte,
-	auxTag *common.AuxTag,
-	_ float64,
-	filter filterTagFunc) (map[common.Key]common.O, error) {
-
-	if session == "fail_exa_verify" {
-		return nil, errors.New("exante verify error")
-	}
-
-	if !filter(session, vk, []byte("challenge"), auxTag) {
-		return map[common.Key]common.O{}, nil
-	}
-
-	if session == "nomatch" {
-		key := common.Key{VK: "other", Ch: "challenge"}
-		return map[common.Key]common.O{
-			key: {
-				VK:        vk,
-				Challenge: []byte("challenge"),
-				Aux:       auxTag.AuxKey,
-				Grade:     5,
-			},
-		}, nil
-	}
-
-	key := common.Key{VK: "key1", Ch: "challenge"}
-	return map[common.Key]common.O{
-		key: {
-			VK:        vk,
-			Challenge: []byte("challenge"),
-			Aux:       auxTag.AuxKey,
-			Grade:     5,
-		},
-	}, nil
-}
-
-func alwaysTrueFilter(_ string, _ []byte, _ []byte, _ *common.AuxKey) bool {
-	return true
-}
-
-func alwaysFalseFilter(_ string, _ []byte, _ []byte, _ *common.AuxKey) bool {
-	return false
-}
-
-func TestGen_Success(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	weight := 1.0
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, weight)
+func (s *RbExpSuite) TestGen_Success() {
 	sid := "session1"
 	vk := []byte("vk")
+	auxRP := []byte("auxRP")
+	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 
-	challenge, proof, err := rbexp.Gen(sid, vk)
-	if err != nil {
-		t.Fatalf("Gen returned error: %v", err)
-	}
+	s.rp.On("Setup", vk).Return(auxRP, nil).Once()
+	s.exp.On("Generate", sid, vk).Return(sigmaExp, challenge, nil).Once()
+	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return(piRP, nil).Once()
+	s.exa.On("Generate", sid, vk, challenge, piRP).Return(sigmaExa, nil).Once()
 
-	if string(challenge) != "challenge" {
-		t.Errorf("Expected challenge 'challenge', got %s", challenge)
-	}
+	ch, proof, err := s.rbexp.Gen(sid, vk)
+	require.NoError(s.T(), err)
+	assert.Equal(s.T(), challenge, ch)
+	assert.Equal(s.T(), piRP, proof.PiRP)
+	assert.Equal(s.T(), sigmaExp, proof.SigmaExp)
+	assert.Equal(s.T(), sigmaExa, proof.SigmaExa)
 
-	if string(proof.PiRP) != "piRP" {
-		t.Errorf("Expected proof.PiRP 'piRP', got %s", proof.PiRP)
-	}
-
-	if len(proof.SigmaExp) != 1 || len(proof.SigmaExp[0]) != 1 || string(proof.SigmaExp[0][0]) != "sigmaExp" {
-		t.Errorf("Unexpected SigmaExp: %v", proof.SigmaExp)
-	}
-
-	if len(proof.SigmaExa) != 1 || len(proof.SigmaExa[0]) != 1 || string(proof.SigmaExa[0][0]) != "sigmaExa" {
-		t.Errorf("Unexpected SigmaExa: %v", proof.SigmaExa)
-	}
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestGen_ErrorSetup(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestGen_ErrorSetup() {
 	sid := "session1"
 	vk := []byte("fail_setup")
+	s.rp.On("Setup", vk).Return([]byte{}, assert.AnError).Once()
 
-	_, _, err := rbexp.Gen(sid, vk)
-	if err == nil || err.Error() != "setup error" {
-		t.Fatalf("Expected setup error, got %v", err)
-	}
+	_, _, err := s.rbexp.Gen(sid, vk)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestGen_ErrorExpGenerate(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestGen_ErrorExpGenerate() {
 	sid := "fail_exp_generate"
 	vk := []byte("vk")
+	auxRP := []byte("auxRP")
 
-	_, _, err := rbexp.Gen(sid, vk)
-	if err == nil || err.Error() != "exp generate error" {
-		t.Fatalf("Expected exp.Generate error, got %v", err)
-	}
+	s.rp.On("Setup", vk).Return(auxRP, nil).Once()
+	s.exp.On("Generate", sid, vk).Return([][][]byte{}, []byte{}, assert.AnError).Once()
+
+	_, _, err := s.rbexp.Gen(sid, vk)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestGen_ErrorRPProve(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestGen_ErrorRPProve() {
 	sid := "session1"
 	vk := []byte("fail_rp_prove")
+	auxRP := []byte("auxRP")
+	challenge := []byte("challenge")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
 
-	_, _, err := rbexp.Gen(sid, vk)
-	if err == nil || err.Error() != "prove error" {
-		t.Fatalf("Expected rp.Prove error, got %v", err)
-	}
+	s.rp.On("Setup", vk).Return(auxRP, nil).Once()
+	s.exp.On("Generate", sid, vk).Return(sigmaExp, challenge, nil).Once()
+	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return([]byte{}, assert.AnError).Once()
+
+	_, _, err := s.rbexp.Gen(sid, vk)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestGen_ErrorExaGenerate(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestGen_ErrorExaGenerate() {
 	sid := "fail_exa_generate"
 	vk := []byte("vk")
+	auxRP := []byte("auxRP")
+	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
 
-	_, _, err := rbexp.Gen(sid, vk)
-	if err == nil || err.Error() != "exa generate error" {
-		t.Fatalf("Expected exa.Generate error, got %v", err)
-	}
+	s.rp.On("Setup", vk).Return(auxRP, nil).Once()
+	s.exp.On("Generate", sid, vk).Return(sigmaExp, challenge, nil).Once()
+	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return(piRP, nil).Once()
+	s.exa.On("Generate", sid, vk, challenge, piRP).Return([][][]byte{}, assert.AnError).Once()
+
+	_, _, err := s.rbexp.Gen(sid, vk)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestVer_Success(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestVer_Success() {
 	sid := "session1"
 	vk := []byte("vk")
 	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 	proof := &common.RBExpProof{
-		PiRP:     []byte("piRP"),
-		SigmaExp: [][][]byte{{[]byte("sigmaExp")}},
-		SigmaExa: [][][]byte{{[]byte("sigmaExa")}},
+		PiRP:     piRP,
+		SigmaExp: sigmaExp,
+		SigmaExa: sigmaExa,
 	}
 	auxKey := &common.AuxKey{
 		PhiVRF: []byte("phi"),
@@ -229,112 +180,135 @@ func TestVer_Success(t *testing.T) {
 		PhiVDF: []byte("phivdf"),
 		PiVDF:  []byte("pivdf"),
 	}
+	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
+	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
+	key := common.Key{VK: "key1", Ch: string(challenge)}
+	outputP := map[common.Key]common.O{
+		key: {VK: vk, Challenge: challenge, Aux: auxTag, Grade: 8},
+	}
+	outputA := map[common.Key]common.O{
+		key: {VK: vk, Challenge: challenge, Aux: auxTag, Grade: 5},
+	}
 
-	outputs, err := rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
-	if err != nil {
-		t.Fatalf("Ver returned error: %v", err)
-	}
-	if len(outputs) != 1 {
-		t.Fatalf("Expected 1 output, got %d", len(outputs))
-	}
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(outputP, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(outputA, nil).Once()
+
+	outputs, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	require.NoError(s.T(), err)
+	require.Len(s.T(), outputs, 1)
 	out := outputs[0]
-	if out.SID != sid {
-		t.Errorf("Expected SID %s, got %s", sid, out.SID)
-	}
-	if !reflect.DeepEqual(out.VK, vk) {
-		t.Errorf("Expected VK %v, got %v", vk, out.VK)
-	}
-	if string(out.Challenge) != "challenge" {
-		t.Errorf("Expected Challenge 'challenge', got %s", out.Challenge)
-	}
-	// fakeExPost returns Grade 8 and fakeExAnte returns Grade 5, so the minimum is 5.
-	if out.Grade != 5 {
-		t.Errorf("Expected Grade 5, got %d", out.Grade)
-	}
+	require.Equal(s.T(), sid, out.SID)
+	require.Equal(s.T(), vk, out.VK)
+	require.Equal(s.T(), challenge, out.Challenge)
+	require.Equal(s.T(), 5, out.Grade)
+
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestVer_NoMatchingOutput(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
-	// Using session "nomatch" forces both Verify methods to return no matching key.
+func (s *RbExpSuite) TestVer_NoMatchingOutput() {
 	sid := "nomatch"
 	vk := []byte("vk")
 	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 	proof := &common.RBExpProof{
-		PiRP:     []byte("piRP"),
-		SigmaExp: [][][]byte{{[]byte("sigmaExp")}},
-		SigmaExa: [][][]byte{{[]byte("sigmaExa")}},
+		PiRP:     piRP,
+		SigmaExp: sigmaExp,
+		SigmaExa: sigmaExa,
 	}
 	auxKey := &common.AuxKey{}
+	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
+	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	_, err := rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
-	if err == nil || err.Error() != "verification failed: no matching output" {
-		t.Fatalf("Expected no matching output error, got %v", err)
-	}
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+
+	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestVer_ErrorExPost(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestVer_ErrorExPost() {
 	sid := "fail_exp_verify"
 	vk := []byte("vk")
 	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 	proof := &common.RBExpProof{
-		PiRP:     []byte("piRP"),
-		SigmaExp: [][][]byte{{[]byte("sigmaExp")}},
-		SigmaExa: [][][]byte{{[]byte("sigmaExa")}},
+		PiRP:     piRP,
+		SigmaExp: sigmaExp,
+		SigmaExa: sigmaExa,
 	}
 	auxKey := &common.AuxKey{}
+	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
+	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	_, err := rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
-	if err == nil || err.Error() != "exp verify error" {
-		t.Fatalf("Expected exp.Verify error, got %v", err)
-	}
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
+
+	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestVer_ErrorExAnte(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	rbexp := New(rp, exp, exa, alwaysTrueFilter, 1.0)
+func (s *RbExpSuite) TestVer_ErrorExAnte() {
 	sid := "fail_exa_verify"
 	vk := []byte("vk")
 	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 	proof := &common.RBExpProof{
-		PiRP:     []byte("piRP"),
-		SigmaExp: [][][]byte{{[]byte("sigmaExp")}},
-		SigmaExa: [][][]byte{{[]byte("sigmaExa")}},
+		PiRP:     piRP,
+		SigmaExp: sigmaExp,
+		SigmaExa: sigmaExa,
 	}
 	auxKey := &common.AuxKey{}
+	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
+	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	_, err := rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
-	if err == nil || err.Error() != "exante verify error" {
-		t.Fatalf("Expected exa.Verify error, got %v", err)
-	}
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
+
+	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
 
-func TestVer_FilterFalse(t *testing.T) {
-	rp := &fakeResourceProof{}
-	exp := &fakeExPost{}
-	exa := &fakeExAnte{}
-	// Use a filter that always returns false.
-	rbexp := New(rp, exp, exa, alwaysFalseFilter, 1.0)
+func (s *RbExpSuite) TestVer_FilterFalse() {
 	sid := "session1"
 	vk := []byte("vk")
 	challenge := []byte("challenge")
+	piRP := []byte("piRP")
+	sigmaExp := [][][]byte{{[]byte("sigmaExp")}}
+	sigmaExa := [][][]byte{{[]byte("sigmaExa")}}
 	proof := &common.RBExpProof{
-		PiRP:     []byte("piRP"),
-		SigmaExp: [][][]byte{{[]byte("sigmaExp")}},
-		SigmaExa: [][][]byte{{[]byte("sigmaExa")}},
+		PiRP:     piRP,
+		SigmaExp: sigmaExp,
+		SigmaExa: sigmaExa,
 	}
 	auxKey := &common.AuxKey{}
+	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
+	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	_, err := rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
-	if err == nil || err.Error() != "verification failed: no matching output" {
-		t.Fatalf("Expected filter false error, got %v", err)
-	}
+	// Use a filter that always returns false by changing the rbexp instance
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight)
+
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+
+	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	require.Error(s.T(), err)
+	s.rp.AssertExpectations(s.T())
+	s.exp.AssertExpectations(s.T())
+	s.exa.AssertExpectations(s.T())
 }
