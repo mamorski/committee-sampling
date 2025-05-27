@@ -257,7 +257,11 @@ func (e *ExAnte) Verify(
 
 // handleMessage processes incoming messages from the network.
 func (e *ExAnte) handleMessage(from string, payload []byte) error {
-	if !e.isRunning {
+	e.mu.Lock()
+	running := e.isRunning
+	e.mu.Unlock()
+
+	if !running {
 		return errors.New("protocol not running")
 	}
 	e.logger.Debug(fmt.Sprintf("Received message from %s", from))

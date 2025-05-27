@@ -190,7 +190,11 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 //
 // Returns an error if validation fails, nil otherwise.
 func (m *MDAG) handleMessage(from string, payload []byte) error {
-	if !m.isRunning {
+	m.mu.Lock()
+	running := m.isRunning
+	m.mu.Unlock()
+
+	if !running {
 		return errors.New("protocol not running")
 	}
 
