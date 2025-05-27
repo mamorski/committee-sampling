@@ -3,7 +3,6 @@ package exante
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -20,9 +19,6 @@ const exanteProtocolID = "/exante/1.0.0"
 // MDAG defines the interface for the MDAG required by ExAnte
 type MDAG interface {
 	Generate(sid string, vk []byte, vi ...[]byte) ([][][]byte, error)
-	GetStateForRound(round int) [][]byte
-	GetComputedLabel(roundIndex int) []byte
-	Verify(merkleRoot []byte, path [][]byte) bool
 	Oracle(h ...[]byte) []byte
 }
 
@@ -33,25 +29,17 @@ type ExAnte struct {
 	mdag          MDAG
 	roundTimeout  time.Duration
 	startTime     time.Time
-	diameter      int
+	d             int
 	D             int
 	gradeFunction common.GradeFunc
 	isRunning     bool
 	sid           string
 	challenge     []byte
 
-	mu             sync.Mutex
-	verifiedValues map[string]verifiedTuple
-	messages       map[int]map[string]receivedMessage
-	neighbors      map[string]bool // set of allowed neighbor node IDs
-	state          [][][]byte
-}
-
-type verifiedTuple struct {
-	vk    []byte
-	v     []byte
-	aux   *common.AuxTag
-	grade int
+	mu        sync.Mutex
+	messages  map[int]map[string]receivedMessage
+	neighbors map[string]bool // set of allowed neighbor node IDs
+	state     [][][]byte
 }
 
 type receivedMessage struct {
@@ -69,25 +57,24 @@ func New(
 	sid string,
 	startTime time.Time,
 	roundTimeout time.Duration,
-	diameter int,
+	d int,
 	D int,
 	gradeFunction common.GradeFunc,
 	logger *zap.Logger) *ExAnte {
 
 	e := &ExAnte{
-		network:        net,
-		logger:         logger,
-		mdag:           mdag,
-		roundTimeout:   roundTimeout,
-		startTime:      startTime,
-		diameter:       diameter,
-		D:              D,
-		gradeFunction:  gradeFunction,
-		verifiedValues: make(map[string]verifiedTuple),
-		messages:       make(map[int]map[string]receivedMessage),
-		neighbors:      make(map[string]bool),
-		sid:            sid,
-		isRunning:      true,
+		network:       net,
+		logger:        logger.Named("exante"),
+		mdag:          mdag,
+		roundTimeout:  roundTimeout,
+		startTime:     startTime,
+		d:             d,
+		D:             D,
+		gradeFunction: gradeFunction,
+		messages:      make(map[int]map[string]receivedMessage),
+		neighbors:     make(map[string]bool),
+		sid:           sid,
+		isRunning:     true,
 	}
 
 	neighborsList := net.GetNeighbors()
@@ -101,7 +88,7 @@ func New(
 
 	e.logger.Info("ExAnte instance created",
 		zap.String("session_id", sid),
-		zap.Int("diameter", diameter))
+		zap.Int("d", d))
 
 	return e
 }
@@ -143,23 +130,28 @@ func (e *ExAnte) Verify(
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
 	}
 
-	if len(sigma) == 0 {
+	R := e.d * e.D
+	if len(sigma) <= R {
 		e.isRunning = false
-		e.logger.Error("Empty sigma received")
-		return nil, fmt.Errorf("empty sigma")
+		e.logger.Error("Sigma length is less than required rounds",
+			zap.Int("expected_rounds", R),
+			zap.Int("actual_length", len(sigma)))
+
+		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), R)
 	}
 
 	e.logger.Info("Starting ExAnte Verification phase",
 		zap.String("session_id", session),
 		zap.String("node_id", e.network.GetNodeID()))
+	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 
 	// Check if P_i is also acts like a prover
-	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.diameter+1 &&
+	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.d+1 &&
 		filterFn(session, vk, e.challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 
-		msg := &pb.ExAnteMessage{
+		msg := &pb.TimestampMessage{
 			SessionId:       session,
 			VerificationKey: vk,
 			Value:           e.challenge,
@@ -172,13 +164,9 @@ func (e *ExAnte) Verify(
 					PiVdf:  auxTag.AuxKey.PiVDF,
 				},
 			},
-			MerklePath: make([]*pb.State, 1),
+			MerklePath: []*pb.State{{Row: sigma[0][0:]}},
 			Round:      0,
 			From:       e.network.GetNodeID(),
-		}
-
-		msg.MerklePath[0] = &pb.State{
-			Row: sigma[0],
 		}
 
 		msgBytes, err := proto.Marshal(msg)
@@ -188,49 +176,43 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
 		}
 
-		protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 		e.network.SendProtocolMessage(protocolID, msgBytes)
 	}
 	results := make(map[common.Key]common.O)
 
-	for r := 1; r <= e.diameter; r++ {
+	for r := 1; r < R; r++ {
 		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
 
-		for _, msg := range e.messages[r] {
-			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
-				g := min(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal),
-					e.diameter-int(math.Floor(float64(r)/float64(e.D))))
-				key := e.mdag.Oracle(msg.aux.PiRP, msg.aux.AuxKey.PhiVRF, msg.aux.AuxKey.PiVRF, msg.aux.AuxKey.PhiVDF, msg.aux.AuxKey.PiVDF)
-				if v, exists := e.verifiedValues[string(key)]; !exists {
-					e.verifiedValues[string(key)] = verifiedTuple{
-						vk:    msg.vk,
-						v:     msg.ch,
-						aux:   msg.aux,
-						grade: g,
-					}
-				} else if g > v.grade {
-					e.verifiedValues[string(key)] = verifiedTuple{
-						vk:    msg.vk,
-						v:     msg.ch,
-						aux:   msg.aux,
-						grade: g,
-					}
-				} else {
-					continue
-				}
+		e.mu.Lock()
+		msgs := e.messages[r-1]
+		e.mu.Unlock()
 
-				if _, exists := results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}]; !exists ||
-					g > results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}].Grade {
-					results[common.Key{VK: string(msg.vk), Ch: string(msg.ch)}] = common.O{
+		for _, msg := range msgs {
+			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
+
+				g := min(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
+
+				key := common.Key{VK: string(msg.vk), Ch: string(msg.ch)}
+				if v, exists := results[key]; !exists || g > v.Grade {
+					results[key] = common.O{
 						VK:        msg.vk,
 						Challenge: msg.ch,
 						Aux:       msg.aux,
 						Grade:     g,
 					}
+				} else {
+					e.logger.Debug("Ignoring message with lower grade",
+						zap.String("sid", msg.sid),
+						zap.String("vk", string(msg.vk)),
+						zap.String("challenge", string(msg.ch)),
+						zap.Int("grade", g),
+						zap.Int("existing_grade", v.Grade))
+					// Ignore this message as it has a lower grade than the existing one
+					continue
 				}
 
-				pMsg := &pb.ExAnteMessage{
+				pMsg := &pb.TimestampMessage{
 					SessionId:       session,
 					VerificationKey: msg.vk,
 					Value:           msg.ch,
@@ -261,7 +243,7 @@ func (e *ExAnte) Verify(
 					e.logger.Error("Failed to marshal message", zap.Error(err))
 					continue
 				}
-				protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
+
 				e.network.SendProtocolMessage(protocolID, pMsgBytes)
 			}
 		}
@@ -280,7 +262,7 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	}
 	e.logger.Debug(fmt.Sprintf("Received message from %s", from))
 
-	var msg pb.ExAnteMessage
+	var msg pb.TimestampMessage
 	if err := proto.Unmarshal(payload, &msg); err != nil {
 		e.logger.Error("Failed to unmarshal ExAnte message", zap.Error(err))
 		return err
@@ -339,7 +321,7 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 				PiVDF:  msg.Aux.AuxKey.PiVdf,
 			},
 		},
-		merklePath: convertExAnteMessageToBytes(&msg),
+		merklePath: convertTimestampToBytes(&msg),
 	}
 
 	return nil
@@ -385,7 +367,7 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.ch, msg.aux.PiRP), msg.merklePath[r]) {
+	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.ch, msg.aux.PiRP), msg.merklePath[0]) {
 		return false
 	}
 
@@ -407,7 +389,7 @@ func isValueInState(value []byte, state [][]byte) bool {
 	return false
 }
 
-func convertExAnteMessageToBytes(msg *pb.ExAnteMessage) [][][]byte {
+func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
 
 	result := make([][][]byte, len(msg.MerklePath))
 

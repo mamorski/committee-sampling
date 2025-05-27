@@ -22,7 +22,7 @@ const protocolID = "/mdag/1.0.0"
 type HashOracle func([]byte) []byte
 
 type MDAG struct {
-	rounds       int             // total number of rounds (round 1...rounds; round 0 is initialization)
+	rounds       int             // total number of rounds
 	oracle       HashOracle      // hash oracle (random oracle)
 	network      network.Network // network interface for asynchronous messaging
 	roundTimeout time.Duration   // time to wait each round before computing the next label
@@ -63,7 +63,7 @@ func New(rounds int, sid string, oracle HashOracle, network network.Network, rou
 		oracle:         oracle,
 		network:        network,
 		roundTimeout:   roundTimeout,
-		logger:         logger,
+		logger:         logger.Named("mdag"),
 		messages:       make(map[int][][]byte),
 		computedLabels: make([][]byte, rounds),
 		state:          make([][][]byte, rounds),
@@ -118,11 +118,10 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		buffer.Write(v)
 	}
 	m.currentLabel = m.oracle(buffer.Bytes())
+	m.computedLabels[0] = m.currentLabel
 
-	m.mu.Lock()
-	// Send to itself
-	m.messages[0] = append(m.messages[0], m.currentLabel)
-	m.mu.Unlock()
+	// Wait until the protocol start time before broadcasting
+	time.Sleep(time.Until(m.startTime))
 
 	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
@@ -143,22 +142,9 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		}
 		m.mu.Unlock()
 
-		// // Create a bucket for this round's state
-		// bucket := make([][]byte, len(prevRoundMsgs))
-		// copy(bucket, prevRoundMsgs)
-		// m.state[r-1] = bucket
-
-		var sortedLabels [][]byte
-		if r == 1 {
-			// For round 1, compute m0 ← H(sort(L0))
-			sortedLabels = make([][]byte, len(prevRoundMsgs))
-			copy(sortedLabels, prevRoundMsgs)
-		} else {
-			// For rounds > 1, compute mi ← H(sort({mi-1} ∪ Li))
-			sortedLabels = make([][]byte, len(prevRoundMsgs)+1)
-			sortedLabels[0] = m.currentLabel
-			copy(sortedLabels[1:], prevRoundMsgs)
-		}
+		sortedLabels := make([][]byte, len(prevRoundMsgs)+1)
+		sortedLabels[0] = m.currentLabel
+		copy(sortedLabels[1:], prevRoundMsgs)
 
 		// Sort the labels
 		sort.Slice(sortedLabels, func(i, j int) bool {
@@ -172,16 +158,15 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 			concatenated = append(concatenated, lab...)
 		}
 		newLabel := m.oracle(concatenated)
-		m.computedLabels[r-1] = newLabel
 		m.currentLabel = newLabel
 
 		m.logger.Info("Completed round",
 			zap.Int("round", r),
 			zap.String("new_label", base64.StdEncoding.EncodeToString(m.currentLabel)))
 
-		// Broadcast the new label if not the last round
 		if r < m.rounds {
 			m.broadcast(r, m.currentLabel)
+			m.computedLabels[r] = newLabel
 		}
 	}
 
@@ -200,11 +185,11 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 // and is received while the protocol is running.
 //
 // Parameters:
-//   - _: Protocol ID (unused but required by the handler interface)
+//   - from: The peer ID of the sender
 //   - payload: Raw message bytes received from the network
 //
 // Returns an error if validation fails, nil otherwise.
-func (m *MDAG) handleMessage(_ string, payload []byte) error {
+func (m *MDAG) handleMessage(from string, payload []byte) error {
 	if !m.isRunning {
 		return errors.New("protocol not running")
 	}
@@ -215,10 +200,10 @@ func (m *MDAG) handleMessage(_ string, payload []byte) error {
 		return err
 	}
 
-	if !m.neighbors[pbMsg.From] {
+	if !m.neighbors[from] {
 		err := errors.New("message from unknown neighbor")
 		m.logger.Warn("Received message from unknown neighbor",
-			zap.String("from", pbMsg.From))
+			zap.String("from", from))
 		return err
 	}
 
@@ -240,7 +225,7 @@ func (m *MDAG) handleMessage(_ string, payload []byte) error {
 	m.mu.Unlock()
 
 	m.logger.Debug("Received message",
-		zap.String("from", pbMsg.From),
+		zap.String("from", from),
 		zap.Int("round", round),
 		zap.Binary("label", pbMsg.Label))
 	return nil

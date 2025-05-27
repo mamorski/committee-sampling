@@ -399,13 +399,8 @@ func TestGetComputedLabel(t *testing.T) {
 	// Setup mock for SendProtocolMessage
 	mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Return()
 
-	// Run Generate in a goroutine
-	done := make(chan bool)
-	go func() {
-		_, err := mdagInstance.Generate("test-session", []byte("vki"), []byte("vi"))
-		assert.NoError(t, err)
-		done <- true
-	}()
+	_, err := mdagInstance.Generate("test-session", []byte("vki"), []byte("vi"))
+	assert.NoError(t, err)
 
 	// Allow time for the protocol to run
 	time.Sleep(500 * time.Millisecond)
@@ -421,7 +416,4 @@ func TestGetComputedLabel(t *testing.T) {
 	// Test getting a negative index
 	negativeLabel := mdagInstance.GetComputedLabel(-1)
 	assert.Nil(t, negativeLabel)
-
-	// Wait for Generate to complete
-	<-done
 }
