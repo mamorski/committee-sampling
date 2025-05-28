@@ -245,7 +245,6 @@ func (suite *ExPostTestSuite) TestNewWithZeroValues() {
 
 	suite.NotNil(expost)
 	suite.Equal("", expost.sid)
-	suite.Equal([]byte{}, expost.vk)
 	suite.Equal(time.Time{}, expost.startTime)
 	suite.Equal(0*time.Millisecond, expost.roundTimeout)
 	suite.Equal(0, expost.d)

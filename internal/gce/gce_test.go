@@ -14,7 +14,7 @@ type VRFMock struct {
 	mock.Mock
 }
 
-func (m *VRFMock) Gen(lambda int) ([]byte, []byte, error) {
+func (m *VRFMock) Generate(lambda int) ([]byte, []byte, error) {
 	args := m.Called(lambda)
 	return args.Get(0).([]byte), args.Get(1).([]byte), args.Error(2)
 }

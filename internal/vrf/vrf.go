@@ -30,7 +30,7 @@ func selectCurveAndHash(lambda int) (elliptic.Curve, func() hash.Hash, error) {
 	}
 }
 
-func (v *Vrf) Gen(lambda int) ([]byte, []byte, error) {
+func (v *Vrf) Generate(lambda int) ([]byte, []byte, error) {
 	c, h, err := selectCurveAndHash(lambda)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to select c: %w", err)

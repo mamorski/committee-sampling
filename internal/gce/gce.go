@@ -8,7 +8,7 @@ import (
 )
 
 type VRF interface {
-	Gen(lambda int) (sk []byte, vk []byte, err error)
+	Generate(lambda int) (sk []byte, vk []byte, err error)
 	Eval(message, sk []byte) (output []byte, proof []byte, err error)
 }
 
@@ -67,7 +67,7 @@ func HashData(data ...[]byte) []byte {
 // Returns the party’s LocalState or an error.
 func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
 	// Step 1: Sample a VRF key pair.
-	sk, vk, err := vrf.Gen(lambda)
+	sk, vk, err := vrf.Generate(lambda)
 	if err != nil {
 		return nil, err
 	}

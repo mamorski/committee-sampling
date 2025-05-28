@@ -18,18 +18,18 @@ func (s *VRFSuite) SetupTest() {
 
 func (s *VRFSuite) TestGen() {
 	for _, lambda := range []int{128, 192, 256} {
-		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.NoError(err)
 		s.NotEmpty(secretKey)
 		s.NotEmpty(verificationKey)
 	}
-	_, _, err := s.vrf.Gen(512)
+	_, _, err := s.vrf.Generate(512)
 	s.Error(err)
 }
 
 func (s *VRFSuite) TestEval() {
 	for _, lambda := range []int{128, 192, 256} {
-		secretKey, _, err := s.vrf.Gen(lambda)
+		secretKey, _, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.NoError(err)
@@ -40,7 +40,7 @@ func (s *VRFSuite) TestEval() {
 
 func (s *VRFSuite) TestVerify() {
 	for _, lambda := range []int{128, 192, 256} {
-		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.Require().NoError(err)
