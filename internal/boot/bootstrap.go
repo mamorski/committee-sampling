@@ -8,7 +8,7 @@ import (
 
 	"github.com/beevik/ntp"
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/resourceProof"
+	"github.com/mamorski/committee-sampling/internal/resourceproof"
 	"github.com/mamorski/committee-sampling/internal/vdf"
 	"github.com/mamorski/committee-sampling/internal/vrf"
 	"go.uber.org/zap"
@@ -180,7 +180,7 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 		logger,
 	)
 
-	rp := resourceProof.New()
+	rp := resourceproof.New()
 	rbExp := resourcebound.New(
 		rp,
 		exPost,

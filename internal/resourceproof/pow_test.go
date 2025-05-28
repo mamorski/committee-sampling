@@ -1,4 +1,4 @@
-package resource_proof
+package resourceproof
 
 import (
 	"testing"

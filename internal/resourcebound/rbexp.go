@@ -1,4 +1,4 @@
-package resource_bound
+package resourcebound
 
 import (
 	"errors"
@@ -52,7 +52,7 @@ func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weigh
 	}
 }
 
-func (r *RbExp) Gen(sid string, vk []byte) ([]byte, *common.RBExpProof, error) {
+func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, error) {
 	// Step 1
 	auxRP, err := r.rp.Setup(vk)
 	if err != nil {
@@ -86,7 +86,7 @@ func (r *RbExp) Gen(sid string, vk []byte) ([]byte, *common.RBExpProof, error) {
 	return challenge, proof, nil
 }
 
-func (r *RbExp) Ver(
+func (r *RbExp) Verify(
 	sid string,
 	vk, ch []byte,
 	proof *common.RBExpProof,
