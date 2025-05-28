@@ -5,18 +5,19 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/mamorski/committee-sampling/pkg/config"
 )
 
 type MDNSDiscovery struct {
 	host            Host
 	mdns            mdns.Service
-	config          Config
+	config          config.Discovery
 	discoveredPeers chan peer.AddrInfo
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
 
-func NewMDNSDiscovery(host Host, config Config) *MDNSDiscovery {
+func NewMDNSDiscovery(host Host, config config.Discovery) *MDNSDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MDNSDiscovery{
 		host:            host,

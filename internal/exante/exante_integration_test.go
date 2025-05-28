@@ -132,18 +132,18 @@ func testOracle(data []byte) []byte {
 }
 
 // testGradeFunction provides a grade function for testing
-func testGradeFunction(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float64) int {
 	// Simple grade function that returns different grades based on node ID
 	hash := sha256.Sum256(append(vk, ch...))
 	return int(hash[0]) % 10 // Return grade 0-9
 }
 
 // testFilterFunction provides a filter function for testing
-func testFilterFunction(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
+func testFilterFunction(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true // Accept all messages for testing
 }
 
-// TestExAnteIntegrationTwoNodes tests ExAnte with two nodes
+//nolint:funlen
 func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -162,8 +162,8 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	mdagRoundTimeout := 200 * time.Millisecond
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime)
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 3
@@ -283,7 +283,7 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	assert.Greater(t, node2.GetMessageCount(), 0)
 }
 
-// TestExAnteIntegrationThreeNodes tests ExAnte with three nodes
+// nolint:funlen
 func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -307,9 +307,9 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	mdagRoundTimeout := 200 * time.Millisecond
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime)
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime)
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 2
@@ -446,7 +446,7 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	assert.Greater(t, node3.GetMessageCount(), 0)
 }
 
-// TestExAnteIntegrationProverBehavior tests prover behavior in the protocol
+// nolint:funlen
 func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -465,8 +465,8 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	mdagRoundTimeout := 200 * time.Millisecond
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime)
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
 
 	// Create grade function that makes node1 a prover
 	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
@@ -620,9 +620,9 @@ func TestExAnteIntegrationMessageFiltering(t *testing.T) {
 	mdagRoundTimeout := 200 * time.Millisecond
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime)
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime)
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 2
@@ -734,7 +734,7 @@ func TestExAnteIntegrationLargeNetwork(t *testing.T) {
 	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 		exantes[i] = New(nodes[i], mdags[i], sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
 	}
 

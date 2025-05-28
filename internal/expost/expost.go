@@ -39,7 +39,6 @@ type ExPost struct {
 	D            int
 	lambda       int
 	gradeFunc    common.GradeFunc
-	filterFunc   common.FilterTagF
 	isRunning    bool
 	sid          string
 	vk           []byte
@@ -48,14 +47,13 @@ type ExPost struct {
 	messages  map[int]map[string]receivedMessage
 	neighbors map[string]bool // incoming neighbors
 	state     [][][]byte
-	labelR    []byte
 }
 
 type receivedMessage struct {
 	sid        string
 	vk         []byte
 	v          []byte
-	aux        *common.AuxKey
+	aux        *common.AuxTag
 	merklePath [][][]byte
 }
 
@@ -67,11 +65,10 @@ func New(
 	vk []byte,
 	startTime time.Time,
 	roundTimeout time.Duration,
-	diameter int,
-	D int,
+	gradeLevels int,
+	diameterBound int,
 	lambda int,
 	gradeFunc common.GradeFunc,
-	filterFunc common.FilterTagF,
 	logger *zap.Logger) *ExPost {
 
 	e := &ExPost{
@@ -80,11 +77,10 @@ func New(
 		mdag:         mdag,
 		roundTimeout: roundTimeout,
 		startTime:    startTime,
-		d:            diameter,
-		D:            D,
+		d:            gradeLevels,
+		D:            diameterBound,
 		lambda:       lambda,
 		gradeFunc:    gradeFunc,
-		filterFunc:   filterFunc,
 		messages:     make(map[int]map[string]receivedMessage),
 		neighbors:    make(map[string]bool),
 		sid:          sid,
@@ -100,24 +96,22 @@ func New(
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
 	net.RegisterHandler(protocolID, e.handleMessage)
 
-	logger.Info("ExPost instance created",
-		zap.String("session_id", sid),
-		zap.Int("d", diameter))
+	logger.Info("ExPost instance created", zap.String("session_id", sid), zap.Int("d", gradeLevels))
 
 	return e
 }
 
 // Generate implements the ExPost Generation phase
-func (e *ExPost) Generate() ([][][]byte, []byte, error) {
+func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error) {
 	// Step 1: Choose random string ri
 	ri, err := secureRandomBytes(e.lambda, charset)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate randomness: %w", err)
 	}
 
-	// Step 2: Run MDAG.Gen(sid, vk, ri) for R = d·D rounds
+	// Step 2: Run MDAG.Generate(sid, vk, ri) for R = d·D rounds
 	R := e.d * e.D
-	state, err := e.mdag.Generate(e.sid, e.vk, ri)
+	state, err := e.mdag.Generate(session, vk, ri)
 	if err != nil {
 		return nil, nil, fmt.Errorf("MDAG generation failed: %w", err)
 	}
@@ -128,7 +122,6 @@ func (e *ExPost) Generate() ([][][]byte, []byte, error) {
 	if labelR == nil {
 		return nil, nil, fmt.Errorf("computed label for round R is nil")
 	}
-	e.labelR = labelR
 	return state, labelR, nil
 }
 
@@ -136,17 +129,18 @@ func (e *ExPost) Generate() ([][][]byte, []byte, error) {
 func (e *ExPost) Verify(
 	session string,
 	vk []byte,
-	sigma [][][]byte,
+	fSigmaExp *common.FSigmaExp,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterF,
-) (map[common.Key]common.O, error) {
+	filterFn common.FilterTagF) (map[common.Key]common.O, error) { //nolint:funlen
 
 	if e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
 	}
 
 	R := e.d * e.D
+	sigma := fSigmaExp.Sigma
+	challenge := fSigmaExp.Challenge
 	if len(sigma) < R {
 		e.isRunning = false
 		e.logger.Warn("Sigma length is less than required rounds",
@@ -164,14 +158,14 @@ func (e *ExPost) Verify(
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, session)
 
 	// Step 2: Prover logic for round 0
-	if e.gradeFunc(session, vk, e.labelR, auxTag.AuxKey, auxLocal) >= (e.d+1) &&
-		filterFn(session, vk, e.labelR, auxTag.AuxKey) {
+	if e.gradeFunc(session, vk, challenge, auxTag.AuxKey, auxLocal) >= (e.d+1) &&
+		filterFn(session, vk, challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 		msg := &pb.TimestampMessage{
 			SessionId:       session,
 			VerificationKey: vk,
-			Value:           e.labelR,
+			Value:           challenge,
 			Aux: &pb.Aux{
 				PiRP: auxTag.PiRP,
 				AuxKey: &pb.AuxKeyMessage{
@@ -201,22 +195,23 @@ func (e *ExPost) Verify(
 		e.mu.Lock()
 		msgs := e.messages[r-1]
 		e.mu.Unlock()
+
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 				// Debug logging
-				e.logger.Debug("Processing valid message",
-					zap.Int("round", r),
+				e.logger.Debug("Processing valid message", zap.Int("round", r),
 					zap.Int("merklePath_length", len(msg.merklePath)),
 					zap.String("from_vk", string(msg.vk)))
 
-				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux, auxLocal))
+				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal))
 				key := common.Key{VK: string(msg.vk), Ch: string(msg.v)}
+
 				if v, exists := results[key]; !exists || g > v.Grade {
 					results[key] = common.O{
 						VK:        msg.vk,
 						Challenge: msg.v,
 						Aux: &common.AuxTag{
-							AuxKey: msg.aux,
+							AuxKey: msg.aux.AuxKey,
 						},
 						Grade: g,
 					}
@@ -236,14 +231,14 @@ func (e *ExPost) Verify(
 					Value:           msg.v,
 					Aux: &pb.Aux{
 						AuxKey: &pb.AuxKeyMessage{
-							PhiVrf: msg.aux.PhiVRF,
-							PiVrf:  msg.aux.PiVRF,
-							PhiVdf: msg.aux.PhiVDF,
-							PiVdf:  msg.aux.PiVDF,
+							PhiVrf: msg.aux.AuxKey.PhiVRF,
+							PiVrf:  msg.aux.AuxKey.PiVRF,
+							PhiVdf: msg.aux.AuxKey.PhiVDF,
+							PiVdf:  msg.aux.AuxKey.PiVDF,
 						},
 					},
 					MerklePath: make([]*pb.State, r+1),
-					Round:      uint32(r),
+					Round:      uint32(r), //nolint:gosec
 					From:       e.network.GetNodeID(),
 				}
 				for i := 0; i < r; i++ {
@@ -266,7 +261,7 @@ func (e *ExPost) Verify(
 	return results, nil
 }
 
-func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn common.FilterF, r int) bool {
+func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn common.FilterTagF, r int) bool {
 	if msg == nil {
 		e.logger.Debug("Received nil message")
 		return false
@@ -275,9 +270,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	// Check if we have enough layers in the merkle path
 	// We need layers from R-round+1 to R (inclusive)
 	if len(msg.merklePath) < r {
-		e.logger.Debug("Invalid Merkle path length",
-			zap.Int("expected", r),
-			zap.Int("actual", len(msg.merklePath)))
+		e.logger.Debug("Invalid Merkle path length", zap.Int("expected", r), zap.Int("actual", len(msg.merklePath)))
 		return false
 	}
 
@@ -286,7 +279,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !(e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux, auxLocal) > 0) {
+	if !(e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
 		e.logger.Debug("Message does not pass grade function")
 		return false
 	}
@@ -311,9 +304,7 @@ func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 	// The local label at round R-round should be in the first layer of merkle path
 	localLabel := e.mdag.GetComputedLabel(R - round)
 	if !isValueInState(localLabel, merklePath[0]) {
-		e.logger.Debug("Local label not found in merkle path",
-			zap.Int("round", round),
-			zap.Int("label_round", R-round))
+		e.logger.Debug("Local label not found in merkle path", zap.Int("round", round), zap.Int("label_round", R-round))
 		return false
 	}
 
@@ -323,9 +314,7 @@ func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 		// Hash the previous layer (i-1) and check if it's in current layer (i)
 		prevLayerHash := e.mdag.Oracle(merklePath[i-1]...)
 		if !isValueInState(prevLayerHash, merklePath[i]) {
-			e.logger.Debug("Invalid Merkle path at layer",
-				zap.Int("layer", i),
-				zap.Int("round", round))
+			e.logger.Debug("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
 			return false
 		}
 	}
@@ -352,21 +341,25 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		e.logger.Warn("Received message with mismatched session id",
 			zap.String("expected", e.sid),
 			zap.String("received", msg.SessionId))
+
 		return err
 	}
 
 	if msg.From != from {
 		err := fmt.Errorf("sender id mismatch")
+
 		e.logger.Warn("Received message with mismatched sender id",
 			zap.String("expected", from),
 			zap.String("received", msg.From))
+
 		return err
 	}
 
 	if !e.neighbors[from] {
 		err := fmt.Errorf("sender not in neighbors list")
-		e.logger.Warn("Received message from non-neighbor sender",
-			zap.String("sender", from))
+
+		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from))
+
 		return err
 	}
 
@@ -388,11 +381,14 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
 		v:   msg.Value,
-		aux: &common.AuxKey{
-			PhiVRF: msg.Aux.AuxKey.PhiVrf,
-			PiVRF:  msg.Aux.AuxKey.PiVrf,
-			PhiVDF: msg.Aux.AuxKey.PhiVdf,
-			PiVDF:  msg.Aux.AuxKey.PiVdf,
+		aux: &common.AuxTag{
+			PiRP: msg.Aux.PiRP,
+			AuxKey: &common.AuxKey{
+				PhiVRF: msg.Aux.AuxKey.PhiVrf,
+				PiVRF:  msg.Aux.AuxKey.PiVrf,
+				PhiVDF: msg.Aux.AuxKey.PhiVdf,
+				PiVDF:  msg.Aux.AuxKey.PiVdf,
+			},
 		},
 		merklePath: convertTimestampToBytes(&msg),
 	}

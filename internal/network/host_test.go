@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
@@ -784,12 +784,12 @@ func (suite *HostTestSuite) TestNewWithMDNS() {
 	ctx := context.Background()
 	logger := zap.NewNop()
 
-	cfg := Config{
+	cfg := config.Network{
 		ListenPort:        8080,
 		MaxOutboundDegree: 10,
 		HeartbeatInterval: 30 * time.Second,
 		ConnectTimeout:    5 * time.Second,
-		DiscoveryConfig: discovery.Config{
+		DiscoveryConfig: config.Discovery{
 			DiscoveryType: "mdns",
 			ProtocolID:    "committee-sampling",
 			Interval:      10 * time.Second,

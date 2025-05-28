@@ -9,7 +9,7 @@ import (
 
 type VDFSuite struct {
 	suite.Suite
-	v VDF
+	v *Vdf
 }
 
 func (s *VDFSuite) SetupTest() {

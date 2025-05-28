@@ -1,4 +1,4 @@
-package resource_bound
+package resourcebound
 
 import (
 	"testing"
@@ -34,7 +34,11 @@ func (m *MockExPost) Generate(session string, vk []byte) ([][][]byte, []byte, er
 	args := m.Called(session, vk)
 	return args.Get(0).([][][]byte), args.Get(1).([]byte), args.Error(2)
 }
-func (m *MockExPost) Verify(session string, vk []byte, fSigmaExp *common.FSigmaExp, auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+func (m *MockExPost) Verify(
+	session string, vk []byte,
+	fSigmaExp *common.FSigmaExp,
+	auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+
 	args := m.Called(session, vk, fSigmaExp, auxTag, auxLocal, mock.Anything)
 	return args.Get(0).(map[common.Key]common.O), args.Error(1)
 }
@@ -45,7 +49,9 @@ func (m *MockExAnte) Generate(session string, vk []byte, challenge []byte, rpPro
 	args := m.Called(session, vk, challenge, rpProof)
 	return args.Get(0).([][][]byte), args.Error(1)
 }
-func (m *MockExAnte) Verify(session string, vk []byte, sigma [][][]byte, auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+func (m *MockExAnte) Verify(session string, vk []byte, sigma [][][]byte, auxTag *common.AuxTag,
+	auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+
 	args := m.Called(session, vk, sigma, auxTag, auxLocal, mock.Anything)
 	return args.Get(0).(map[common.Key]common.O), args.Error(1)
 }
@@ -85,7 +91,7 @@ func (s *RbExpSuite) TestGen_Success() {
 	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return(piRP, nil).Once()
 	s.exa.On("Generate", sid, vk, challenge, piRP).Return(sigmaExa, nil).Once()
 
-	ch, proof, err := s.rbexp.Gen(sid, vk)
+	ch, proof, err := s.rbexp.Generate(sid, vk)
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), challenge, ch)
 	assert.Equal(s.T(), piRP, proof.PiRP)
@@ -102,7 +108,7 @@ func (s *RbExpSuite) TestGen_ErrorSetup() {
 	vk := []byte("fail_setup")
 	s.rp.On("Setup", vk).Return([]byte{}, assert.AnError).Once()
 
-	_, _, err := s.rbexp.Gen(sid, vk)
+	_, _, err := s.rbexp.Generate(sid, vk)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -117,7 +123,7 @@ func (s *RbExpSuite) TestGen_ErrorExpGenerate() {
 	s.rp.On("Setup", vk).Return(auxRP, nil).Once()
 	s.exp.On("Generate", sid, vk).Return([][][]byte{}, []byte{}, assert.AnError).Once()
 
-	_, _, err := s.rbexp.Gen(sid, vk)
+	_, _, err := s.rbexp.Generate(sid, vk)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -135,7 +141,7 @@ func (s *RbExpSuite) TestGen_ErrorRPProve() {
 	s.exp.On("Generate", sid, vk).Return(sigmaExp, challenge, nil).Once()
 	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return([]byte{}, assert.AnError).Once()
 
-	_, _, err := s.rbexp.Gen(sid, vk)
+	_, _, err := s.rbexp.Generate(sid, vk)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -155,7 +161,7 @@ func (s *RbExpSuite) TestGen_ErrorExaGenerate() {
 	s.rp.On("Prove", vk, s.weight, challenge, auxRP).Return(piRP, nil).Once()
 	s.exa.On("Generate", sid, vk, challenge, piRP).Return([][][]byte{}, assert.AnError).Once()
 
-	_, _, err := s.rbexp.Gen(sid, vk)
+	_, _, err := s.rbexp.Generate(sid, vk)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -193,7 +199,7 @@ func (s *RbExpSuite) TestVer_Success() {
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(outputP, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(outputA, nil).Once()
 
-	outputs, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	outputs, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.NoError(s.T(), err)
 	require.Len(s.T(), outputs, 1)
 	out := outputs[0]
@@ -226,7 +232,7 @@ func (s *RbExpSuite) TestVer_NoMatchingOutput() {
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 
-	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -251,7 +257,7 @@ func (s *RbExpSuite) TestVer_ErrorExPost() {
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
 
-	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -277,7 +283,7 @@ func (s *RbExpSuite) TestVer_ErrorExAnte() {
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
 
-	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -306,7 +312,7 @@ func (s *RbExpSuite) TestVer_FilterFalse() {
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 
-	_, err := s.rbexp.Ver(sid, vk, challenge, proof, auxKey, 0)
+	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())

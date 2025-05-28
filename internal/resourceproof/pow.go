@@ -1,4 +1,4 @@
-package resource_proof
+package resourceproof
 
 import (
 	"crypto/sha256"
@@ -21,6 +21,7 @@ func (p *pow) Prove(challenge []byte, difficulty int) ([]byte, error) {
 	var proof []byte
 
 	for {
+		// nolint:gocritic
 		data := append(challenge, uint64ToBytes(nonce)...)
 		hash := sha256.Sum256(data)
 
@@ -40,6 +41,7 @@ func (p *pow) Prove(challenge []byte, difficulty int) ([]byte, error) {
 
 // Verify checks if the given proof is valid for the given challenge and difficulty.
 func (p *pow) Verify(challenge []byte, difficulty int, proof []byte) bool {
+	// nolint:gocritic
 	data := append(challenge, proof...)
 	hash := sha256.Sum256(data)
 

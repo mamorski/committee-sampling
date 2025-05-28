@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -16,14 +15,4 @@ type PeerDiscovery interface {
 
 	// DiscoveredPeers returns a channel that receives newly discovered peers
 	DiscoveredPeers() <-chan peer.AddrInfo
-}
-
-type Config struct {
-	DiscoveryType string // "dht" or "mdns"
-	ProtocolID    string
-	Interval      time.Duration
-	// DHT specific config
-	BootstrapPeers []string
-	// mDNS specific config
-	ServiceTag string
 }

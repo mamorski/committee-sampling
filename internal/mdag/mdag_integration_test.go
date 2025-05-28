@@ -35,7 +35,7 @@ func NewChaosNetwork(nodeID string, neighbors []string) *ChaosNetwork {
 		allowedPeers:    make(map[string]bool),
 		delayRange:      0,
 		chaosEnabled:    false,
-		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		rand:            rand.New(rand.NewSource(time.Now().UnixNano())), //nolint:gosec
 	}
 }
 
@@ -132,7 +132,7 @@ func (n *ChaosNetwork) SendProtocolMessage(protocolID string, data []byte) {
 			p.mu.RUnlock()
 
 			if exists {
-				handler(n.nodeID, data)
+				_ = handler(n.nodeID, data)
 			}
 		}(peer, delay)
 	}
@@ -179,7 +179,7 @@ func (n *InMemoryNetwork) SendProtocolMessage(protocolID string, data []byte) {
 			p.mu.RUnlock()
 
 			if exists {
-				handler(n.nodeID, data)
+				_ = handler(n.nodeID, data)
 			}
 		}(peer)
 	}
@@ -321,7 +321,7 @@ func (suite *IntegrationTestSuite) createMDAGInstances(topology *NetworkTopology
 
 	topology.mdags = make([]*MDAG, len(topology.nodes))
 	for i, node := range topology.nodes {
-		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime)
+		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime, "")
 	}
 }
 
@@ -332,7 +332,7 @@ func (suite *IntegrationTestSuite) createChaosMDAGInstances(topology *ChaosTopol
 
 	topology.mdags = make([]*MDAG, len(topology.nodes))
 	for i, node := range topology.nodes {
-		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime)
+		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime, "")
 	}
 }
 
@@ -366,7 +366,10 @@ func (suite *IntegrationTestSuite) runProtocolOnAllNodes(topology *NetworkTopolo
 }
 
 // runChaosProtocol executes the MDAG protocol on chaos topology
-func (suite *IntegrationTestSuite) runChaosProtocol(topology *ChaosTopology, sessionID string, vki []byte, timeout time.Duration) ([][][][]byte, []error) {
+//
+//nolint:unparam
+func (suite *IntegrationTestSuite) runChaosProtocol(
+	topology *ChaosTopology, sessionID string, vki []byte, timeout time.Duration) ([][][][]byte, []error) {
 	nodeCount := len(topology.mdags)
 	done := make(chan int, nodeCount)
 	states := make([][][][]byte, nodeCount)
@@ -907,15 +910,6 @@ func (v *MerklePathVerifier) GetComputedLabelsFromMDAG(mdag *MDAG, rounds int) [
 		labels[i] = mdag.GetComputedLabel(i)
 	}
 	return labels
-}
-
-func (v *MerklePathVerifier) isValueInState(value []byte, state [][]byte) bool {
-	for _, stateValue := range state {
-		if bytes.Equal(value, stateValue) {
-			return true
-		}
-	}
-	return false
 }
 
 // createConnectedNetwork creates a connected but not fully-connected 5-node network

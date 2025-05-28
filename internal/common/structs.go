@@ -30,7 +30,7 @@ func (a *AuxKey) ToProto() *pb.AuxData {
 	}
 }
 
-// RBExpOutput represents one output element returned by RBExp.Ver.
+// RBExpOutput represents one output element returned by RBExp.Verify.
 // Each output corresponds to a candidate (or committee member) along with an associated grade.
 type RBExpOutput struct {
 	SID       string
