@@ -1,10 +1,35 @@
 package main
 
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/mamorski/committee-sampling/pkg/config"
+)
+
 func main() {
-	// This is a placeholder for the main function.
-	// The actual implementation will be added later.
-	// It will likely involve initializing the committee sampling process
-	// and handling any necessary configurations or parameters.
-	// For now, we can print a message indicating that the program has started.
-	println("Committee sampling program started.")
+	cfg, err := config.Load("configs/dev.json")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	printConfig(cfg)
+}
+
+func printConfig(cfg *config.Config) {
+	fmt.Println("=== Committee Sampling Configuration ===")
+
+	configJSON, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling config to JSON: %v", err)
+		return
+	}
+
+	startTime := time.Unix(cfg.RunTime.StartTime, 0).UTC()
+
+	fmt.Println("Start time:", startTime)
+
+	fmt.Println(string(configJSON))
 }

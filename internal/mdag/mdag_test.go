@@ -78,7 +78,7 @@ func (suite *MDAGTestSuite) setupMDAG() {
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
 	startTime := time.Now().Add(100 * time.Millisecond)
-	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime)
+	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime, "")
 	suite.Require().NotNil(suite.mdag)
 }
 
@@ -88,7 +88,7 @@ func (suite *MDAGTestSuite) TestNew() {
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
 	startTime := time.Now().Add(100 * time.Millisecond)
-	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime)
+	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime, "")
 
 	suite.NotNil(mdagInstance)
 }
@@ -230,7 +230,7 @@ func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
 	// Start the protocol
 	done := make(chan bool)
 	go func() {
-		suite.mdag.Generate("test-session", []byte("vki"), []byte("vi"))
+		_, _ = suite.mdag.Generate("test-session", []byte("vki"), []byte("vi"))
 		done <- true
 	}()
 

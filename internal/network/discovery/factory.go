@@ -10,6 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -29,7 +30,7 @@ type Host interface {
 	EventBus() event.Bus
 }
 
-func NewDiscovery(host Host, config Config) (PeerDiscovery, error) {
+func NewDiscovery(host Host, config config.Discovery) (PeerDiscovery, error) {
 	switch config.DiscoveryType {
 	case "dht":
 		return NewDHTDiscovery(host, config), nil

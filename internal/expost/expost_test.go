@@ -105,7 +105,6 @@ func (suite *ExPostTestSuite) SetupTest() {
 		D:            5,
 		lambda:       32,
 		gradeFunc:    mockGradeFunc,
-		filterFunc:   mockFilterTagFunc,
 		isRunning:    true,
 		sid:          suite.sid,
 		vk:           suite.vk,
@@ -125,7 +124,6 @@ func (suite *ExPostTestSuite) TestNew() {
 	testD := 6
 	testLambda := 64
 	testGradeFunc := mockGradeFunc
-	testFilterFunc := mockFilterTagFunc
 	testLogger := zap.NewNop()
 
 	// Setup mock expectations
@@ -137,20 +135,8 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
 	// Call the New function
-	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		testStartTime,
-		testRoundTimeout,
-		testDiameter,
-		testD,
-		testLambda,
-		testGradeFunc,
-		testFilterFunc,
-		testLogger,
-	)
+	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout,
+		testDiameter, testD, testLambda, testGradeFunc, testLogger)
 
 	// Verify the instance is created correctly
 	suite.NotNil(expost)
@@ -169,7 +155,6 @@ func (suite *ExPostTestSuite) TestNew() {
 
 	// Verify function pointers are set
 	suite.NotNil(expost.gradeFunc)
-	suite.NotNil(expost.filterFunc)
 
 	// Verify logger is named correctly
 	suite.NotNil(expost.logger)
@@ -187,7 +172,6 @@ func (suite *ExPostTestSuite) TestNew() {
 
 	// Verify initial state
 	suite.Nil(expost.state)
-	suite.Nil(expost.labelR)
 
 	// Verify mock expectations
 	mockNet.AssertExpectations(suite.T())
@@ -205,24 +189,11 @@ func (suite *ExPostTestSuite) TestNewWithEmptyNeighbors() {
 	mockMDAG := new(MockMDAG)
 
 	// Test with empty neighbors list
-	emptyNeighbors := []string{}
+	var emptyNeighbors []string
 	mockNet.On("GetNeighbors").Return(emptyNeighbors).Once()
 	mockNet.On("RegisterHandler", "/expost/1.0.0/empty-neighbors-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
-	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		testStartTime,
-		testRoundTimeout,
-		2,  // diameter
-		3,  // D
-		16, // lambda
-		mockGradeFunc,
-		mockFilterTagFunc,
-		testLogger,
-	)
+	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 2, 3, 16, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Len(expost.neighbors, 0)
@@ -246,20 +217,7 @@ func (suite *ExPostTestSuite) TestNewWithSingleNeighbor() {
 	mockNet.On("GetNeighbors").Return(singleNeighbor).Once()
 	mockNet.On("RegisterHandler", "/expost/1.0.0/single-neighbor-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
-	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		testStartTime,
-		testRoundTimeout,
-		1, // diameter
-		2, // D
-		8, // lambda
-		mockGradeFunc,
-		mockFilterTagFunc,
-		testLogger,
-	)
+	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 1, 2, 8, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Len(expost.neighbors, 1)
@@ -271,7 +229,7 @@ func (suite *ExPostTestSuite) TestNewWithSingleNeighbor() {
 
 func (suite *ExPostTestSuite) TestNewWithZeroValues() {
 	testSid := ""
-	testVk := []byte{}
+	var testVk []byte
 	testStartTime := time.Time{}
 	testRoundTimeout := 0 * time.Millisecond
 	testLogger := zap.NewNop()
@@ -283,20 +241,7 @@ func (suite *ExPostTestSuite) TestNewWithZeroValues() {
 	mockNet.On("GetNeighbors").Return(neighbors).Once()
 	mockNet.On("RegisterHandler", "/expost/1.0.0/", mock.AnythingOfType("network.MessageHandler")).Once()
 
-	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		testStartTime,
-		testRoundTimeout,
-		0, // diameter
-		0, // D
-		0, // lambda
-		mockGradeFunc,
-		mockFilterTagFunc,
-		testLogger,
-	)
+	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 0, 0, 0, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Equal("", expost.sid)
@@ -328,20 +273,7 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	expectedProtocolID := "/expost/1.0.0/special/chars@session#123"
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
 
-	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		testStartTime,
-		testRoundTimeout,
-		3,  // diameter
-		5,  // D
-		32, // lambda
-		mockGradeFunc,
-		mockFilterTagFunc,
-		testLogger,
-	)
+	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 3, 5, 32, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Equal(testSid, expost.sid)
@@ -358,15 +290,14 @@ func (suite *ExPostTestSuite) TestGenerateHappyFlow() {
 	expectedLabel := []byte("label-R")
 
 	suite.mockMDAG.On("Generate", suite.sid, suite.vk, mock.Anything).Return(expectedState, nil).Once()
-	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return(expectedLabel).Once() // d*D = 3*5 = 15
+	suite.mockMDAG.On("GetComputedLabel", 15).Return(expectedLabel).Once() // d*D = 3*5 = 15
 
-	state, label, err := suite.expost.Generate()
+	state, label, err := suite.expost.Generate(suite.sid, suite.vk)
 
 	suite.NoError(err)
 	suite.Equal(expectedState, state)
 	suite.Equal(expectedLabel, label)
 	suite.Equal(expectedState, suite.expost.state)
-	suite.Equal(expectedLabel, suite.expost.labelR)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 }
@@ -374,7 +305,7 @@ func (suite *ExPostTestSuite) TestGenerateHappyFlow() {
 func (suite *ExPostTestSuite) TestGenerateMDAGError() {
 	suite.mockMDAG.On("Generate", suite.sid, suite.vk, mock.Anything).Return(nil, assert.AnError).Once()
 
-	state, label, err := suite.expost.Generate()
+	state, label, err := suite.expost.Generate(suite.sid, suite.vk)
 
 	suite.Error(err)
 	suite.Nil(state)
@@ -396,20 +327,17 @@ func (suite *ExPostTestSuite) TestVerifyHappyFlow() {
 		},
 	}
 
-	suite.expost.labelR = []byte("test-value")
 	suite.expost.state = sigma
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
-	suite.mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Once()
+	// Create FSigmaExp with proper sigma and challenge
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     sigma,
+	}
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
+
+	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.NoError(err)
 	suite.NotNil(results)
@@ -418,17 +346,15 @@ func (suite *ExPostTestSuite) TestVerifyHappyFlow() {
 }
 
 func (suite *ExPostTestSuite) TestVerifySessionMismatch() {
-	sigma := createTestSigma(20)
 	auxTag := &common.AuxTag{AuxKey: &common.AuxKey{}}
 
-	results, err := suite.expost.Verify(
-		"wrong-session",
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	// Create FSigmaExp even though it won't be used due to session mismatch
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     createTestSigma(20),
+	}
+
+	results, err := suite.expost.Verify("wrong-session", suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.Error(err)
 	suite.Nil(results)
@@ -436,17 +362,15 @@ func (suite *ExPostTestSuite) TestVerifySessionMismatch() {
 }
 
 func (suite *ExPostTestSuite) TestVerifyInsufficientSigmaLength() {
-	sigma := createTestSigma(10) // Less than d*D = 15
 	auxTag := &common.AuxTag{AuxKey: &common.AuxKey{}}
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	// Create FSigmaExp with insufficient sigma length
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     createTestSigma(10), // Less than d*D = 15
+	}
+
+	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.Error(err)
 	suite.Nil(results)
@@ -628,7 +552,9 @@ func (suite *ExPostTestSuite) TestIsMessageValidHappyFlow() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{
+			AuxKey: &common.AuxKey{},
+		},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 		},
@@ -644,14 +570,14 @@ func (suite *ExPostTestSuite) TestIsMessageValidHappyFlow() {
 	// Mock GetComputedLabel call for validateMerklePath
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Once()
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.True(isValid)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidNilMessage() {
-	isValid := suite.expost.isMessageValid(nil, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(nil, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid)
 }
 
@@ -660,10 +586,10 @@ func (suite *ExPostTestSuite) TestIsMessageValidGradeFunctionFails() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 	}
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid) // mockGradeFunc returns 0 for this case
 }
 
@@ -728,22 +654,18 @@ func mockGradeFunc(_ string, vk []byte, v []byte, _ *common.AuxKey, _ float64) i
 	return 0
 }
 
-func mockFilterFunc(_ string, _ []byte, _ []byte, _ *common.AuxKey) bool {
-	return true
-}
-
-func mockFilterFuncFalse(_ string, _ []byte, _ []byte, _ *common.AuxKey) bool {
-	return false
-}
-
 func mockFilterTagFunc(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true
+}
+
+func mockFilterTagFuncFalse(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+	return false
 }
 
 func (suite *ExPostTestSuite) TestGenerateWithEmptyCharset() {
 	// This should panic due to empty charset
 	suite.Panics(func() {
-		secureRandomBytes(10, "")
+		_, _ = secureRandomBytes(10, "")
 	})
 }
 
@@ -758,23 +680,19 @@ func (suite *ExPostTestSuite) TestVerifyWithExactSigmaLength() {
 	suite.expost.d = 2
 	suite.expost.D = 3
 
-	sigma := createTestSigma(5) // d*D = 2*3 = 6, so 5 < 6 should fail
 	auxTag := &common.AuxTag{AuxKey: &common.AuxKey{}}
+	suite.expost.state = createTestSigma(5)
 
-	suite.expost.labelR = []byte("test-label")
-	suite.expost.state = sigma
+	// Create FSigmaExp with insufficient sigma length
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     createTestSigma(5), // d*D = 2*3 = 6, so 5 < 6 should fail
+	}
 
 	// Mock GetNodeID for the verification phase
 	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.Error(err)
 	suite.Nil(results)
@@ -792,23 +710,19 @@ func (suite *ExPostTestSuite) TestVerifyWithHighGradeProver() {
 			PiVDF:  []byte("pi-vdf"),
 		},
 	}
-
-	suite.expost.labelR = []byte("high-grade-label")
 	suite.expost.state = sigma
 	suite.expost.gradeFunc = edgeCaseGradeFunc
-	suite.expost.filterFunc = edgeCaseFilterTagFunc
+
+	// Create FSigmaExp
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     sigma,
+	}
 
 	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		[]byte("high-grade-vk"),
-		sigma,
-		auxTag,
-		0.5,
-		highGradeFilterFunc,
-	)
+	results, err := suite.expost.Verify(suite.sid, []byte("high-grade-vk"), fSigmaExp, auxTag, 0.5, highGradeFilterTagFunc)
 
 	suite.NoError(err)
 	suite.NotNil(results)
@@ -821,21 +735,18 @@ func (suite *ExPostTestSuite) TestVerifyWithLowGradeProver() {
 		AuxKey: &common.AuxKey{},
 	}
 
-	suite.expost.labelR = []byte("low-grade-label")
 	suite.expost.state = sigma
 	suite.expost.gradeFunc = edgeCaseGradeFunc
-	suite.expost.filterFunc = edgeCaseFilterTagFunc
+
+	// Create FSigmaExp
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     sigma,
+	}
 
 	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		[]byte("low-grade-vk"),
-		sigma,
-		auxTag,
-		0.5,
-		lowGradeFilterFunc,
-	)
+	results, err := suite.expost.Verify(suite.sid, []byte("low-grade-vk"), fSigmaExp, auxTag, 0.5, lowGradeFilterTagFunc)
 
 	suite.NoError(err)
 	suite.NotNil(results)
@@ -859,7 +770,7 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAux() {
 
 	// This should panic due to nil aux
 	suite.Panics(func() {
-		suite.expost.handleMessage("node1", msgBytes)
+		_ = suite.expost.handleMessage("node1", msgBytes)
 	})
 }
 
@@ -883,7 +794,7 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 
 	// This should panic due to nil aux key
 	suite.Panics(func() {
-		suite.expost.handleMessage("node1", msgBytes)
+		_ = suite.expost.handleMessage("node1", msgBytes)
 	})
 }
 
@@ -893,12 +804,12 @@ func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyPath() {
 		sid:        suite.sid,
 		vk:         []byte("test-vk"),
 		v:          []byte("test-value"),
-		aux:        &common.AuxKey{},
+		aux:        &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{}, // Empty path
 	}
 
 	// Should fail at length check before validateMerklePath is called
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid)
 }
 
@@ -970,7 +881,7 @@ func (suite *ExPostTestSuite) TestMessageValidationWithSimpleMerklePath() {
 		sid:        suite.sid,
 		vk:         suite.vk,
 		v:          []byte("test-value"),
-		aux:        &common.AuxKey{},
+		aux:        &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{},
 	}
 
@@ -980,7 +891,7 @@ func (suite *ExPostTestSuite) TestMessageValidationWithSimpleMerklePath() {
 	suite.expost.gradeFunc = edgeCaseGradeFunc
 
 	// This should fail because the edgeCaseGradeFunc returns 0 for these values
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 0)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 0)
 	suite.False(isValid)
 }
 
@@ -1041,15 +952,11 @@ func edgeCaseGradeFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey, _ float6
 	return 0
 }
 
-func edgeCaseFilterTagFunc(_ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
-	return string(vk) != "filtered-vk"
-}
-
-func highGradeFilterFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey) bool {
+func highGradeFilterTagFunc(_ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
 	return string(vk) == "high-grade-vk"
 }
 
-func lowGradeFilterFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey) bool {
+func lowGradeFilterTagFunc(_ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
 	return string(vk) == "low-grade-vk"
 }
 
@@ -1062,7 +969,7 @@ func (suite *ExPostTestSuite) TestGenerateNilLabel() {
 	suite.mockMDAG.On("Generate", suite.sid, suite.vk, mock.Anything).Return(expectedState, nil).Once()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte(nil)).Once() // Return nil label
 
-	state, label, err := suite.expost.Generate()
+	state, label, err := suite.expost.Generate(suite.sid, suite.vk)
 
 	suite.Error(err)
 	suite.Nil(state)
@@ -1084,7 +991,6 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 		},
 	}
 
-	suite.expost.labelR = []byte("test-value")
 	suite.expost.state = sigma
 	suite.expost.startTime = time.Now().Add(-time.Hour) // Past time to avoid waiting
 
@@ -1093,11 +999,13 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{
-			PhiVRF: []byte("phi-vrf"),
-			PiVRF:  []byte("pi-vrf"),
-			PhiVDF: []byte("phi-vdf"),
-			PiVDF:  []byte("pi-vdf"),
+		aux: &common.AuxTag{
+			AuxKey: &common.AuxKey{
+				PhiVRF: []byte("phi-vrf"),
+				PiVRF:  []byte("pi-vrf"),
+				PhiVDF: []byte("phi-vdf"),
+				PiVDF:  []byte("pi-vdf"),
+			},
 		},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
@@ -1117,17 +1025,16 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Once()
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(3)
-	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Times(2)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
+	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	// Create FSigmaExp
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     sigma,
+	}
+
+	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.NoError(err)
 	suite.NotNil(results)
@@ -1152,7 +1059,6 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 		AuxKey: &common.AuxKey{},
 	}
 
-	suite.expost.labelR = []byte("test-value")
 	suite.expost.state = sigma
 	suite.expost.startTime = time.Now().Add(-time.Hour)
 
@@ -1161,7 +1067,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 			{[]byte("layer1")},
@@ -1173,7 +1079,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),    // Same VK
 		v:   []byte("test-value"), // Same value
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 			{[]byte("layer1")},
@@ -1191,17 +1097,16 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	// Mock expectations
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("test-value")).Twice()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Twice()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(3)
-	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Times(2)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
+	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
-	results, err := suite.expost.Verify(
-		suite.sid,
-		suite.vk,
-		sigma,
-		auxTag,
-		0.5,
-		mockFilterFunc,
-	)
+	// Create FSigmaExp
+	fSigmaExp := &common.FSigmaExp{
+		Challenge: []byte("test-challenge"),
+		Sigma:     sigma,
+	}
+
+	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
 	suite.NoError(err)
 	suite.NotNil(results)
@@ -1216,13 +1121,13 @@ func (suite *ExPostTestSuite) TestIsMessageValidWithNilValue() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   nil,
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 		},
 	}
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid)
 }
 
@@ -1231,13 +1136,13 @@ func (suite *ExPostTestSuite) TestIsMessageValidFilterFnFails() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 		},
 	}
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFuncFalse, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFuncFalse, 1)
 	suite.False(isValid)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
@@ -1248,7 +1153,7 @@ func (suite *ExPostTestSuite) TestIsMessageValidValueNotInMerklePath() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 		},
@@ -1256,7 +1161,7 @@ func (suite *ExPostTestSuite) TestIsMessageValidValueNotInMerklePath() {
 
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("another-value")).Once()
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
@@ -1267,7 +1172,7 @@ func (suite *ExPostTestSuite) TestIsMessageValidWithInvalidMerklePath() {
 		sid: suite.sid,
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
-		aux: &common.AuxKey{},
+		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
 		merklePath: [][][]byte{
 			{[]byte("test-value")},
 		},
@@ -1278,7 +1183,7 @@ func (suite *ExPostTestSuite) TestIsMessageValidWithInvalidMerklePath() {
 	// Mock GetComputedLabel to return different value so validateMerklePath fails
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("different-label")).Once()
 
-	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterFunc, 1)
+	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid) // Should be false because validateMerklePath returns false
 
 	suite.mockMDAG.AssertExpectations(suite.T())

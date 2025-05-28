@@ -125,19 +125,16 @@ func testOracle(data []byte) []byte {
 	return hash[:]
 }
 
-func testGradeFunction(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float64) int {
 	hash := sha256.Sum256(append(vk, ch...))
 	return int(hash[0]) % 10
 }
 
-func testFilterFunction(sid string, vk []byte, ch []byte, aux *common.AuxKey) bool {
+func testFilterTagFunction(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true
 }
 
-func testFilterTagFunction(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-	return true
-}
-
+//nolint:funlen,gocyclo
 func TestExPostIntegrationFiveNodes(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -174,7 +171,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create ExPost instances
@@ -185,20 +182,8 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			32,
-			testGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout, expostD,
+			expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -212,7 +197,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		go func(idx int) {
 			defer genWg.Done()
-			states[idx], labels[idx], errors[idx] = exposts[idx].Generate()
+			states[idx], labels[idx], errors[idx] = exposts[idx].Generate(sessionID, exposts[idx].vk)
 		}(i)
 	}
 
@@ -259,14 +244,13 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 					PiVDF:  []byte(fmt.Sprintf("pi-vdf-%d", idx)),
 				},
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(
-				sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)),
-				states[idx],
-				auxTag,
-				0.5,
-				testFilterFunction,
-			)
+			// Create FSigmaExp for verification
+			fSigmaExp := &common.FSigmaExp{
+				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
+				Sigma:     states[idx],
+			}
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
 		}(i)
 	}
 
@@ -295,10 +279,11 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }
 
+//nolint:funlen,gocyclo
 func TestExPostIntegrationProverBehavior(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -335,7 +320,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create grade function that makes node0 a prover
@@ -355,20 +340,8 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			32,
-			proverGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout, expostD,
+			expostBigD, 32, proverGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -382,7 +355,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		go func(idx int) {
 			defer genWg.Done()
-			states[idx], labels[idx], errors[idx] = exposts[idx].Generate()
+			states[idx], labels[idx], errors[idx] = exposts[idx].Generate(sessionID, exposts[idx].vk)
 		}(i)
 	}
 
@@ -424,14 +397,13 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 					PiVDF:  []byte(fmt.Sprintf("pi-vdf-%d", idx)),
 				},
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(
-				sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)),
-				states[idx],
-				auxTag,
-				0.5,
-				testFilterFunction,
-			)
+			// Create FSigmaExp for verification
+			fSigmaExp := &common.FSigmaExp{
+				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
+				Sigma:     states[idx],
+			}
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
 		}(i)
 	}
 
@@ -458,7 +430,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }
 
@@ -501,7 +473,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create ExPost instances
@@ -512,20 +484,8 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			32,
-			testGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
+			expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -539,7 +499,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		go func(idx int) {
 			defer genWg.Done()
-			states[idx], labels[idx], errors[idx] = exposts[idx].Generate()
+			states[idx], labels[idx], errors[idx] = exposts[idx].Generate(sessionID, exposts[idx].vk)
 		}(i)
 	}
 
@@ -581,14 +541,13 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 					PiVDF:  []byte(fmt.Sprintf("pi-vdf-%d", idx)),
 				},
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(
-				sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)),
-				states[idx],
-				auxTag,
-				0.5,
-				testFilterFunction,
-			)
+			// Create FSigmaExp for verification
+			fSigmaExp := &common.FSigmaExp{
+				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
+				Sigma:     states[idx],
+			}
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
 		}(i)
 	}
 
@@ -617,7 +576,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }
 
@@ -657,7 +616,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create ExPost instances with different parameters
@@ -668,20 +627,8 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			16,
-			testGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
+			expostD, expostBigD, 16, testGradeFunction, logger)
 	}
 
 	// Run generation and verification concurrently
@@ -696,7 +643,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 			defer wg.Done()
 
 			// Generate
-			state, label, genErr := exposts[idx].Generate()
+			state, label, genErr := exposts[idx].Generate(sessionID, exposts[idx].vk)
 			if genErr != nil {
 				errors[idx] = genErr
 				return
@@ -713,14 +660,12 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 				},
 			}
 
-			result, verifyErr := exposts[idx].Verify(
-				sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)),
-				state,
-				auxTag,
-				0.5,
-				testFilterFunction,
-			)
+			// Create FSigmaExp for verification
+			fSigmaExp := &common.FSigmaExp{
+				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
+				Sigma:     state,
+			}
+			result, verifyErr := exposts[idx].Verify(sessionID, []byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
 
 			if verifyErr != nil {
 				errors[idx] = verifyErr
@@ -762,7 +707,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }
 
@@ -802,7 +747,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create ExPost instances where R = d * D > mdagRounds
@@ -814,20 +759,8 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			32,
-			testGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
+			expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should fail because R = 15 > mdagRounds = 3
@@ -841,7 +774,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		go func(idx int) {
 			defer genWg.Done()
-			states[idx], labels[idx], genErrors[idx] = exposts[idx].Generate()
+			states[idx], labels[idx], genErrors[idx] = exposts[idx].Generate(sessionID, exposts[idx].vk)
 		}(i)
 	}
 
@@ -867,10 +800,11 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }
 
+//nolint:funlen,gocyclo
 func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -907,7 +841,7 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	mdagStartTime := time.Now().Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
 	}
 
 	// Create ExPost instances with parameters that will work for generation
@@ -919,20 +853,8 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(
-			nodes[i],
-			mdags[i],
-			sessionID,
-			vk,
-			expostStartTime,
-			expostRoundTimeout,
-			expostD,
-			expostBigD,
-			32,
-			testGradeFunction,
-			testFilterTagFunction,
-			logger,
-		)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
+			expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should succeed
@@ -946,7 +868,7 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		go func(idx int) {
 			defer genWg.Done()
-			states[idx], labels[idx], genErrors[idx] = exposts[idx].Generate()
+			states[idx], labels[idx], genErrors[idx] = exposts[idx].Generate(sessionID, exposts[idx].vk)
 		}(i)
 	}
 
@@ -993,14 +915,13 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 					PiVDF:  []byte(fmt.Sprintf("pi-vdf-%d", idx)),
 				},
 			}
-			_, verifyErrors[idx] = exposts[idx].Verify(
-				sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)),
-				insufficientSigma, // Use insufficient sigma instead of generated state
-				auxTag,
-				0.5,
-				testFilterFunction,
-			)
+			// Create FSigmaExp for verification
+			fSigmaExp := &common.FSigmaExp{
+				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
+				Sigma:     insufficientSigma,
+			}
+			_, verifyErrors[idx] = exposts[idx].Verify(sessionID, []byte(fmt.Sprintf("node%d-vk", idx)),
+				fSigmaExp, auxTag, 0.5, testFilterTagFunction)
 		}(i)
 	}
 
@@ -1024,6 +945,6 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 
 	// Cleanup
 	for i := 0; i < nodeCount; i++ {
-		nodes[i].Close()
+		_ = nodes[i].Close()
 	}
 }

@@ -18,8 +18,13 @@ type VDF interface {
 }
 
 type RBExp interface {
-	Gen(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
-	Ver(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.RBExpOutput, error)
+	Generate(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
+	Verify(sid string,
+		vk,
+		ch []byte,
+		proof *common.RBExpProof,
+		auxKey *common.AuxKey,
+		auxLocal float64) ([]*common.RBExpOutput, error)
 }
 
 // LocalState holds the party’s local state after the initialization phase.
@@ -40,8 +45,8 @@ type CommitteeOutput struct {
 	Grade        int
 }
 
-// hashData concatenates all input byte slices and returns their SHA-256 hash.
-func hashData(data ...[]byte) []byte {
+// HashData concatenates all input byte slices and returns their SHA-256 hash.
+func HashData(data ...[]byte) []byte {
 	h := sha256.New()
 	for _, d := range data {
 		h.Write(d)
@@ -69,7 +74,7 @@ func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int,
 
 	// Step 2: Run the resource-bounded ex-post generation.
 	identityData := append([]byte(id), vk...)
-	challenge, rbExpProof, err := rbexp.Gen(sid, identityData)
+	challenge, rbExpProof, err := rbexp.Generate(sid, identityData)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +84,7 @@ func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int,
 	if err != nil {
 		return nil, err
 	}
-	vdfInput := hashData([]byte(id), vk, challenge)
+	vdfInput := HashData([]byte(id), vk, challenge)
 	phiVDF, piVDF, err := vdf.Eval(vdfInput, vdfVk, delay)
 	if err != nil {
 		return nil, err
@@ -106,13 +111,15 @@ func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int,
 //   - rbexp: an implementation of the RBExp interface (for verification).
 //
 // Returns a slice of CommitteeOutput representing elected committee members.
-func CommitteeElection(id string, sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
+func CommitteeElection(
+	id string, sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
+
 	if state == nil || len(state.VRFSecret) == 0 {
 		return nil, errors.New("invalid local state")
 	}
 
 	// Step 1: Compute the VRF evaluation.
-	hashInput := hashData(state.PhiVDF, []byte(sid))
+	hashInput := HashData(state.PhiVDF, []byte(sid))
 	phiVrf, piVrf, err := vrf.Eval(hashInput, state.VRFSecret)
 	if err != nil {
 		return nil, err
@@ -125,9 +132,9 @@ func CommitteeElection(id string, sid string, state *LocalState, weight float64,
 		PiVDF:  state.PiVDF,
 	}
 
-	// Step 2: Run RB-ExP.Ver.
+	// Step 2: Run RB-ExP.Verify.
 	identityData := append([]byte(id), state.VRFPublic...)
-	outputs, err := rbexp.Ver(sid, identityData, state.Challenge, state.RBExpProof, auxKey, weight)
+	outputs, err := rbexp.Verify(sid, identityData, state.Challenge, state.RBExpProof, auxKey, weight)
 	if err != nil {
 		return nil, err
 	}

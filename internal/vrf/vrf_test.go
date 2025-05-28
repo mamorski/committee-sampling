@@ -9,7 +9,7 @@ import (
 
 type VRFSuite struct {
 	suite.Suite
-	vrf VRF
+	vrf *Vrf
 }
 
 func (s *VRFSuite) SetupTest() {
@@ -31,7 +31,7 @@ func (s *VRFSuite) TestEval() {
 	for _, lambda := range []int{128, 192, 256} {
 		secretKey, _, err := s.vrf.Gen(lambda)
 		s.Require().NoError(err)
-		phi, pi, err := s.vrf.Eval("test-input", secretKey)
+		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.NoError(err)
 		s.NotEmpty(phi)
 		s.NotEmpty(pi)
@@ -42,13 +42,13 @@ func (s *VRFSuite) TestVerify() {
 	for _, lambda := range []int{128, 192, 256} {
 		secretKey, verificationKey, err := s.vrf.Gen(lambda)
 		s.Require().NoError(err)
-		phi, pi, err := s.vrf.Eval("test-input", secretKey)
+		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.Require().NoError(err)
-		valid, err := s.vrf.Verify("test-input", phi, pi, verificationKey)
+		valid, err := s.vrf.Verify([]byte("test-input"), phi, pi, verificationKey)
 		s.NoError(err)
 		s.True(valid)
 		invalidPi := []byte("invalid-proof")
-		valid, err = s.vrf.Verify("test-input", phi, invalidPi, verificationKey)
+		valid, err = s.vrf.Verify([]byte("test-input"), phi, invalidPi, verificationKey)
 		s.Error(err)
 		s.False(valid)
 	}

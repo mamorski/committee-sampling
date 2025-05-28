@@ -7,23 +7,17 @@ import (
 	"time"
 )
 
-type VDF interface {
-	Setup(lambda, delta int) ([]byte, error)
-	Eval(x, vk []byte, delta int) ([]byte, []byte, error)
-	Verify(x, phi, pi, vk []byte) (bool, error)
-}
-
-type vdf struct {
+type Vdf struct {
 	lambda int
 	delta  int
 	vk     []byte
 }
 
-func New() VDF {
-	return &vdf{}
+func New() *Vdf {
+	return &Vdf{}
 }
 
-func (v *vdf) Setup(lambda, delta int) ([]byte, error) {
+func (v *Vdf) Setup(lambda, delta int) ([]byte, error) {
 	v.lambda = lambda
 	v.delta = delta
 
@@ -37,7 +31,7 @@ func (v *vdf) Setup(lambda, delta int) ([]byte, error) {
 	return vk, nil
 }
 
-func (v *vdf) Eval(x, vk []byte, delta int) ([]byte, []byte, error) {
+func (v *Vdf) Eval(x, vk []byte, delta int) ([]byte, []byte, error) {
 	time.Sleep(time.Duration(delta) * time.Second)
 	hash := sha256.Sum256(append(x, vk...))
 	phi := hash[:]
@@ -47,7 +41,7 @@ func (v *vdf) Eval(x, vk []byte, delta int) ([]byte, []byte, error) {
 	return phi, proof[:], nil
 }
 
-func (v *vdf) Verify(x, phi, pi, vk []byte) (bool, error) {
+func (v *Vdf) Verify(x, phi, pi, vk []byte) (bool, error) {
 	hash := sha256.Sum256(append(x, vk...))
 	expectedPhi := hash[:]
 

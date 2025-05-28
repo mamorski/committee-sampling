@@ -37,6 +37,7 @@ type MDAG struct {
 	computedLabels [][]byte         // computed label for each round (r >= 1)
 	currentLabel   []byte           // label computed in the most recent round
 	sessionID      string           // current protocol session id
+	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
 }
 
 // New creates a new MDAG instance with the specified parameters.
@@ -51,7 +52,16 @@ type MDAG struct {
 //   - startTime: Time when the protocol should start execution
 //
 // Returns a configured MDAG instance ready to run the protocol.
-func New(rounds int, sid string, oracle HashOracle, network network.Network, roundTimeout time.Duration, logger *zap.Logger, startTime time.Time) *MDAG {
+func New(
+	rounds int,
+	sid string,
+	oracle HashOracle,
+	network network.Network,
+	roundTimeout time.Duration,
+	logger *zap.Logger,
+	startTime time.Time,
+	protocolType string) *MDAG {
+
 	neighborsList := network.GetNeighbors()
 	neighbors := make(map[string]bool, len(neighborsList))
 	for _, neighbor := range neighborsList {
@@ -71,9 +81,10 @@ func New(rounds int, sid string, oracle HashOracle, network network.Network, rou
 		sessionID:      sid,
 		startTime:      startTime,
 		neighbors:      neighbors,
+		protocolType:   protocolType,
 	}
 
-	network.RegisterHandler(fmt.Sprintf("%s/%s", protocolID, sid), m.handleMessage)
+	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
 	m.logger.Info("MDAG instance created",
 		zap.Int("rounds", rounds),
 		zap.Int("neighbors", len(neighbors)))
@@ -239,7 +250,7 @@ func (m *MDAG) handleMessage(from string, payload []byte) error {
 func (m *MDAG) broadcast(round int, label []byte) {
 	pbMsg := &mdagpb.MDAGMessage{
 		SessionId: m.sessionID,
-		Round:     uint32(round),
+		Round:     uint32(round), //nolint:gosec
 		Label:     label,
 		From:      m.network.GetNodeID(),
 	}
@@ -250,7 +261,7 @@ func (m *MDAG) broadcast(round int, label []byte) {
 		return
 	}
 
-	fullProtocolID := fmt.Sprintf("%s/%s", protocolID, m.sessionID)
+	fullProtocolID := fmt.Sprintf("%s/%s/%s", protocolID, m.protocolType, m.sessionID)
 	m.network.SendProtocolMessage(fullProtocolID, data)
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {

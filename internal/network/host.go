@@ -15,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -28,6 +29,8 @@ const (
 	neighborhoodResponse = "/neighborhood/resp/1.0.0"
 	clientVersion        = "go-p2p-node/0.0.1"
 )
+
+type MessageHandler func(from string, payload []byte) error
 
 type Network interface {
 	RegisterHandler(protocolID string, handler MessageHandler)
@@ -59,7 +62,7 @@ type P2PNode struct {
 	key               crypto.PrivKey
 }
 
-func New(ctx context.Context, cfg Config, logger *zap.Logger) (*P2PNode, error) {
+func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode, error) {
 	c, cancel := context.WithCancel(ctx)
 
 	// Generate private key
@@ -101,7 +104,7 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*P2PNode, error) 
 		maxOutbound:       cfg.MaxOutboundDegree,
 		heartbeatInterval: cfg.HeartbeatInterval,
 		discovery:         d,
-		logger:            logger,
+		logger:            logger.Named("network"),
 		numOfNeighbors:    0,
 		key:               priv,
 	}

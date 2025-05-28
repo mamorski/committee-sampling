@@ -13,13 +13,7 @@ import (
 	"github.com/vechain/go-ecvrf"
 )
 
-type VRF interface {
-	Gen(lambda int) ([]byte, []byte, error)
-	Eval(x string, secretKey []byte) ([]byte, []byte, error)
-	Verify(x string, phi, pi, verificationKey []byte) (bool, error)
-}
-
-type vrf struct {
+type Vrf struct {
 	ecvrf ecvrf.VRF
 }
 
@@ -36,7 +30,7 @@ func selectCurveAndHash(lambda int) (elliptic.Curve, func() hash.Hash, error) {
 	}
 }
 
-func (v *vrf) Gen(lambda int) ([]byte, []byte, error) {
+func (v *Vrf) Gen(lambda int) ([]byte, []byte, error) {
 	c, h, err := selectCurveAndHash(lambda)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to select c: %w", err)
@@ -66,13 +60,13 @@ func (v *vrf) Gen(lambda int) ([]byte, []byte, error) {
 	return secretKeyBytes, verificationKey, nil
 }
 
-func (v *vrf) Eval(x string, secretKey []byte) ([]byte, []byte, error) {
+func (v *Vrf) Eval(x []byte, secretKey []byte) ([]byte, []byte, error) {
 	sk, err := x509.ParseECPrivateKey(secretKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse private key: %w", err)
 	}
 
-	phi, pi, err := v.ecvrf.Prove(sk, []byte(x))
+	phi, pi, err := v.ecvrf.Prove(sk, x)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to prove: %w", err)
 	}
@@ -81,7 +75,7 @@ func (v *vrf) Eval(x string, secretKey []byte) ([]byte, []byte, error) {
 
 }
 
-func (v *vrf) Verify(x string, phi, pi, verificationKey []byte) (bool, error) {
+func (v *Vrf) Verify(x, phi, pi, verificationKey []byte) (bool, error) {
 	pk, err := x509.ParsePKIXPublicKey(verificationKey)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse public key: %w", err)
@@ -91,7 +85,7 @@ func (v *vrf) Verify(x string, phi, pi, verificationKey []byte) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("failed to cast public key to ECDSA")
 	}
-	beta, err := v.ecvrf.Verify(verificationKeyECDSA, []byte(x), pi)
+	beta, err := v.ecvrf.Verify(verificationKeyECDSA, x, pi)
 	if err != nil {
 		return false, fmt.Errorf("failed to verify: %w", err)
 	}
@@ -99,6 +93,6 @@ func (v *vrf) Verify(x string, phi, pi, verificationKey []byte) (bool, error) {
 	return string(beta) == string(phi), nil
 }
 
-func New() VRF {
-	return &vrf{}
+func New() *Vrf {
+	return &Vrf{}
 }
