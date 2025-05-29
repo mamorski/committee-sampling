@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 )
@@ -70,7 +71,7 @@ func (s *RbExpSuite) SetupTest() {
 	s.exp = new(MockExPost)
 	s.exa = new(MockExAnte)
 	s.weight = 1.0
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight)
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight, zap.NewNop())
 }
 
 func TestRbExpSuite(t *testing.T) {
@@ -307,7 +308,7 @@ func (s *RbExpSuite) TestVer_FilterFalse() {
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
 	// Use a filter that always returns false by changing the rbexp instance
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight)
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight, zap.NewNop())
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()

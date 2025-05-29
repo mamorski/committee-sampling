@@ -43,6 +43,7 @@ type ExAnte struct {
 }
 
 type receivedMessage struct {
+	id         string
 	sid        string
 	vk         []byte
 	ch         []byte
@@ -131,7 +132,7 @@ func (e *ExAnte) Verify(
 	}
 
 	R := e.d * e.D
-	if len(sigma) <= R {
+	if len(sigma) < R {
 		e.isRunning = false
 		e.logger.Error("Sigma length is less than required rounds",
 			zap.Int("expected_rounds", R),
@@ -147,7 +148,7 @@ func (e *ExAnte) Verify(
 
 	// Check if P_i is also acts like a prover
 	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.d+1 &&
-		filterFn(session, vk, e.challenge, auxTag) {
+		filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 
@@ -166,7 +167,7 @@ func (e *ExAnte) Verify(
 			},
 			MerklePath: []*pb.State{{Row: sigma[0][0:]}},
 			Round:      0,
-			From:       e.network.GetNodeID(),
+			Id:         e.network.GetNodeID(),
 		}
 
 		msgBytes, err := proto.Marshal(msg)
@@ -195,7 +196,15 @@ func (e *ExAnte) Verify(
 
 				key := common.Key{VK: string(msg.vk), Ch: string(msg.ch)}
 				if v, exists := results[key]; !exists || g > v.Grade {
+					e.logger.Debug("Adding or updating message result",
+						zap.String("sid", msg.sid),
+						zap.String("vk", string(msg.vk)),
+						zap.String("challenge", string(msg.ch)),
+						zap.Int("grade", g),
+					)
+
 					results[key] = common.O{
+						ID:        msg.id,
 						VK:        msg.vk,
 						Challenge: msg.ch,
 						Aux:       msg.aux,
@@ -226,8 +235,8 @@ func (e *ExAnte) Verify(
 						},
 					},
 					MerklePath: make([]*pb.State, r+1),
-					Round:      uint32(r),
-					From:       e.network.GetNodeID(),
+					Round:      uint32(r), //nolint:gosec
+					Id:         e.network.GetNodeID(),
 				}
 
 				for i := 0; i < r; i++ {
@@ -280,11 +289,11 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if msg.From != from {
+	if msg.Id != from {
 		err := errors.New("sender id mismatch")
 		e.logger.Error("Received message with mismatched sender id",
 			zap.String("expected", from),
-			zap.String("received", msg.From))
+			zap.String("received", msg.Id))
 		return err
 	}
 
@@ -313,6 +322,7 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	}
 
 	e.messages[round][from] = receivedMessage{
+		id:  msg.Id,
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
 		ch:  msg.Value,
@@ -363,7 +373,7 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !filterFn(msg.sid, msg.vk, msg.ch, msg.aux) {
+	if !filterFn(msg.sid, msg.id, msg.vk, msg.ch, msg.aux) {
 		return false
 	}
 
@@ -409,6 +419,7 @@ func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
 		}
 
 		result[i] = make([][]byte, len(state.Row))
+		// nolint:gosimple
 		for j, rowBytes := range state.Row {
 			result[i][j] = rowBytes
 		}

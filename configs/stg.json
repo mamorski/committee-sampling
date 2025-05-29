@@ -13,8 +13,8 @@
     }
   },
   "graph": {
-    "diameter": 6,
-    "grading_levels": 3
+    "diameter": 3,
+    "grading_levels": 5
   },
   "run_time": {
     "session_id": "aef07cc6-b08c-48b0-9dbf-6043f593c1d6",
@@ -22,8 +22,8 @@
     "ex_ante_round_timeout": "5s",
     "ex_post_round_timeout": "5s",
     "mdag_round_timeout": "5s",
-    "lambda": 256,
+    "lambda": 48,
     "weight": 10,
-    "committee_size": 10
+    "committee_size": 5
   }
 }

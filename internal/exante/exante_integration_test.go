@@ -139,7 +139,7 @@ func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float
 }
 
 // testFilterFunction provides a filter function for testing
-func testFilterFunction(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func testFilterFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true // Accept all messages for testing
 }
 

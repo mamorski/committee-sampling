@@ -130,7 +130,7 @@ func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float
 	return int(hash[0]) % 10
 }
 
-func testFilterTagFunction(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func testFilterTagFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true
 }
 

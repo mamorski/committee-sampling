@@ -34,6 +34,7 @@ func (a *AuxKey) ToProto() *pb.AuxData {
 // Each output corresponds to a candidate (or committee member) along with an associated grade.
 type RBExpOutput struct {
 	SID       string
+	ID        string
 	VK        []byte
 	Grade     int
 	AuxTag    *AuxTag
@@ -46,6 +47,7 @@ type AuxTag struct {
 }
 
 type O struct {
+	ID        string
 	VK        []byte
 	Challenge []byte
 	Aux       *AuxTag

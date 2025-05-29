@@ -50,6 +50,7 @@ type ExPost struct {
 }
 
 type receivedMessage struct {
+	id         string
 	sid        string
 	vk         []byte
 	v          []byte
@@ -159,7 +160,7 @@ func (e *ExPost) Verify(
 
 	// Step 2: Prover logic for round 0
 	if e.gradeFunc(session, vk, challenge, auxTag.AuxKey, auxLocal) >= (e.d+1) &&
-		filterFn(session, vk, challenge, auxTag) {
+		filterFn(session, e.network.GetNodeID(), vk, challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 		msg := &pb.TimestampMessage{
@@ -177,7 +178,7 @@ func (e *ExPost) Verify(
 			},
 			MerklePath: []*pb.State{{Row: sigma[len(sigma)-1][0:]}},
 			Round:      0,
-			From:       e.network.GetNodeID(),
+			Id:         e.network.GetNodeID(),
 		}
 		msgBytes, err := proto.Marshal(msg)
 		if err != nil {
@@ -207,7 +208,14 @@ func (e *ExPost) Verify(
 				key := common.Key{VK: string(msg.vk), Ch: string(msg.v)}
 
 				if v, exists := results[key]; !exists || g > v.Grade {
+					e.logger.Debug("Adding or updating message in results",
+						zap.String("vk", string(msg.vk)),
+						zap.String("value", string(msg.v)),
+						zap.Int("grade", g),
+					)
+
 					results[key] = common.O{
+						ID:        msg.id,
 						VK:        msg.vk,
 						Challenge: msg.v,
 						Aux: &common.AuxTag{
@@ -239,7 +247,7 @@ func (e *ExPost) Verify(
 					},
 					MerklePath: make([]*pb.State, r+1),
 					Round:      uint32(r), //nolint:gosec
-					From:       e.network.GetNodeID(),
+					Id:         e.network.GetNodeID(),
 				}
 				for i := 0; i < r; i++ {
 					pMsg.MerklePath[i+1] = &pb.State{Row: msg.merklePath[i]}
@@ -274,7 +282,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !filterFn(msg.sid, msg.vk, msg.v, msg.aux) {
+	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
 		e.logger.Debug("Message does not pass filter function")
 		return false
 	}
@@ -345,12 +353,12 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if msg.From != from {
+	if msg.Id != from {
 		err := fmt.Errorf("sender id mismatch")
 
 		e.logger.Warn("Received message with mismatched sender id",
 			zap.String("expected", from),
-			zap.String("received", msg.From))
+			zap.String("received", msg.Id))
 
 		return err
 	}
@@ -378,6 +386,7 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 	}
 
 	e.messages[round][from] = receivedMessage{
+		id:  msg.Id,
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
 		v:   msg.Value,

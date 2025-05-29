@@ -1,25 +1,23 @@
 package boot
 
 import (
-	"context"
 	"crypto/sha256"
 	"math/big"
 	"time"
 
 	"github.com/beevik/ntp"
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/resourceproof"
-	"github.com/mamorski/committee-sampling/internal/vdf"
-	"github.com/mamorski/committee-sampling/internal/vrf"
-	"go.uber.org/zap"
-
 	"github.com/mamorski/committee-sampling/internal/exante"
 	"github.com/mamorski/committee-sampling/internal/expost"
 	"github.com/mamorski/committee-sampling/internal/gce"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/resourcebound"
+	"github.com/mamorski/committee-sampling/internal/resourceproof"
+	"github.com/mamorski/committee-sampling/internal/vdf"
+	"github.com/mamorski/committee-sampling/internal/vrf"
 	"github.com/mamorski/committee-sampling/pkg/config"
+	"go.uber.org/zap"
 )
 
 type Bootstrap struct {
@@ -49,17 +47,8 @@ func Oracle(data []byte) []byte {
 	return hash[:]
 }
 
-func New(cfg *config.Config) (*Bootstrap, error) {
-
-	logger, err := zap.NewProduction()
-	if err != nil {
-		return nil, err
-	}
-
-	node, err := network.New(context.Background(), cfg.Network, logger)
-	if err != nil {
-		return nil, err
-	}
+//nolint:funlen
+func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstrap, error) {
 
 	startTimes := CalculateStartTimes(cfg)
 	// Sleep until the ExPost MDAG starts, minus 15 seconds to allow for setup.
@@ -69,11 +58,19 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 	vdFunc := vdf.New()
 	vrFunc := vrf.New()
 
-	filterF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey) bool {
-		id := node.GetNodeID()
+	filterF := func(sid, id string, vk []byte, ch []byte, auxKey *common.AuxKey) bool {
 		vdfInput := gce.HashData([]byte(id), vk, ch)
 		vrfInput := gce.HashData(auxKey.PhiVDF, []byte(sid))
 
+		logger.Debug("Filter function called, verifying VDF and VRF",
+			zap.String("node_id", id),
+			zap.String("sid", sid),
+			zap.Binary("vk", vk),
+			zap.Binary("challenge", ch),
+			zap.Binary("phi_vdf", auxKey.PhiVDF),
+			zap.Binary("pi_vdf", auxKey.PiVDF),
+			zap.Binary("VDF Input", vdfInput),
+		)
 		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVDF, auxKey.PiVDF, vk)
 		if err != nil {
 			logger.Error("Failed to verify VDF", zap.Error(err))
@@ -95,17 +92,26 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 		return true
 	}
 
-	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, weight float64) int {
 		phiInt := new(big.Int).SetBytes(auxKey.PhiVRF)
 		n := big.NewInt(int64(cfg.RunTime.CommitteeSize))
 		d := new(big.Float).SetInt64(int64(cfg.Graph.GradingLevels))
-		w := big.NewFloat(auxLocal)
+		w := big.NewFloat(weight)
 
 		// 1 / delta_w - currently set to 1.0, can be adjusted based on the protocol requirements
 		deltaW := big.NewFloat(1.0)
 
 		// 2^lambda
-		twoPowLambda := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(cfg.RunTime.Lambda)), nil)
+		base := big.NewInt(2)
+		exp := big.NewInt(int64(cfg.RunTime.Lambda))
+		twoPowLambda := new(big.Int).Exp(base, exp, nil)
+		logger.Debug("Grading function parameters",
+			zap.String("sid", sid),
+			zap.Binary("vk", vk),
+			zap.Any("2^lambda", twoPowLambda),
+			zap.Int("lambda", cfg.RunTime.Lambda),
+			zap.Any("phi_vrf", phiInt.Int64()),
+		)
 
 		// d + 1
 		d = d.Add(d, big.NewFloat(1.0))
@@ -124,6 +130,11 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 
 		// g = floor(d + 1 - (w - n * (2^lambda / (phi_vrf + 1))) * 1 / delta_w)
 		g, _ := big.NewFloat(0).Sub(d, r).Int64()
+		logger.Debug("Grading function calculated",
+			zap.String("sid", sid),
+			zap.Int64("g", g),
+			zap.Int64("gradingLevels", int64(cfg.Graph.GradingLevels)),
+		)
 
 		if int64(cfg.Graph.GradingLevels+1) <= g {
 			return cfg.Graph.GradingLevels + 1
@@ -181,13 +192,7 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 	)
 
 	rp := resourceproof.New()
-	rbExp := resourcebound.New(
-		rp,
-		exPost,
-		exAnte,
-		filterF,
-		cfg.RunTime.Weight,
-	)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.RunTime.Weight, logger)
 
 	return &Bootstrap{
 		id:         node.GetNodeID(),
@@ -207,7 +212,7 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 }
 
 func CalculateStartTimes(cfg *config.Config) *StartTimes {
-	response, err := ntp.Query("0.beevik-ntp.pool.ntp.org")
+	response, err := ntp.Query("time.nist.gov")
 	if err != nil {
 		panic("Failed to query NTP server: " + err.Error())
 	}

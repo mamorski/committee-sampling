@@ -1,6 +1,8 @@
 package vdf
 
 import (
+	"crypto/rand"
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,18 +14,23 @@ type VDFSuite struct {
 	v *Vdf
 }
 
+func Setup(lambda int) ([]byte, error) {
+
+	vk := make([]byte, lambda/8)
+	_, err := rand.Read(vk)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate verification key: %w", err)
+	}
+
+	return vk, nil
+}
+
 func (s *VDFSuite) SetupTest() {
 	s.v = New()
 }
 
-func (s *VDFSuite) TestSetup() {
-	vk, err := s.v.Setup(256, 1)
-	s.NoError(err)
-	s.Equal(32, len(vk))
-}
-
 func (s *VDFSuite) TestEval() {
-	vk, err := s.v.Setup(256, 1)
+	vk, err := Setup(256)
 	s.Require().NoError(err)
 
 	x := []byte("test input")
@@ -39,7 +46,7 @@ func (s *VDFSuite) TestEval() {
 }
 
 func (s *VDFSuite) TestVerify_Valid() {
-	vk, err := s.v.Setup(256, 1)
+	vk, err := Setup(256)
 	s.Require().NoError(err)
 
 	x := []byte("test input")
@@ -52,7 +59,7 @@ func (s *VDFSuite) TestVerify_Valid() {
 }
 
 func (s *VDFSuite) TestVerify_InvalidPhi() {
-	vk, err := s.v.Setup(256, 1)
+	vk, err := Setup(256)
 	s.Require().NoError(err)
 
 	x := []byte("test input")
@@ -66,7 +73,7 @@ func (s *VDFSuite) TestVerify_InvalidPhi() {
 }
 
 func (s *VDFSuite) TestVerify_InvalidPi() {
-	vk, err := s.v.Setup(256, 1)
+	vk, err := Setup(256)
 	s.Require().NoError(err)
 
 	x := []byte("test input")

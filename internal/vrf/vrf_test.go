@@ -60,8 +60,8 @@ func (s *VRFSuite) TestSelectCurve() {
 		expected   elliptic.Curve
 		shouldFail bool
 	}{
-		{128, elliptic.P224(), false},
-		{192, elliptic.P384(), false},
+		{224, elliptic.P224(), false},
+		{384, elliptic.P384(), false},
 		{256, elliptic.P256(), false},
 		{512, nil, true},
 	}

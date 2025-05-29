@@ -395,7 +395,7 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 		},
 		MerklePath: []*pb.State{{Row: [][]byte{[]byte("path1")}}},
 		Round:      1,
-		From:       "node1",
+		Id:         "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -434,7 +434,7 @@ func (suite *ExPostTestSuite) TestHandleMessageSessionMismatch() {
 
 	msg := &pb.TimestampMessage{
 		SessionId: "wrong-session",
-		From:      "node1",
+		Id:        "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -450,7 +450,7 @@ func (suite *ExPostTestSuite) TestHandleMessageSenderMismatch() {
 
 	msg := &pb.TimestampMessage{
 		SessionId: suite.sid,
-		From:      "node2",
+		Id:        "node2",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -466,7 +466,7 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 
 	msg := &pb.TimestampMessage{
 		SessionId: suite.sid,
-		From:      "unknown-node",
+		Id:        "unknown-node",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -489,7 +489,7 @@ func (suite *ExPostTestSuite) TestHandleMessageDuplicate() {
 		},
 		MerklePath: []*pb.State{},
 		Round:      1,
-		From:       "node1",
+		Id:         "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -653,11 +653,11 @@ func mockGradeFunc(_ string, vk []byte, v []byte, _ *common.AuxKey, _ float64) i
 	return 0
 }
 
-func mockFilterTagFunc(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func mockFilterTagFunc(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return true
 }
 
-func mockFilterTagFuncFalse(_ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func mockFilterTagFuncFalse(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
 	return false
 }
 
@@ -718,7 +718,7 @@ func (suite *ExPostTestSuite) TestVerifyWithHighGradeProver() {
 		Sigma:     sigma,
 	}
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(3)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	results, err := suite.expost.Verify(suite.sid, []byte("high-grade-vk"), fSigmaExp, auxTag, 0.5, highGradeFilterTagFunc)
@@ -761,7 +761,7 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAux() {
 		Aux:             nil,
 		MerklePath:      []*pb.State{},
 		Round:           1,
-		From:            "node1",
+		Id:              "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -785,7 +785,7 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 		},
 		MerklePath: []*pb.State{},
 		Round:      1,
-		From:       "node1",
+		Id:         "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -904,7 +904,7 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 		Aux:             &pb.Aux{AuxKey: &pb.AuxKeyMessage{}},
 		MerklePath:      []*pb.State{},
 		Round:           1,
-		From:            "node1",
+		Id:              "node1",
 	}
 
 	msg2 := &pb.TimestampMessage{
@@ -914,7 +914,7 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 		Aux:             &pb.Aux{AuxKey: &pb.AuxKeyMessage{}},
 		MerklePath:      []*pb.State{},
 		Round:           1,
-		From:            "node2",
+		Id:              "node2",
 	}
 
 	msgBytes1, _ := proto.Marshal(msg1)
@@ -951,11 +951,11 @@ func edgeCaseGradeFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey, _ float6
 	return 0
 }
 
-func highGradeFilterTagFunc(_ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
+func highGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
 	return string(vk) == "high-grade-vk"
 }
 
-func lowGradeFilterTagFunc(_ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
+func lowGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
 	return string(vk) == "low-grade-vk"
 }
 

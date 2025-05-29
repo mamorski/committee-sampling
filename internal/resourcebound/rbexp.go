@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"go.uber.org/zap"
 )
 
 type ResourceProof interface {
@@ -40,15 +41,17 @@ type RbExp struct {
 	exa     ExAnte
 	weight  float64
 	ffilter common.FilterF
+	logger  *zap.Logger
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64) *RbExp {
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, logger *zap.Logger) *RbExp {
 	return &RbExp{
 		rp:      rp,
 		exp:     exp,
 		exa:     exa,
 		weight:  weight,
 		ffilter: ffilter,
+		logger:  logger.Named("rbexp"),
 	}
 }
 
@@ -93,8 +96,8 @@ func (r *RbExp) Verify(
 	auxKey *common.AuxKey,
 	auxLocal float64) ([]*common.RBExpOutput, error) {
 
-	fTag := func(sid string, vk []byte, ch []byte, tag *common.AuxTag) bool {
-		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, vk, ch, tag.AuxKey)
+	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
+		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)
 	}
 	// Step 1
 	auxTag := &common.AuxTag{
@@ -109,15 +112,28 @@ func (r *RbExp) Verify(
 	if err != nil {
 		return nil, err
 	}
+	r.logger.Debug("RBExp outputs from ExPost verification",
+		zap.String("sid", sid),
+		zap.Int("num_outputs", len(oP)),
+	)
 
 	// Step 2
 	oA, err := r.exa.Verify(sid, vk, proof.SigmaExa, auxTag, auxLocal, fTag)
 	if err != nil {
 		return nil, err
 	}
+	r.logger.Debug("RBExp outputs from ExAnte verification",
+		zap.String("sid", sid),
+		zap.Int("num_outputs", len(oA)),
+	)
 
 	var outputs []*common.RBExpOutput
 	for key, value := range oP {
+		r.logger.Debug("Key, value from ExPost",
+			zap.String("sid", sid),
+			zap.Any("key", key),
+			zap.Any("value", value),
+		)
 		oAValues, ok := oA[key]
 		if !ok {
 			continue
@@ -125,6 +141,7 @@ func (r *RbExp) Verify(
 		g := min(value.Grade, oAValues.Grade)
 		outputs = append(outputs, &common.RBExpOutput{
 			SID:       sid,
+			ID:        value.ID,
 			VK:        value.VK,
 			Challenge: value.Challenge,
 			AuxTag:    value.Aux,

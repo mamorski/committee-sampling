@@ -18,5 +18,5 @@ message ExPostMessage {
   string challenge = 4;
   AuxData aux = 5;
   repeated string sigma_parts = 6;
-  string from = 7;
+  string id = 7;
 }

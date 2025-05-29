@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"go.uber.org/zap"
 )
 
 type VRF interface {
@@ -13,18 +14,16 @@ type VRF interface {
 }
 
 type VDF interface {
-	Setup(lambda, delta int) (vdfVk []byte, err error)
 	Eval(message, vk []byte, delay int) (phiVDF []byte, piVDF []byte, err error)
 }
 
 type RBExp interface {
 	Generate(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
-	Verify(sid string,
-		vk,
-		ch []byte,
-		proof *common.RBExpProof,
-		auxKey *common.AuxKey,
-		auxLocal float64) ([]*common.RBExpOutput, error)
+	Verify(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.RBExpOutput, error)
+}
+
+type Election struct {
+	logger *zap.Logger
 }
 
 // LocalState holds the party’s local state after the initialization phase.
@@ -41,6 +40,7 @@ type LocalState struct {
 
 // CommitteeOutput is the final output for an elected candidate: a pair (id||vk, grade).
 type CommitteeOutput struct {
+	ID           string
 	IdentityData []byte
 	Grade        int
 }
@@ -54,6 +54,13 @@ func HashData(data ...[]byte) []byte {
 	return h.Sum(nil)
 }
 
+// New creates a new instance of the Election struct with a logger.
+func New(logger *zap.Logger) *Election {
+	return &Election{
+		logger: logger,
+	}
+}
+
 // Initialize executes the initialization phase of GCE.
 // Inputs:
 //   - id: the party’s identifier (e.g. its network or application id).
@@ -65,7 +72,7 @@ func HashData(data ...[]byte) []byte {
 //   - delay: the VDF delay parameter.
 //
 // Returns the party’s LocalState or an error.
-func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
+func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
 	// Step 1: Sample a VRF key pair.
 	sk, vk, err := vrf.Generate(lambda)
 	if err != nil {
@@ -73,19 +80,22 @@ func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int,
 	}
 
 	// Step 2: Run the resource-bounded ex-post generation.
-	identityData := append([]byte(id), vk...)
-	challenge, rbExpProof, err := rbexp.Generate(sid, identityData)
+	challenge, rbExpProof, err := rbexp.Generate(sid, vk)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3: Start the VDF evaluation.
-	vdfVk, err := vdf.Setup(lambda, delay)
-	if err != nil {
-		return nil, err
-	}
 	vdfInput := HashData([]byte(id), vk, challenge)
-	phiVDF, piVDF, err := vdf.Eval(vdfInput, vdfVk, delay)
+	phiVDF, piVDF, err := vdf.Eval(vdfInput, vk, delay)
+	e.logger.Debug("VDF eval completed",
+		zap.String("node_id", id),
+		zap.String("sid", sid),
+		zap.Binary("vk", vk),
+		zap.Binary("challenge", challenge),
+		zap.Binary("phi_vdf", phiVDF),
+		zap.Binary("pi_vdf", piVDF),
+		zap.Binary("VDF Input", vdfInput),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +121,7 @@ func Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int,
 //   - rbexp: an implementation of the RBExp interface (for verification).
 //
 // Returns a slice of CommitteeOutput representing elected committee members.
-func CommitteeElection(
-	id string, sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
+func (e *Election) CommitteeElection(sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
 
 	if state == nil || len(state.VRFSecret) == 0 {
 		return nil, errors.New("invalid local state")
@@ -133,8 +142,7 @@ func CommitteeElection(
 	}
 
 	// Step 2: Run RB-ExP.Verify.
-	identityData := append([]byte(id), state.VRFPublic...)
-	outputs, err := rbexp.Verify(sid, identityData, state.Challenge, state.RBExpProof, auxKey, weight)
+	outputs, err := rbexp.Verify(sid, state.VRFPublic, state.Challenge, state.RBExpProof, auxKey, weight)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +151,7 @@ func CommitteeElection(
 	var committee []CommitteeOutput
 	for _, out := range outputs {
 		committee = append(committee, CommitteeOutput{
+			ID:           out.ID,
 			IdentityData: out.VK,
 			Grade:        out.Grade,
 		})

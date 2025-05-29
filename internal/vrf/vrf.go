@@ -19,11 +19,11 @@ type Vrf struct {
 
 func selectCurveAndHash(lambda int) (elliptic.Curve, func() hash.Hash, error) {
 	switch lambda {
-	case 128:
+	case 28:
 		return elliptic.P224(), sha256.New224, nil
-	case 192:
+	case 48:
 		return elliptic.P384(), sha512.New384, nil
-	case 256:
+	case 32:
 		return elliptic.P256(), sha256.New, nil
 	default:
 		return nil, nil, fmt.Errorf("invalid lambda: %d", lambda)

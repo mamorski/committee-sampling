@@ -252,7 +252,7 @@ func (m *MDAG) broadcast(round int, label []byte) {
 		SessionId: m.sessionID,
 		Round:     uint32(round), //nolint:gosec
 		Label:     label,
-		From:      m.network.GetNodeID(),
+		Id:        m.network.GetNodeID(),
 	}
 
 	data, err := proto.Marshal(pbMsg)
