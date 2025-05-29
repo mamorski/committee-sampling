@@ -21,7 +21,7 @@ type ExPost interface {
 		fSigmaExp *common.FSigmaExp,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter common.FilterTagF) (map[common.Key]common.O, error)
+		filterFn common.FilterTagF) (*common.Committee, error)
 }
 
 type ExAnte interface {
@@ -32,7 +32,7 @@ type ExAnte interface {
 		sigma [][][]byte,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter common.FilterTagF) (map[common.Key]common.O, error)
+		filter common.FilterTagF) (*common.Committee, error)
 }
 
 type RbExp struct {
@@ -89,12 +89,8 @@ func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, err
 	return challenge, proof, nil
 }
 
-func (r *RbExp) Verify(
-	sid string,
-	vk, ch []byte,
-	proof *common.RBExpProof,
-	auxKey *common.AuxKey,
-	auxLocal float64) ([]*common.RBExpOutput, error) {
+func (r *RbExp) Verify(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey,
+	auxLocal float64) ([]*common.CommitteeOutput, error) {
 
 	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
 		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)
@@ -114,7 +110,7 @@ func (r *RbExp) Verify(
 	}
 	r.logger.Debug("RBExp outputs from ExPost verification",
 		zap.String("sid", sid),
-		zap.Int("num_outputs", len(oP)),
+		zap.Int("num_outputs", oP.Len()),
 	)
 
 	// Step 2
@@ -124,30 +120,27 @@ func (r *RbExp) Verify(
 	}
 	r.logger.Debug("RBExp outputs from ExAnte verification",
 		zap.String("sid", sid),
-		zap.Int("num_outputs", len(oA)),
+		zap.Int("num_outputs", oA.Len()),
 	)
 
-	var outputs []*common.RBExpOutput
-	for key, value := range oP {
-		r.logger.Debug("Key, value from ExPost",
-			zap.String("sid", sid),
-			zap.Any("key", key),
-			zap.Any("value", value),
-		)
-		oAValues, ok := oA[key]
-		if !ok {
-			continue
+	var outputs []*common.CommitteeOutput
+	oP.Range(func(key, ch string, val common.O) {
+		if exAnteValue, ok := oA.Get(key, ch); ok {
+			g := min(val.Grade, exAnteValue.Grade)
+			outputs = append(outputs, &common.CommitteeOutput{
+				ID:    val.ID,
+				VK:    key,
+				Grade: g,
+			})
+		} else {
+			r.logger.Debug("No matching ExAnte value for ExPost",
+				zap.String("sid", sid),
+				zap.String("vk", key),
+				zap.String("challenge", ch),
+			)
 		}
-		g := min(value.Grade, oAValues.Grade)
-		outputs = append(outputs, &common.RBExpOutput{
-			SID:       sid,
-			ID:        value.ID,
-			VK:        value.VK,
-			Challenge: value.Challenge,
-			AuxTag:    value.Aux,
-			Grade:     g,
-		})
-	}
+	})
+
 	if len(outputs) == 0 {
 		return nil, errors.New("verification failed: no matching output")
 	}

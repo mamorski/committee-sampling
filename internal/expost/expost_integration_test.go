@@ -226,7 +226,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	}
 
 	// Verification phase
-	results := make([]map[common.Key]common.O, nodeCount)
+	results := make([]*common.Committee, nodeCount)
 	verifyErrors := make([]error, nodeCount)
 
 	var verifyWg sync.WaitGroup
@@ -379,7 +379,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	}
 
 	// Verification phase
-	results := make([]map[common.Key]common.O, nodeCount)
+	results := make([]*common.Committee, nodeCount)
 	verifyErrors := make([]error, nodeCount)
 
 	var verifyWg sync.WaitGroup
@@ -523,7 +523,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	}
 
 	// Verification phase
-	results := make([]map[common.Key]common.O, nodeCount)
+	results := make([]*common.Committee, nodeCount)
 	verifyErrors := make([]error, nodeCount)
 
 	var verifyWg sync.WaitGroup
@@ -635,7 +635,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(nodeCount)
 
-	results := make([]map[common.Key]common.O, nodeCount)
+	results := make([]*common.Committee, nodeCount)
 	errors := make([]error, nodeCount)
 
 	for i := 0; i < nodeCount; i++ {

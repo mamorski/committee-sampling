@@ -17,7 +17,7 @@ func (s *VRFSuite) SetupTest() {
 }
 
 func (s *VRFSuite) TestGen() {
-	for _, lambda := range []int{128, 192, 256} {
+	for _, lambda := range []int{28, 32, 48} {
 		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.NoError(err)
 		s.NotEmpty(secretKey)
@@ -28,7 +28,7 @@ func (s *VRFSuite) TestGen() {
 }
 
 func (s *VRFSuite) TestEval() {
-	for _, lambda := range []int{128, 192, 256} {
+	for _, lambda := range []int{28, 32, 48} {
 		secretKey, _, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
@@ -39,7 +39,7 @@ func (s *VRFSuite) TestEval() {
 }
 
 func (s *VRFSuite) TestVerify() {
-	for _, lambda := range []int{128, 192, 256} {
+	for _, lambda := range []int{28, 48, 32} {
 		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
@@ -60,9 +60,9 @@ func (s *VRFSuite) TestSelectCurve() {
 		expected   elliptic.Curve
 		shouldFail bool
 	}{
-		{224, elliptic.P224(), false},
-		{384, elliptic.P384(), false},
-		{256, elliptic.P256(), false},
+		{28, elliptic.P224(), false},
+		{48, elliptic.P384(), false},
+		{32, elliptic.P256(), false},
 		{512, nil, true},
 	}
 	for _, test := range tests {

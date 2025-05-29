@@ -14,7 +14,7 @@ import (
 
 // TestNetworkInterface verifies that MockNetwork implements the Network interface
 func TestNetworkInterface(t *testing.T) {
-	cluster := NewMockNetworkCluster(20)
+	cluster := NewMockNetworkCluster(0)
 	err := cluster.ConnectRandom(4)
 	if err != nil {
 		t.Fatalf("Failed to connect random peers: %v", err)

@@ -21,10 +21,10 @@ func selectCurveAndHash(lambda int) (elliptic.Curve, func() hash.Hash, error) {
 	switch lambda {
 	case 28:
 		return elliptic.P224(), sha256.New224, nil
-	case 48:
-		return elliptic.P384(), sha512.New384, nil
 	case 32:
 		return elliptic.P256(), sha256.New, nil
+	case 48:
+		return elliptic.P384(), sha512.New384, nil
 	default:
 		return nil, nil, fmt.Errorf("invalid lambda: %d", lambda)
 	}

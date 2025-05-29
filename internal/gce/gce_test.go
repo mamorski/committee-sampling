@@ -1,6 +1,7 @@
 package gce
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/mamorski/committee-sampling/internal/common"
@@ -46,15 +47,10 @@ func (m *RBExpMock) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof,
 }
 
 func (m *RBExpMock) Verify(
-	sid string,
-	vk,
-	ch []byte,
-	proof *common.RBExpProof,
-	auxKey *common.AuxKey,
-	auxLocal float64) ([]*common.RBExpOutput, error) {
+	sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.CommitteeOutput, error) {
 
 	args := m.Called(sid, vk, ch, proof, auxKey, auxLocal)
-	return args.Get(0).([]*common.RBExpOutput), args.Error(1)
+	return args.Get(0).([]*common.CommitteeOutput), args.Error(1)
 }
 
 // GCETestSuite is the testify suite for GCE
@@ -183,7 +179,13 @@ func (s *GCETestSuite) TestCommitteeElection_Success() {
 	piVDF := []byte("piVDF_test_idvk_128challenge_test_session_vk_128")
 	phiVrf := []byte("phiVRF_hash")
 	piVrf := []byte("piVRF_hash")
-	outputs := []*common.RBExpOutput{{VK: append([]byte(id), vk...), Grade: 1}}
+	outputs := []*common.CommitteeOutput{
+		{
+			ID:    id,
+			VK:    base64.StdEncoding.EncodeToString(vk),
+			Grade: 1,
+		},
+	}
 
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", sid, vk).Return(challenge, proof, nil).Once()
@@ -202,7 +204,7 @@ func (s *GCETestSuite) TestCommitteeElection_Success() {
 	committee, err := e.CommitteeElection(sid, state, weight, s.vrf, s.rbexp)
 	s.NoError(err)
 	s.Len(committee, 1)
-	s.Equal(outputs[0].VK, committee[0].IdentityData)
+	s.Equal(outputs[0].VK, committee[0].VK)
 	s.Equal(outputs[0].Grade, committee[0].Grade)
 
 	s.vrf.AssertExpectations(s.T())
@@ -274,7 +276,7 @@ func (s *GCETestSuite) TestCommitteeElection_ErrorRBExpVer() {
 	piVrf := []byte("piVRF_hash")
 	s.vrf.On("Eval", hashInput, sk).Return(phiVrf, piVrf, nil).Once()
 	auxKey := &common.AuxKey{PhiVRF: phiVrf, PiVRF: piVrf, PhiVDF: phiVDF, PiVDF: piVDF}
-	s.rbexp.On("Verify", sid, vk, challenge, proof, auxKey, weight).Return([]*common.RBExpOutput(nil), assert.AnError).Once()
+	s.rbexp.On("Verify", sid, vk, challenge, proof, auxKey, weight).Return([]*common.CommitteeOutput(nil), assert.AnError).Once()
 
 	_, err := e.CommitteeElection(sid, state, weight, s.vrf, s.rbexp)
 	s.Error(err)

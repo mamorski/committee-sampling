@@ -46,7 +46,7 @@ type receivedMessage struct {
 	id         string
 	sid        string
 	vk         []byte
-	ch         []byte
+	v          []byte
 	aux        *common.AuxTag
 	merklePath [][][]byte
 }
@@ -125,7 +125,7 @@ func (e *ExAnte) Verify(
 	sigma [][][]byte,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterTagF) (map[common.Key]common.O, error) {
+	filterFn common.FilterTagF) (*common.Committee, error) {
 
 	if e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -179,7 +179,7 @@ func (e *ExAnte) Verify(
 
 		e.network.SendProtocolMessage(protocolID, msgBytes)
 	}
-	results := make(map[common.Key]common.O)
+	results := &common.Committee{}
 
 	for r := 1; r < R; r++ {
 		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
@@ -192,39 +192,20 @@ func (e *ExAnte) Verify(
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
-				g := min(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
-
-				key := common.Key{VK: string(msg.vk), Ch: string(msg.ch)}
-				if v, exists := results[key]; !exists || g > v.Grade {
-					e.logger.Debug("Adding or updating message result",
-						zap.String("sid", msg.sid),
-						zap.String("vk", string(msg.vk)),
-						zap.String("challenge", string(msg.ch)),
-						zap.Int("grade", g),
-					)
-
-					results[key] = common.O{
-						ID:        msg.id,
-						VK:        msg.vk,
-						Challenge: msg.ch,
-						Aux:       msg.aux,
-						Grade:     g,
-					}
+				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
+				if results.Add(msg.vk, msg.v, msg.id, g) {
+					e.logger.Debug("Added to results", zap.String("vk", string(msg.vk)),
+						zap.String("value", string(msg.v)), zap.Int("grade", g))
 				} else {
-					e.logger.Debug("Ignoring message with lower grade",
-						zap.String("sid", msg.sid),
-						zap.String("vk", string(msg.vk)),
-						zap.String("challenge", string(msg.ch)),
-						zap.Int("grade", g),
-						zap.Int("existing_grade", v.Grade))
-					// Ignore this message as it has a lower grade than the existing one
+					e.logger.Debug("Skipping message with lower grade",
+						zap.String("vk", string(msg.vk)), zap.String("value", string(msg.v)), zap.Int("grade", g))
 					continue
 				}
 
 				pMsg := &pb.TimestampMessage{
 					SessionId:       session,
 					VerificationKey: msg.vk,
-					Value:           msg.ch,
+					Value:           msg.v,
 					Aux: &pb.Aux{
 						PiRP: msg.aux.PiRP,
 						AuxKey: &pb.AuxKeyMessage{
@@ -325,7 +306,7 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		id:  msg.Id,
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
-		ch:  msg.Value,
+		v:   msg.Value,
 		aux: &common.AuxTag{
 			PiRP: msg.Aux.PiRP,
 			AuxKey: &common.AuxKey{
@@ -373,15 +354,15 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !filterFn(msg.sid, msg.id, msg.vk, msg.ch, msg.aux) {
+	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
 		return false
 	}
 
-	if !(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal) > 0) {
+	if !(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
 		return false
 	}
 
-	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.ch, msg.aux.PiRP), msg.merklePath[0]) {
+	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.v, msg.aux.PiRP), msg.merklePath[0]) {
 		return false
 	}
 

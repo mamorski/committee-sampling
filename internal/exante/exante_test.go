@@ -1,6 +1,7 @@
 package exante
 
 import (
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
@@ -117,10 +118,6 @@ func (suite *ExAnteTestSuite) SetupTest() {
 	suite.testChallenge = []byte("test-challenge")
 	suite.testNeighbors = []string{"node1", "node2", "node3"}
 	suite.testNodeID = "test-node"
-	//
-	// // Setup mock expectations for constructor
-	// suite.mockNetwork.On("GetNeighbors").Return(suite.testNeighbors)
-	// suite.mockNetwork.On("RegisterHandler", mock.AnythingOfType("string"), mock.AnythingOfType("network.MessageHandler")).Return()
 
 	// Create ExAnte instance manually (not using New)
 	suite.exante = &ExAnte{
@@ -313,7 +310,7 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	receivedMsg := suite.exante.messages[0]["node1"]
 	suite.Equal(suite.testSID, receivedMsg.sid)
 	suite.Equal(suite.testVK, receivedMsg.vk)
-	suite.Equal(suite.testChallenge, receivedMsg.ch)
+	suite.Equal(suite.testChallenge, receivedMsg.v)
 	suite.Equal(testAux.PiRP, receivedMsg.aux.PiRP)
 }
 
@@ -551,7 +548,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_Success() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("oracle-result")},
@@ -596,7 +593,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_FilterFails() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("path1")},
@@ -821,7 +818,7 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 		"node1": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge,
+			v:   suite.testChallenge,
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -853,8 +850,12 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.False(suite.exante.isRunning)
 
 	// Verify that the message was processed and included in results
-	key := common.Key{VK: string(suite.testVK), Ch: string(suite.testChallenge)}
-	suite.Contains(result, key)
+	r, exists := result.Get(
+		base64.StdEncoding.EncodeToString(suite.testVK),
+		base64.StdEncoding.EncodeToString(suite.testChallenge),
+	)
+	suite.True(exists)
+	suite.Equal(2, r.Grade)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -896,7 +897,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		"node1": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge,
+			v:   suite.testChallenge,
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -905,7 +906,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		"node2": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge, // Same key as node1
+			v:   suite.testChallenge, // Same key as node1
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -935,9 +936,13 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.NotNil(result)
 
 	// Should only have one entry for the key (higher grade wins)
-	key := common.Key{VK: string(suite.testVK), Ch: string(suite.testChallenge)}
-	suite.Contains(result, key)
-	suite.Len(result, 1)
+	r, exists := result.Get(
+		base64.StdEncoding.EncodeToString(suite.testVK),
+		base64.StdEncoding.EncodeToString(suite.testChallenge),
+	)
+	suite.True(exists)
+	suite.Equal(result.Len(), 1)
+	suite.Equal(3, r.Grade) // Should take the higher grade from node2
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -958,7 +963,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("path1")},
@@ -990,7 +995,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_OracleNotInFirstLevel() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("different-value")}, // Oracle result will NOT be found here
@@ -1022,7 +1027,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("oracle-result")}, // Oracle result found here

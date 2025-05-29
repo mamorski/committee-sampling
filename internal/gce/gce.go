@@ -19,7 +19,7 @@ type VDF interface {
 
 type RBExp interface {
 	Generate(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
-	Verify(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.RBExpOutput, error)
+	Verify(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey, auxLocal float64) ([]*common.CommitteeOutput, error)
 }
 
 type Election struct {
@@ -38,13 +38,6 @@ type LocalState struct {
 	PiVDF  []byte
 }
 
-// CommitteeOutput is the final output for an elected candidate: a pair (id||vk, grade).
-type CommitteeOutput struct {
-	ID           string
-	IdentityData []byte
-	Grade        int
-}
-
 // HashData concatenates all input byte slices and returns their SHA-256 hash.
 func HashData(data ...[]byte) []byte {
 	h := sha256.New()
@@ -57,7 +50,7 @@ func HashData(data ...[]byte) []byte {
 // New creates a new instance of the Election struct with a logger.
 func New(logger *zap.Logger) *Election {
 	return &Election{
-		logger: logger,
+		logger: logger.Named("election"),
 	}
 }
 
@@ -121,7 +114,12 @@ func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf V
 //   - rbexp: an implementation of the RBExp interface (for verification).
 //
 // Returns a slice of CommitteeOutput representing elected committee members.
-func (e *Election) CommitteeElection(sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp) ([]CommitteeOutput, error) {
+func (e *Election) CommitteeElection(
+	sid string,
+	state *LocalState,
+	weight float64,
+	vrf VRF,
+	rbexp RBExp) ([]*common.CommitteeOutput, error) {
 
 	if state == nil || len(state.VRFSecret) == 0 {
 		return nil, errors.New("invalid local state")
@@ -144,18 +142,9 @@ func (e *Election) CommitteeElection(sid string, state *LocalState, weight float
 	// Step 2: Run RB-ExP.Verify.
 	outputs, err := rbexp.Verify(sid, state.VRFPublic, state.Challenge, state.RBExpProof, auxKey, weight)
 	if err != nil {
+		e.logger.Error("RBExp verification failed")
 		return nil, err
 	}
 
-	// Step 3: Process the outputs.
-	var committee []CommitteeOutput
-	for _, out := range outputs {
-		committee = append(committee, CommitteeOutput{
-			ID:           out.ID,
-			IdentityData: out.VK,
-			Grade:        out.Grade,
-		})
-	}
-
-	return committee, nil
+	return outputs, err
 }

@@ -1,6 +1,7 @@
 package expost
 
 import (
+	"encoding/base64"
 	"sync"
 	"testing"
 	"time"
@@ -991,11 +992,12 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	}
 
 	suite.expost.state = sigma
-	suite.expost.startTime = time.Now().Add(-time.Hour) // Past time to avoid waiting
+	suite.expost.startTime = time.Now().Add(-time.Hour) // Pastime to avoid waiting
 
 	// Add a valid message to process with sufficient merkle path layers
 	validMsg := receivedMessage{
 		sid: suite.sid,
+		id:  "test-node",
 		vk:  []byte("test-vk"),
 		v:   []byte("test-value"),
 		aux: &common.AuxTag{
@@ -1037,14 +1039,15 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 
 	suite.NoError(err)
 	suite.NotNil(results)
-	suite.Len(results, 1) // Should have one result from the processed message
+	suite.Equal(results.Len(), 1) // Should have one result from the processed message
 
 	// Verify the result contains the expected data
-	key := common.Key{VK: "test-vk", Ch: "test-value"}
-	result, exists := results[key]
+	result, exists := results.Get(
+		base64.StdEncoding.EncodeToString([]byte("test-vk")),
+		base64.StdEncoding.EncodeToString([]byte("test-value")),
+	)
 	suite.True(exists)
-	suite.Equal([]byte("test-vk"), result.VK)
-	suite.Equal([]byte("test-value"), result.Challenge)
+	suite.Equal("test-node", result.ID)
 	suite.Equal(3, result.Grade) // min(d-r/D, gradeFunc) = min(3-1/5, 5) = min(3, 5) = 3
 
 	suite.mockMDAG.AssertExpectations(suite.T())
@@ -1109,7 +1112,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 
 	suite.NoError(err)
 	suite.NotNil(results)
-	suite.Len(results, 1) // Should still have only one result (higher grade wins)
+	suite.Equal(results.Len(), 1) // Should still have only one result (higher grade wins)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 	suite.mockNetwork.AssertExpectations(suite.T())

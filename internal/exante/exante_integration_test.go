@@ -242,7 +242,7 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	}
 
 	// Verification phase
-	var result1, result2 map[common.Key]common.O
+	var result1, result2 *common.Committee
 	var verifyErr1, verifyErr2 error
 
 	var wg sync.WaitGroup
@@ -397,7 +397,7 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	}
 
 	// Verification phase
-	var result1, result2, result3 map[common.Key]common.O
+	var result1, result2, result3 *common.Committee
 	var verifyErr1, verifyErr2, verifyErr3 error
 
 	var verifyWg sync.WaitGroup
@@ -556,7 +556,7 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	node2.messageCounter = 0
 
 	// Verification phase - node1 should act as prover
-	var result1, result2 map[common.Key]common.O
+	var result1, result2 *common.Committee
 	var verifyErr1, verifyErr2 error
 
 	var verifyWg sync.WaitGroup

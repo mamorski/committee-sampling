@@ -133,7 +133,7 @@ func (e *ExPost) Verify(
 	fSigmaExp *common.FSigmaExp,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterTagF) (map[common.Key]common.O, error) { //nolint:funlen
+	filterFn common.FilterTagF) (*common.Committee, error) { //nolint:funlen
 
 	if e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -155,7 +155,7 @@ func (e *ExPost) Verify(
 		zap.String("session_id", session),
 		zap.String("node_id", e.network.GetNodeID()))
 
-	results := make(map[common.Key]common.O)
+	results := &common.Committee{}
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, session)
 
 	// Step 2: Prover logic for round 0
@@ -205,30 +205,12 @@ func (e *ExPost) Verify(
 					zap.String("from_vk", string(msg.vk)))
 
 				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal))
-				key := common.Key{VK: string(msg.vk), Ch: string(msg.v)}
-
-				if v, exists := results[key]; !exists || g > v.Grade {
-					e.logger.Debug("Adding or updating message in results",
-						zap.String("vk", string(msg.vk)),
-						zap.String("value", string(msg.v)),
-						zap.Int("grade", g),
-					)
-
-					results[key] = common.O{
-						ID:        msg.id,
-						VK:        msg.vk,
-						Challenge: msg.v,
-						Aux: &common.AuxTag{
-							AuxKey: msg.aux.AuxKey,
-						},
-						Grade: g,
-					}
+				if results.Add(msg.vk, msg.v, msg.id, g) {
+					e.logger.Debug("Added to results", zap.String("vk", string(msg.vk)),
+						zap.String("value", string(msg.v)), zap.Int("grade", g))
 				} else {
-					e.logger.Debug("Ignoring message with lower grade",
-						zap.String("vk", string(msg.vk)),
-						zap.String("value", string(msg.v)),
-						zap.Int("grade", g),
-						zap.Int("existing_grade", results[key].Grade))
+					e.logger.Debug("Skipping message with lower grade",
+						zap.String("vk", string(msg.vk)), zap.String("value", string(msg.v)), zap.Int("grade", g))
 					continue
 				}
 
