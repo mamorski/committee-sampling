@@ -15,5 +15,5 @@ message MDAGMessage {
   bytes label = 3;
 
   // Identity of the sending node
-  string from = 4;
+  string id = 4;
 }

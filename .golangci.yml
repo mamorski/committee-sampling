@@ -41,8 +41,8 @@ linters-settings:
       - wrapperFunc
       - whyNoLint
   funlen:
-    lines: 155
-    statements: 70
+    lines: 200
+    statements: 100
 
 linters:
   # please, do not use `enable-all`: it's deprecated and will be removed soon.

@@ -2,8 +2,10 @@ package resourcebound
 
 import (
 	"errors"
+	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"go.uber.org/zap"
 )
 
 type ResourceProof interface {
@@ -20,7 +22,7 @@ type ExPost interface {
 		fSigmaExp *common.FSigmaExp,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter common.FilterTagF) (map[common.Key]common.O, error)
+		filterFn common.FilterTagF) (*common.Committee, error)
 }
 
 type ExAnte interface {
@@ -31,7 +33,7 @@ type ExAnte interface {
 		sigma [][][]byte,
 		auxTag *common.AuxTag,
 		auxLocal float64,
-		filter common.FilterTagF) (map[common.Key]common.O, error)
+		filter common.FilterTagF) (*common.Committee, error)
 }
 
 type RbExp struct {
@@ -40,19 +42,30 @@ type RbExp struct {
 	exa     ExAnte
 	weight  float64
 	ffilter common.FilterF
+	logger  *zap.Logger
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64) *RbExp {
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, logger *zap.Logger) *RbExp {
 	return &RbExp{
 		rp:      rp,
 		exp:     exp,
 		exa:     exa,
 		weight:  weight,
 		ffilter: ffilter,
+		logger:  logger.Named("rbexp"),
 	}
 }
 
 func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, error) {
+	r.logger.Info("Generate started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Generate completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	// Step 1
 	auxRP, err := r.rp.Setup(vk)
 	if err != nil {
@@ -66,7 +79,10 @@ func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, err
 	}
 
 	// Step 3
+	startTime := time.Now()
 	piRP, err := r.rp.Prove(vk, r.weight, challenge, auxRP)
+	r.logger.Debug("Resource Proof took: %d ms",
+		zap.Int64("runtime", time.Now().Sub(startTime).Milliseconds()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -91,10 +107,19 @@ func (r *RbExp) Verify(
 	vk, ch []byte,
 	proof *common.RBExpProof,
 	auxKey *common.AuxKey,
-	auxLocal float64) ([]*common.RBExpOutput, error) {
+	auxLocal float64,
+) ([]*common.CommitteeOutput, error) {
+	r.logger.Info("Verify started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Verify completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
-	fTag := func(sid string, vk []byte, ch []byte, tag *common.AuxTag) bool {
-		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, vk, ch, tag.AuxKey)
+	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
+		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)
 	}
 	// Step 1
 	auxTag := &common.AuxTag{
@@ -109,28 +134,39 @@ func (r *RbExp) Verify(
 	if err != nil {
 		return nil, err
 	}
+	r.logger.Debug("RBExp outputs from ExPost verification",
+		zap.String("sid", sid),
+		zap.Int("num_outputs", oP.Len()),
+	)
 
 	// Step 2
 	oA, err := r.exa.Verify(sid, vk, proof.SigmaExa, auxTag, auxLocal, fTag)
 	if err != nil {
 		return nil, err
 	}
+	r.logger.Debug("RBExp outputs from ExAnte verification",
+		zap.String("sid", sid),
+		zap.Int("num_outputs", oA.Len()),
+	)
 
-	var outputs []*common.RBExpOutput
-	for key, value := range oP {
-		oAValues, ok := oA[key]
-		if !ok {
-			continue
+	var outputs []*common.CommitteeOutput
+	oP.Range(func(key, ch string, val common.O) {
+		if exAnteValue, ok := oA.Get(key, ch); ok {
+			g := min(val.Grade, exAnteValue.Grade)
+			outputs = append(outputs, &common.CommitteeOutput{
+				ID:    val.ID,
+				VK:    key,
+				Grade: g,
+			})
+		} else {
+			r.logger.Debug("No matching ExAnte value for ExPost",
+				zap.String("sid", sid),
+				zap.String("vk", key),
+				zap.String("challenge", ch),
+			)
 		}
-		g := min(value.Grade, oAValues.Grade)
-		outputs = append(outputs, &common.RBExpOutput{
-			SID:       sid,
-			VK:        value.VK,
-			Challenge: value.Challenge,
-			AuxTag:    value.Aux,
-			Grade:     g,
-		})
-	}
+	})
+
 	if len(outputs) == 0 {
 		return nil, errors.New("verification failed: no matching output")
 	}

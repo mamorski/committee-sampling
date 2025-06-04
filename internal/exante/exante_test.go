@@ -1,6 +1,7 @@
 package exante
 
 import (
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
@@ -72,6 +73,16 @@ func (m *MockMDAG) Oracle(h ...[]byte) []byte {
 	return args.Get(0).([]byte)
 }
 
+func filterTrue(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+	// Always return true for testing purposes
+	return true
+}
+
+func filterFalse(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+	// Always return false for testing purposes
+	return false
+}
+
 // ExAnteTestSuite defines the test suite for ExAnte
 type ExAnteTestSuite struct {
 	suite.Suite
@@ -107,10 +118,6 @@ func (suite *ExAnteTestSuite) SetupTest() {
 	suite.testChallenge = []byte("test-challenge")
 	suite.testNeighbors = []string{"node1", "node2", "node3"}
 	suite.testNodeID = "test-node"
-	//
-	// // Setup mock expectations for constructor
-	// suite.mockNetwork.On("GetNeighbors").Return(suite.testNeighbors)
-	// suite.mockNetwork.On("RegisterHandler", mock.AnythingOfType("string"), mock.AnythingOfType("network.MessageHandler")).Return()
 
 	// Create ExAnte instance manually (not using New)
 	suite.exante = &ExAnte{
@@ -141,7 +148,7 @@ func (suite *ExAnteTestSuite) TearDownTest() {
 }
 
 // mockGradeFunction is a simple grade function for testing
-func (suite *ExAnteTestSuite) mockGradeFunction(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+func (suite *ExAnteTestSuite) mockGradeFunction(_ string, _ []byte, _ []byte, _ *common.AuxKey, _ float64) int {
 	return 5 // Return a fixed grade for testing
 }
 
@@ -303,7 +310,7 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	receivedMsg := suite.exante.messages[0]["node1"]
 	suite.Equal(suite.testSID, receivedMsg.sid)
 	suite.Equal(suite.testVK, receivedMsg.vk)
-	suite.Equal(suite.testChallenge, receivedMsg.ch)
+	suite.Equal(suite.testChallenge, receivedMsg.v)
 	suite.Equal(testAux.PiRP, receivedMsg.aux.PiRP)
 }
 
@@ -541,7 +548,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_Success() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("oracle-result")},
@@ -557,11 +564,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_Success() {
 	// Mock Oracle and filter function
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Twice()
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result := suite.exante.isMessageValid(msg, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(msg, 1.0, filterTrue, 1)
 
 	suite.True(result)
 	suite.mockMDAG.AssertExpectations(suite.T())
@@ -569,11 +572,8 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_Success() {
 
 // TestIsMessageValid_NilMessage tests with nil message
 func (suite *ExAnteTestSuite) TestIsMessageValid_NilMessage() {
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
 
-	result := suite.exante.isMessageValid(nil, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(nil, 1.0, filterTrue, 1)
 
 	suite.False(result)
 }
@@ -593,18 +593,14 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_FilterFails() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("path1")},
 		},
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return false // Filter rejects the message
-	}
-
-	result := suite.exante.isMessageValid(msg, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(msg, 1.0, filterFalse, 1)
 
 	suite.False(result)
 }
@@ -660,7 +656,11 @@ func (suite *ExAnteTestSuite) TestConvertTimestampToBytes() {
 // Helper functions for creating test messages
 
 // createTestTimestampMessage creates a test TimestampMessage
-func createTestTimestampMessage(sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string) *pb.TimestampMessage {
+//
+//nolint:unparam
+func createTestTimestampMessage(
+	sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string) *pb.TimestampMessage {
+
 	return &pb.TimestampMessage{
 		SessionId:       sessionID,
 		VerificationKey: vk,
@@ -678,7 +678,7 @@ func createTestTimestampMessage(sessionID string, vk []byte, challenge []byte, a
 			{Row: [][]byte{[]byte("test-merkle-path")}},
 		},
 		Round: round,
-		From:  from,
+		Id:    from,
 	}
 }
 
@@ -713,11 +713,7 @@ func (suite *ExAnteTestSuite) TestVerify_SessionIDMismatch() {
 		{[]byte("sigma6")}, // d * D = 3 * 2 = 6, so we need at least 7 elements
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result, err := suite.exante.Verify(wrongSession, suite.testVK, sigma, testAux, 1.0, filterFn)
+	result, err := suite.exante.Verify(wrongSession, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
 	suite.Error(err)
 	suite.Nil(result)
@@ -741,11 +737,7 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 		// Insufficient length: need d * D = 3 * 2 = 6, but only have 2
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterFn)
+	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
 	suite.Error(err)
 	suite.Nil(result)
@@ -779,18 +771,14 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 		return 5 // >= d+1 = 4, so node is a prover
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true // Filter accepts
-	}
-
 	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(2) // Called for logging and message creation
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(3) // Called for logging and message creation
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Set start time to past so rounds execute immediately
 	suite.exante.startTime = time.Now().Add(-time.Hour)
 
-	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterFn)
+	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
 	suite.NoError(err)
 	suite.NotNil(result)
@@ -825,16 +813,12 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 		return 2 // < d+1 = 4, so node is not a prover initially
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
 	// Pre-populate messages to simulate incoming messages
 	suite.exante.messages[0] = map[string]receivedMessage{
 		"node1": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge,
+			v:   suite.testChallenge,
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -859,15 +843,19 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	// Set start time to past so rounds execute immediately
 	suite.exante.startTime = time.Now().Add(-time.Hour)
 
-	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterFn)
+	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
 	suite.NoError(err)
 	suite.NotNil(result)
 	suite.False(suite.exante.isRunning)
 
 	// Verify that the message was processed and included in results
-	key := common.Key{VK: string(suite.testVK), Ch: string(suite.testChallenge)}
-	suite.Contains(result, key)
+	r, exists := result.Get(
+		base64.StdEncoding.EncodeToString(suite.testVK),
+		base64.StdEncoding.EncodeToString(suite.testChallenge),
+	)
+	suite.True(exists)
+	suite.Equal(2, r.Grade)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -904,16 +892,12 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		return 3 // Subsequent calls (message processing) - valid grade
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
 	// Pre-populate messages with same key but different senders
 	suite.exante.messages[0] = map[string]receivedMessage{
 		"node1": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge,
+			v:   suite.testChallenge,
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -922,7 +906,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		"node2": {
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			ch:  suite.testChallenge, // Same key as node1
+			v:   suite.testChallenge, // Same key as node1
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},
@@ -947,14 +931,18 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	// Set start time to past so rounds execute immediately
 	suite.exante.startTime = time.Now().Add(-time.Hour)
 
-	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterFn)
+	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 	suite.NoError(err)
 	suite.NotNil(result)
 
 	// Should only have one entry for the key (higher grade wins)
-	key := common.Key{VK: string(suite.testVK), Ch: string(suite.testChallenge)}
-	suite.Contains(result, key)
-	suite.Len(result, 1)
+	r, exists := result.Get(
+		base64.StdEncoding.EncodeToString(suite.testVK),
+		base64.StdEncoding.EncodeToString(suite.testChallenge),
+	)
+	suite.True(exists)
+	suite.Equal(result.Len(), 1)
+	suite.Equal(3, r.Grade) // Should take the higher grade from node2
 
 	suite.mockMDAG.AssertExpectations(suite.T())
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -975,7 +963,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("path1")},
@@ -987,11 +975,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 		return 0 // Grade is not > 0
 	}
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result := suite.exante.isMessageValid(msg, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(msg, 1.0, filterTrue, 1)
 
 	suite.False(result)
 }
@@ -1011,7 +995,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_OracleNotInFirstLevel() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("different-value")}, // Oracle result will NOT be found here
@@ -1021,11 +1005,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_OracleNotInFirstLevel() {
 	// Mock Oracle to return a value not in merklePath[0]
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result-not-found")).Once()
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result := suite.exante.isMessageValid(msg, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(msg, 1.0, filterTrue, 1)
 
 	suite.False(result)
 
@@ -1047,7 +1027,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 	msg := &receivedMessage{
 		sid: suite.testSID,
 		vk:  suite.testVK,
-		ch:  suite.testChallenge,
+		v:   suite.testChallenge,
 		aux: testAux,
 		merklePath: [][][]byte{
 			{[]byte("oracle-result")}, // Oracle result found here
@@ -1064,11 +1044,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Once() // For isValueInState check
 	// validateMerklePath will fail due to insufficient state length, so no more Oracle calls
 
-	filterFn := func(sid string, vk []byte, ch []byte, aux *common.AuxTag) bool {
-		return true
-	}
-
-	result := suite.exante.isMessageValid(msg, 1.0, filterFn, 1)
+	result := suite.exante.isMessageValid(msg, 1.0, filterTrue, 1)
 
 	suite.False(result)
 

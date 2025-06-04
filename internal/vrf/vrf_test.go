@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 )
 
 type VRFSuite struct {
@@ -13,23 +14,23 @@ type VRFSuite struct {
 }
 
 func (s *VRFSuite) SetupTest() {
-	s.vrf = New()
+	s.vrf = New(zap.NewNop())
 }
 
 func (s *VRFSuite) TestGen() {
-	for _, lambda := range []int{128, 192, 256} {
-		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+	for _, lambda := range []int{224, 256, 384} {
+		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.NoError(err)
 		s.NotEmpty(secretKey)
 		s.NotEmpty(verificationKey)
 	}
-	_, _, err := s.vrf.Gen(512)
+	_, _, err := s.vrf.Generate(512)
 	s.Error(err)
 }
 
 func (s *VRFSuite) TestEval() {
-	for _, lambda := range []int{128, 192, 256} {
-		secretKey, _, err := s.vrf.Gen(lambda)
+	for _, lambda := range []int{224, 256, 384} {
+		secretKey, _, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.NoError(err)
@@ -39,8 +40,8 @@ func (s *VRFSuite) TestEval() {
 }
 
 func (s *VRFSuite) TestVerify() {
-	for _, lambda := range []int{128, 192, 256} {
-		secretKey, verificationKey, err := s.vrf.Gen(lambda)
+	for _, lambda := range []int{224, 384, 256} {
+		secretKey, verificationKey, err := s.vrf.Generate(lambda)
 		s.Require().NoError(err)
 		phi, pi, err := s.vrf.Eval([]byte("test-input"), secretKey)
 		s.Require().NoError(err)
@@ -56,22 +57,24 @@ func (s *VRFSuite) TestVerify() {
 
 func (s *VRFSuite) TestSelectCurve() {
 	tests := []struct {
-		lambda     int
-		expected   elliptic.Curve
-		shouldFail bool
+		lambda        int
+		expected      elliptic.Curve
+		expectedSuite byte
+		shouldFail    bool
 	}{
-		{128, elliptic.P224(), false},
-		{192, elliptic.P384(), false},
-		{256, elliptic.P256(), false},
-		{512, nil, true},
+		{224, elliptic.P224(), 0x02, false},
+		{384, elliptic.P384(), 0x03, false},
+		{256, elliptic.P256(), 0x01, false},
+		{512, nil, 0x00, true},
 	}
 	for _, test := range tests {
-		curve, _, err := selectCurveAndHash(test.lambda)
+		curve, _, suiteString, err := selectCurveAndHash(test.lambda)
 		if test.shouldFail {
 			s.Error(err)
 		} else {
 			s.NoError(err)
 			s.Equal(test.expected, curve)
+			s.Equal(test.expectedSuite, suiteString)
 		}
 	}
 }

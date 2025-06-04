@@ -200,7 +200,7 @@ func (suite *MDAGTestSuite) TestHandleMessageNotRunning() {
 		SessionId: "test-session",
 		Round:     0,
 		Label:     []byte("test-label"),
-		From:      "node1",
+		Id:        "node1",
 	}
 	validData, err := proto.Marshal(validMsg)
 	suite.Require().NoError(err)
@@ -242,7 +242,7 @@ func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
 		SessionId: "test-session",
 		Round:     0,
 		Label:     []byte("test-label"),
-		From:      "node1",
+		Id:        "node1",
 	}
 	validData, err := proto.Marshal(validMsg)
 	suite.Require().NoError(err)
@@ -256,7 +256,7 @@ func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
 		SessionId: "test-session",
 		Round:     0,
 		Label:     []byte("test-label"),
-		From:      "unknown-node",
+		Id:        "unknown-node",
 	}
 	unknownData, err := proto.Marshal(unknownMsg)
 	suite.Require().NoError(err)
@@ -271,7 +271,7 @@ func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
 		SessionId: "wrong-session",
 		Round:     0,
 		Label:     []byte("test-label"),
-		From:      "node1",
+		Id:        "node1",
 	}
 	mismatchData, err := proto.Marshal(mismatchMsg)
 	suite.Require().NoError(err)

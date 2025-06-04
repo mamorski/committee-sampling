@@ -3,6 +3,8 @@ package resourceproof
 import (
 	"errors"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // Mock implementation of the ProofOfWork interface for testing.
@@ -27,6 +29,7 @@ func (m *mockProofOfWork) Verify(_ []byte, _ int, proof []byte) bool {
 func TestProve_Success(t *testing.T) {
 	rp := &ResourceProof{
 		proofOfWork: &mockProofOfWork{shouldFail: false},
+		logger:      zap.NewNop(), // Use a no-op logger for testing
 	}
 
 	vk := []byte("test_vk")
@@ -48,6 +51,7 @@ func TestProve_Success(t *testing.T) {
 func TestProve_Failure(t *testing.T) {
 	rp := &ResourceProof{
 		proofOfWork: &mockProofOfWork{shouldFail: true},
+		logger:      zap.NewNop(), // Use a no-op logger for testing
 	}
 
 	vk := []byte("test_vk")
@@ -65,6 +69,7 @@ func TestProve_Failure(t *testing.T) {
 func TestVerify_Success(t *testing.T) {
 	rp := &ResourceProof{
 		proofOfWork: &mockProofOfWork{shouldFail: false},
+		logger:      zap.NewNop(), // Use a no-op logger for testing
 	}
 
 	vk := []byte("test_vk")
@@ -81,6 +86,7 @@ func TestVerify_Success(t *testing.T) {
 func TestVerify_Failure(t *testing.T) {
 	rp := &ResourceProof{
 		proofOfWork: &mockProofOfWork{shouldFail: false},
+		logger:      zap.NewNop(), // Use a no-op logger for testing
 	}
 
 	vk := []byte("test_vk")

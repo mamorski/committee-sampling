@@ -1,25 +1,26 @@
 package boot
 
 import (
-	"context"
 	"crypto/sha256"
+	"fmt"
+	"math"
 	"math/big"
 	"time"
 
-	"github.com/beevik/ntp"
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/resourceproof"
-	"github.com/mamorski/committee-sampling/internal/vdf"
-	"github.com/mamorski/committee-sampling/internal/vrf"
-	"go.uber.org/zap"
-
 	"github.com/mamorski/committee-sampling/internal/exante"
 	"github.com/mamorski/committee-sampling/internal/expost"
 	"github.com/mamorski/committee-sampling/internal/gce"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/resourcebound"
+	"github.com/mamorski/committee-sampling/internal/resourceproof"
+	"github.com/mamorski/committee-sampling/internal/vdf"
+	"github.com/mamorski/committee-sampling/internal/vrf"
 	"github.com/mamorski/committee-sampling/pkg/config"
+
+	"github.com/beevik/ntp"
+	"go.uber.org/zap"
 )
 
 type Bootstrap struct {
@@ -49,31 +50,30 @@ func Oracle(data []byte) []byte {
 	return hash[:]
 }
 
-func New(cfg *config.Config) (*Bootstrap, error) {
+//nolint:funlen
+func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstrap, error) {
 
-	logger, err := zap.NewProduction()
-	if err != nil {
-		return nil, err
-	}
-
-	node, err := network.New(context.Background(), cfg.Network, logger)
-	if err != nil {
-		return nil, err
-	}
-
-	startTimes := CalculateStartTimes(cfg)
+	startTimes := CalculateStartTimes(cfg, logger)
 	// Sleep until the ExPost MDAG starts, minus 15 seconds to allow for setup.
 	// This ensures that enough neighbors are connected before starting the MDAG.
 	time.Sleep(time.Until(startTimes.ExPostMDAG.Add(-15 * time.Second)))
 
-	vdFunc := vdf.New()
-	vrFunc := vrf.New()
+	vdFunc := vdf.New(logger)
+	vrFunc := vrf.New(logger)
 
-	filterF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey) bool {
-		id := node.GetNodeID()
+	filterF := func(sid, id string, vk []byte, ch []byte, auxKey *common.AuxKey) bool {
 		vdfInput := gce.HashData([]byte(id), vk, ch)
 		vrfInput := gce.HashData(auxKey.PhiVDF, []byte(sid))
 
+		logger.Debug("Filter function called, verifying VDF and VRF",
+			zap.String("node_id", id),
+			zap.String("sid", sid),
+			zap.Binary("vk", vk),
+			zap.Binary("challenge", ch),
+			zap.Binary("phi_vdf", auxKey.PhiVDF),
+			zap.Binary("pi_vdf", auxKey.PiVDF),
+			zap.Binary("VDF Input", vdfInput),
+		)
 		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVDF, auxKey.PiVDF, vk)
 		if err != nil {
 			logger.Error("Failed to verify VDF", zap.Error(err))
@@ -85,7 +85,7 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 
 		vrfRes, err := vrFunc.Verify(vrfInput, auxKey.PhiVRF, auxKey.PiVRF, vk)
 		if err != nil {
-			logger.Error("Failed to verify VRF", zap.Error(err))
+			logger.Warn("Failed to verify VRF", zap.Error(err))
 			return false
 		} else if !vrfRes {
 			logger.Warn("VRF verification failed", zap.String("node_id", id))
@@ -95,41 +95,32 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 		return true
 	}
 
-	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
-		phiInt := new(big.Int).SetBytes(auxKey.PhiVRF)
-		n := big.NewInt(int64(cfg.RunTime.CommitteeSize))
-		d := new(big.Float).SetInt64(int64(cfg.Graph.GradingLevels))
-		w := big.NewFloat(auxLocal)
+	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, weight float64) int {
 
-		// 1 / delta_w - currently set to 1.0, can be adjusted based on the protocol requirements
-		deltaW := big.NewFloat(1.0)
-
-		// 2^lambda
-		twoPowLambda := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(cfg.RunTime.Lambda)), nil)
-
-		// d + 1
-		d = d.Add(d, big.NewFloat(1.0))
-
-		// 2^lambda / (phi_vrf + 1)
-		twoPowLambda = twoPowLambda.Div(twoPowLambda, phiInt.Add(phiInt, big.NewInt(1)))
-
-		// n * (2^lambda / (phi_vrf + 1))
-		n = n.Mul(n, twoPowLambda)
-
-		// w - n * (2^lambda / (phi_vrf + 1))
-		w = w.Sub(w, new(big.Float).SetInt(n))
-
-		// r = (w - n * (2^lambda / (phi_vrf + 1))) * 1 / delta_w
-		r := w.Mul(w, deltaW)
-
-		// g = floor(d + 1 - (w - n * (2^lambda / (phi_vrf + 1))) * 1 / delta_w)
-		g, _ := big.NewFloat(0).Sub(d, r).Int64()
-
-		if int64(cfg.Graph.GradingLevels+1) <= g {
-			return cfg.Graph.GradingLevels + 1
+		g, err := ComputeGrade(
+			cfg.Graph.GradingLevels,
+			cfg.RunTime.CommitteeSize,
+			cfg.RunTime.Lambda,
+			weight,
+			cfg.RunTime.DeltaW,
+			auxKey.PhiVRF,
+		)
+		if err != nil {
+			logger.Warn("Failed to compute grade",
+				zap.String("sid", sid),
+				zap.Error(err),
+			)
+			return 0 // Return 0 if there's an error in grade calculation
 		}
 
-		return int(g)
+		logger.Info("Grading function calculated",
+			zap.String("sid", sid),
+			zap.Int("g", g),
+			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
+			zap.Binary("Phi^VRF", auxKey.PhiVRF),
+		)
+
+		return g
 	}
 
 	mdagExAnte := mdag.New(
@@ -180,14 +171,8 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 		logger,
 	)
 
-	rp := resourceproof.New()
-	rbExp := resourcebound.New(
-		rp,
-		exPost,
-		exAnte,
-		filterF,
-		cfg.RunTime.Weight,
-	)
+	rp := resourceproof.New(logger)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.RunTime.Weight, logger)
 
 	return &Bootstrap{
 		id:         node.GetNodeID(),
@@ -206,14 +191,17 @@ func New(cfg *config.Config) (*Bootstrap, error) {
 
 }
 
-func CalculateStartTimes(cfg *config.Config) *StartTimes {
-	response, err := ntp.Query("0.beevik-ntp.pool.ntp.org")
+func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
+	response, err := ntp.Query("il.pool.ntp.org")
 	if err != nil {
 		panic("Failed to query NTP server: " + err.Error())
 	}
 
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	startTime := time.Unix(cfg.RunTime.StartTime, 0).UTC().Add(response.ClockOffset)
+	logger.Info("Calculated start times",
+		zap.Int64("clockOffset", response.ClockOffset.Milliseconds()),
+	)
 
 	return &StartTimes{
 		ExPostMDAG:   startTime,
@@ -221,4 +209,70 @@ func CalculateStartTimes(cfg *config.Config) *StartTimes {
 		ExPostVerify: startTime.Add(cfg.RunTime.MDAGRoundTimeout*time.Duration(rounds) + (time.Second * 120)),
 		ExAnteVerify: startTime.Add(cfg.RunTime.ExPostRoundTimeout*time.Duration(rounds) + (time.Second * 10)),
 	}
+}
+
+// ComputeGrade parses φ from a VRF‐generated byte slice and computes:
+//
+//	gᵢ = d + 1 − (Wᵢ − n·2^λ/(φ+1))·(1/ΔW)
+//	return min{ d+1, floor(gᵢ) }.
+//
+// Inputs:
+//   - d         : integer “d”.
+//   - Wi        : float64 (Wᵢ).
+//   - n         : integer n.
+//   - beta      : []byte (VRF output, interpreted as a big‐endian integer φ).
+//   - deltaW    : float64 (ΔW, must be ≠ 0).
+//   - lambda    : integer λ (bit‐length for 2^λ).
+//
+// Returns:
+//   - int: ⌊gᵢ⌋ clamped to ≤ (d+1).
+//   - error if any input is invalid.
+//
+// This implementation uses big.Int and big.Float to compute 2^λ/(φ+1) with enough precision
+// before converting to float64. Finally, it floors and clamps as specified.
+func ComputeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte) (int, error) {
+	// 1) Validate inputs
+	if deltaW == 0 {
+		return 0, fmt.Errorf("deltaW must be nonzero")
+	}
+
+	// 2) Parse φ from the provided []byte
+	phiInt := new(big.Int).SetBytes(beta)
+	if phiInt.Sign() <= 0 {
+		return 0, fmt.Errorf("phi must be > 0")
+	}
+
+	// 3) Compute φ + 1 as big.Int
+	phiPlusOne := new(big.Int).Add(phiInt, big.NewInt(1))
+
+	// 4) Compute 2^λ as big.Int
+	twoToLambdaInt := new(big.Int).Lsh(big.NewInt(1), uint(lambda))
+
+	// 5) Convert numerator (2^λ) and denominator (φ+1) to big.Float
+	numerator := new(big.Float).SetInt(twoToLambdaInt)
+	denominator := new(big.Float).SetInt(phiPlusOne)
+
+	// 6) Compute ratio = 2^λ / (φ + 1) as big.Float, then to float64
+	ratioF, _ := new(big.Float).Quo(numerator, denominator).Float64()
+	//    ratioF ≈ 2^λ/(φ+1)
+
+	// 7) Compute the subterm: (Wᵢ − n·ratioF)
+	sub := Wi - float64(n)*ratioF
+
+	// 8) Multiply by (1/ΔW)
+	term := sub / deltaW
+
+	// 9) Compute gᵢ = (d + 1) − term
+	g := float64(d+1) - term
+
+	// 10) Take floor(gᵢ)
+	floorG := math.Floor(g)
+
+	// 11) Clamp to ≤ (d + 1)
+	maxGrade := float64(d + 1)
+	if floorG > maxGrade {
+		floorG = maxGrade
+	}
+
+	return int(floorG), nil
 }

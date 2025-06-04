@@ -42,6 +42,7 @@ type RunTimeConfig struct {
 	StartTime          int64         `mapstructure:"start_time"`            // Start time as Unix timestamp UTC
 	Lambda             int           `mapstructure:"lambda"`                // Security parameter for VRF and VDF
 	Weight             float64       `mapstructure:"weight"`                // Threshold for weight in the protocol
+	DeltaW             float64       `mapstructure:"delta_w"`               // Acceptable weight deviation
 	CommitteeSize      int           `mapstructure:"committee_size"`        // Size of the committee to be formed
 	ExAnteRoundTimeout time.Duration `mapstructure:"ex_ante_round_timeout"` // Timeout for ExAnte rounds in milliseconds
 	ExPostRoundTimeout time.Duration `mapstructure:"ex_post_round_timeout"` // Timeout for ExPost rounds in milliseconds

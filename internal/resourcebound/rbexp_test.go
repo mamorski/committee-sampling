@@ -1,12 +1,14 @@
 package resourcebound
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 )
@@ -34,13 +36,11 @@ func (m *MockExPost) Generate(session string, vk []byte) ([][][]byte, []byte, er
 	args := m.Called(session, vk)
 	return args.Get(0).([][][]byte), args.Get(1).([]byte), args.Error(2)
 }
-func (m *MockExPost) Verify(
-	session string, vk []byte,
-	fSigmaExp *common.FSigmaExp,
-	auxTag *common.AuxTag, auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+func (m *MockExPost) Verify(session string, vk []byte, fSigmaExp *common.FSigmaExp, auxTag *common.AuxTag, auxLocal float64,
+	_ common.FilterTagF) (*common.Committee, error) {
 
 	args := m.Called(session, vk, fSigmaExp, auxTag, auxLocal, mock.Anything)
-	return args.Get(0).(map[common.Key]common.O), args.Error(1)
+	return args.Get(0).(*common.Committee), args.Error(1)
 }
 
 type MockExAnte struct{ mock.Mock }
@@ -49,11 +49,11 @@ func (m *MockExAnte) Generate(session string, vk []byte, challenge []byte, rpPro
 	args := m.Called(session, vk, challenge, rpProof)
 	return args.Get(0).([][][]byte), args.Error(1)
 }
-func (m *MockExAnte) Verify(session string, vk []byte, sigma [][][]byte, auxTag *common.AuxTag,
-	auxLocal float64, _ common.FilterTagF) (map[common.Key]common.O, error) {
+func (m *MockExAnte) Verify(session string, vk []byte, sigma [][][]byte, auxTag *common.AuxTag, auxLocal float64,
+	_ common.FilterTagF) (*common.Committee, error) {
 
 	args := m.Called(session, vk, sigma, auxTag, auxLocal, mock.Anything)
-	return args.Get(0).(map[common.Key]common.O), args.Error(1)
+	return args.Get(0).(*common.Committee), args.Error(1)
 }
 
 type RbExpSuite struct {
@@ -70,7 +70,7 @@ func (s *RbExpSuite) SetupTest() {
 	s.exp = new(MockExPost)
 	s.exa = new(MockExAnte)
 	s.weight = 1.0
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight)
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight, zap.NewNop())
 }
 
 func TestRbExpSuite(t *testing.T) {
@@ -188,13 +188,10 @@ func (s *RbExpSuite) TestVer_Success() {
 	}
 	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
-	key := common.Key{VK: "key1", Ch: string(challenge)}
-	outputP := map[common.Key]common.O{
-		key: {VK: vk, Challenge: challenge, Aux: auxTag, Grade: 8},
-	}
-	outputA := map[common.Key]common.O{
-		key: {VK: vk, Challenge: challenge, Aux: auxTag, Grade: 5},
-	}
+	outputP := &common.Committee{}
+	outputP.Add(vk, challenge, "id1", 8)
+	outputA := &common.Committee{}
+	outputA.Add(vk, challenge, "id1", 5)
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(outputP, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(outputA, nil).Once()
@@ -203,10 +200,10 @@ func (s *RbExpSuite) TestVer_Success() {
 	require.NoError(s.T(), err)
 	require.Len(s.T(), outputs, 1)
 	out := outputs[0]
-	require.Equal(s.T(), sid, out.SID)
-	require.Equal(s.T(), vk, out.VK)
-	require.Equal(s.T(), challenge, out.Challenge)
+	decoded, _ := base64.StdEncoding.DecodeString(out.VK)
+	require.Equal(s.T(), vk, decoded)
 	require.Equal(s.T(), 5, out.Grade)
+	require.Equal(s.T(), "id1", out.ID)
 
 	s.rp.AssertExpectations(s.T())
 	s.exp.AssertExpectations(s.T())
@@ -229,8 +226,8 @@ func (s *RbExpSuite) TestVer_NoMatchingOutput() {
 	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
-	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
 
 	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
@@ -255,7 +252,7 @@ func (s *RbExpSuite) TestVer_ErrorExPost() {
 	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, assert.AnError).Once()
 
 	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
@@ -280,8 +277,8 @@ func (s *RbExpSuite) TestVer_ErrorExAnte() {
 	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
-	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
-	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, assert.AnError).Once()
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, assert.AnError).Once()
 
 	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)
@@ -307,10 +304,10 @@ func (s *RbExpSuite) TestVer_FilterFalse() {
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
 	// Use a filter that always returns false by changing the rbexp instance
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight)
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight, zap.NewNop())
 
-	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
-	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(map[common.Key]common.O{}, nil).Once()
+	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
 
 	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)

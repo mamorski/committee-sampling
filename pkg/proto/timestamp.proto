@@ -24,7 +24,7 @@ message TimestampMessage {
   uint32 round = 6;
   
   // Identity of the sending node
-  string from = 7;
+  string id = 7;
 }
 
 message State {

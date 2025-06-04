@@ -43,9 +43,10 @@ type ExAnte struct {
 }
 
 type receivedMessage struct {
+	id         string
 	sid        string
 	vk         []byte
-	ch         []byte
+	v          []byte
 	aux        *common.AuxTag
 	merklePath [][][]byte
 }
@@ -95,6 +96,14 @@ func New(
 
 // Generate implements the ExAnte Generate method using MDAG
 func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []byte) ([][][]byte, error) {
+	e.logger.Info("Generate started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("Generate completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	if e.sid != "" && e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -124,14 +133,23 @@ func (e *ExAnte) Verify(
 	sigma [][][]byte,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterTagF) (map[common.Key]common.O, error) {
+	filterFn common.FilterTagF) (*common.Committee, error) {
+
+	e.logger.Info("Verify started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("Verify completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	if e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
 	}
 
 	R := e.d * e.D
-	if len(sigma) <= R {
+	if len(sigma) < R {
 		e.isRunning = false
 		e.logger.Error("Sigma length is less than required rounds",
 			zap.Int("expected_rounds", R),
@@ -147,7 +165,7 @@ func (e *ExAnte) Verify(
 
 	// Check if P_i is also acts like a prover
 	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.d+1 &&
-		filterFn(session, vk, e.challenge, auxTag) {
+		filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxTag) {
 
 		e.logger.Info("Node is a prover, sending initial message")
 
@@ -166,7 +184,7 @@ func (e *ExAnte) Verify(
 			},
 			MerklePath: []*pb.State{{Row: sigma[0][0:]}},
 			Round:      0,
-			From:       e.network.GetNodeID(),
+			Id:         e.network.GetNodeID(),
 		}
 
 		msgBytes, err := proto.Marshal(msg)
@@ -178,7 +196,7 @@ func (e *ExAnte) Verify(
 
 		e.network.SendProtocolMessage(protocolID, msgBytes)
 	}
-	results := make(map[common.Key]common.O)
+	results := &common.Committee{}
 
 	for r := 1; r < R; r++ {
 		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
@@ -188,34 +206,31 @@ func (e *ExAnte) Verify(
 		msgs := e.messages[r-1]
 		e.mu.Unlock()
 
+		if len(msgs) == 0 {
+			e.logger.Warn("No messages received for round", zap.Int("round", r))
+		}
+
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
-				g := min(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
-
-				key := common.Key{VK: string(msg.vk), Ch: string(msg.ch)}
-				if v, exists := results[key]; !exists || g > v.Grade {
-					results[key] = common.O{
-						VK:        msg.vk,
-						Challenge: msg.ch,
-						Aux:       msg.aux,
-						Grade:     g,
-					}
+				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
+				if results.Add(msg.vk, msg.v, msg.id, g) {
+					e.logger.Debug("Added to results",
+						zap.Binary("vk", msg.vk),
+						zap.Binary("value", msg.v),
+						zap.Int("grade", g))
 				} else {
-					e.logger.Debug("Ignoring message with lower grade",
-						zap.String("sid", msg.sid),
-						zap.String("vk", string(msg.vk)),
-						zap.String("challenge", string(msg.ch)),
-						zap.Int("grade", g),
-						zap.Int("existing_grade", v.Grade))
-					// Ignore this message as it has a lower grade than the existing one
+					e.logger.Debug("Skipping message with lower grade",
+						zap.Binary("vk", msg.vk),
+						zap.Binary("value", msg.v),
+						zap.Int("grade", g))
 					continue
 				}
 
 				pMsg := &pb.TimestampMessage{
 					SessionId:       session,
 					VerificationKey: msg.vk,
-					Value:           msg.ch,
+					Value:           msg.v,
 					Aux: &pb.Aux{
 						PiRP: msg.aux.PiRP,
 						AuxKey: &pb.AuxKeyMessage{
@@ -226,8 +241,8 @@ func (e *ExAnte) Verify(
 						},
 					},
 					MerklePath: make([]*pb.State, r+1),
-					Round:      uint32(r),
-					From:       e.network.GetNodeID(),
+					Round:      uint32(r), //nolint:gosec
+					Id:         msg.id,
 				}
 
 				for i := 0; i < r; i++ {
@@ -280,11 +295,11 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if msg.From != from {
+	if msg.Id != from {
 		err := errors.New("sender id mismatch")
 		e.logger.Error("Received message with mismatched sender id",
 			zap.String("expected", from),
-			zap.String("received", msg.From))
+			zap.String("received", msg.Id))
 		return err
 	}
 
@@ -313,9 +328,10 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	}
 
 	e.messages[round][from] = receivedMessage{
+		id:  msg.Id,
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
-		ch:  msg.Value,
+		v:   msg.Value,
 		aux: &common.AuxTag{
 			PiRP: msg.Aux.PiRP,
 			AuxKey: &common.AuxKey{
@@ -363,15 +379,15 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	if !filterFn(msg.sid, msg.vk, msg.ch, msg.aux) {
+	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
 		return false
 	}
 
-	if !(e.gradeFunction(msg.sid, msg.vk, msg.ch, msg.aux.AuxKey, auxLocal) > 0) {
+	if !(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
 		return false
 	}
 
-	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.ch, msg.aux.PiRP), msg.merklePath[0]) {
+	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.v, msg.aux.PiRP), msg.merklePath[0]) {
 		return false
 	}
 
@@ -409,9 +425,7 @@ func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
 		}
 
 		result[i] = make([][]byte, len(state.Row))
-		for j, rowBytes := range state.Row {
-			result[i][j] = rowBytes
-		}
+		copy(result[i], state.Row)
 	}
 
 	return result

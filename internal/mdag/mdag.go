@@ -2,7 +2,6 @@ package mdag
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -105,6 +104,15 @@ func New(
 //
 // Returns the state (sequence of labels received in each round) and any error.
 func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error) {
+	m.logger.Info("Generate started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		m.logger.Info("Generate completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	m.mu.Lock()
 	if m.isRunning {
 		m.mu.Unlock()
@@ -118,8 +126,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 
 	m.isRunning = true
 	m.mu.Unlock()
-
-	m.logger.Info("Starting MDAG protocol", zap.String("session_id", sid), zap.String("node_id", m.network.GetNodeID()))
 
 	// Compute the initial label: sid || vki || (concatenation of vi)
 	var buffer bytes.Buffer
@@ -174,7 +180,9 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 
 		m.logger.Info("Completed round",
 			zap.Int("round", r),
-			zap.String("new_label", base64.StdEncoding.EncodeToString(m.currentLabel)))
+			zap.Binary("new_label", m.currentLabel),
+			zap.Int("num_messages", len(sortedLabels)),
+		)
 
 		if r < m.rounds {
 			m.broadcast(r, m.currentLabel)
@@ -186,7 +194,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	m.isRunning = false
 	m.mu.Unlock()
 
-	m.logger.Info("MDAG protocol completed")
 	return m.state, nil
 }
 
@@ -252,7 +259,7 @@ func (m *MDAG) broadcast(round int, label []byte) {
 		SessionId: m.sessionID,
 		Round:     uint32(round), //nolint:gosec
 		Label:     label,
-		From:      m.network.GetNodeID(),
+		Id:        m.network.GetNodeID(),
 	}
 
 	data, err := proto.Marshal(pbMsg)
