@@ -2,6 +2,7 @@ package resourcebound
 
 import (
 	"errors"
+	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"go.uber.org/zap"
@@ -56,6 +57,15 @@ func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weigh
 }
 
 func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, error) {
+	r.logger.Info("Generate started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Generate completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	// Step 1
 	auxRP, err := r.rp.Setup(vk)
 	if err != nil {
@@ -69,7 +79,10 @@ func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, err
 	}
 
 	// Step 3
+	startTime := time.Now()
 	piRP, err := r.rp.Prove(vk, r.weight, challenge, auxRP)
+	r.logger.Debug("Resource Proof took: %d ms",
+		zap.Int64("runtime", time.Now().Sub(startTime).Milliseconds()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -89,8 +102,21 @@ func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, err
 	return challenge, proof, nil
 }
 
-func (r *RbExp) Verify(sid string, vk, ch []byte, proof *common.RBExpProof, auxKey *common.AuxKey,
-	auxLocal float64) ([]*common.CommitteeOutput, error) {
+func (r *RbExp) Verify(
+	sid string,
+	vk, ch []byte,
+	proof *common.RBExpProof,
+	auxKey *common.AuxKey,
+	auxLocal float64,
+) ([]*common.CommitteeOutput, error) {
+	r.logger.Info("Verify started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Verify completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
 		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)

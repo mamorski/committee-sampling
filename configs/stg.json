@@ -22,8 +22,9 @@
     "ex_ante_round_timeout": "5s",
     "ex_post_round_timeout": "5s",
     "mdag_round_timeout": "5s",
-    "lambda": 48,
+    "lambda": 256,
     "weight": 10,
-    "committee_size": 5
+    "committee_size": 5,
+    "delta_w": 2.0
   }
 }

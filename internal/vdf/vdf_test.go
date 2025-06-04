@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 )
 
 type VDFSuite struct {
@@ -26,7 +27,7 @@ func Setup(lambda int) ([]byte, error) {
 }
 
 func (s *VDFSuite) SetupTest() {
-	s.v = New()
+	s.v = New(zap.NewNop())
 }
 
 func (s *VDFSuite) TestEval() {

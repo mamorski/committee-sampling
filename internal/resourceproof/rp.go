@@ -3,10 +3,14 @@ package resourceproof
 import (
 	"bytes"
 	"fmt"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 type ResourceProof struct {
 	proofOfWork ProofOfWork
+	logger      *zap.Logger
 }
 
 // lint:ignore U1000 This function is not used with PoW
@@ -15,6 +19,15 @@ func (r *ResourceProof) Setup(_ []byte) ([]byte, error) {
 }
 
 func (r *ResourceProof) Prove(vk []byte, omega float64, ch []byte, _ []byte) ([]byte, error) {
+	r.logger.Info("Prove started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Prove completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	var challenge bytes.Buffer
 	challenge.Write(vk)
 	challenge.Write(ch)
@@ -27,14 +40,24 @@ func (r *ResourceProof) Prove(vk []byte, omega float64, ch []byte, _ []byte) ([]
 }
 
 func (r *ResourceProof) Ver(vk []byte, omega float64, ch []byte, pi []byte) bool {
+	r.logger.Info("Verify started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		r.logger.Info("Verify completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	var challenge bytes.Buffer
 	challenge.Write(vk)
 	challenge.Write(ch)
 	return r.proofOfWork.Verify(challenge.Bytes(), int(omega), pi)
 }
 
-func New() *ResourceProof {
+func New(logger *zap.Logger) *ResourceProof {
 	return &ResourceProof{
 		proofOfWork: &pow{},
+		logger:      logger.Named("resource_proof"),
 	}
 }

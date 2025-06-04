@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +15,8 @@ import (
 
 // TestNetworkInterface verifies that MockNetwork implements the Network interface
 func TestNetworkInterface(t *testing.T) {
-	cluster := NewMockNetworkCluster(0)
-	err := cluster.ConnectRandom(4)
+	cluster := NewMockNetworkCluster(10)
+	err := cluster.ConnectRandom(3)
 	if err != nil {
 		t.Fatalf("Failed to connect random peers: %v", err)
 	}
@@ -29,10 +30,27 @@ func TestNetworkInterface(t *testing.T) {
 	// set to DebugLevel, InfoLevel, WarnLevel, ErrorLevel, etc.
 	c.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 
-	logger, err := c.Build()
-	if err != nil {
-		panic(err)
+	encoderCfg := zapcore.EncoderConfig{
+		TimeKey:        "timestamp", // JSON key or console field name
+		LevelKey:       "level",
+		MessageKey:     "msg",
+		CallerKey:      "caller",
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
 	}
+
+	core := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(encoderCfg), // or NewJSONEncoder(encoderCfg)
+		zapcore.AddSync(os.Stdout),
+		zap.InfoLevel,
+	)
+
+	logger := zap.New(
+		core,
+		zap.AddCaller(),
+	)
 	defer func(logger *zap.Logger) {
 		_ = logger.Sync()
 	}(logger)
@@ -50,6 +68,7 @@ func TestNetworkInterface(t *testing.T) {
 	for i, node := range cluster.networks {
 		go func() {
 			defer wg.Done()
+			logger := logger.With(zap.String("node_id", node.GetNodeID()))
 			b, err := boot.New(cfg, node, logger)
 			e := gce.New(logger)
 

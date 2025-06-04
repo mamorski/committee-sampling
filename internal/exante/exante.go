@@ -96,6 +96,14 @@ func New(
 
 // Generate implements the ExAnte Generate method using MDAG
 func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []byte) ([][][]byte, error) {
+	e.logger.Info("Generate started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("Generate completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	if e.sid != "" && e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -126,6 +134,15 @@ func (e *ExAnte) Verify(
 	auxTag *common.AuxTag,
 	auxLocal float64,
 	filterFn common.FilterTagF) (*common.Committee, error) {
+
+	e.logger.Info("Verify started")
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("Verify completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	if e.sid != session {
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
@@ -189,16 +206,24 @@ func (e *ExAnte) Verify(
 		msgs := e.messages[r-1]
 		e.mu.Unlock()
 
+		if len(msgs) == 0 {
+			e.logger.Warn("No messages received for round", zap.Int("round", r))
+		}
+
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
 				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
 				if results.Add(msg.vk, msg.v, msg.id, g) {
-					e.logger.Debug("Added to results", zap.String("vk", string(msg.vk)),
-						zap.String("value", string(msg.v)), zap.Int("grade", g))
+					e.logger.Debug("Added to results",
+						zap.Binary("vk", msg.vk),
+						zap.Binary("value", msg.v),
+						zap.Int("grade", g))
 				} else {
 					e.logger.Debug("Skipping message with lower grade",
-						zap.String("vk", string(msg.vk)), zap.String("value", string(msg.v)), zap.Int("grade", g))
+						zap.Binary("vk", msg.vk),
+						zap.Binary("value", msg.v),
+						zap.Int("grade", g))
 					continue
 				}
 
@@ -217,7 +242,7 @@ func (e *ExAnte) Verify(
 					},
 					MerklePath: make([]*pb.State, r+1),
 					Round:      uint32(r), //nolint:gosec
-					Id:         e.network.GetNodeID(),
+					Id:         msg.id,
 				}
 
 				for i := 0; i < r; i++ {
@@ -400,10 +425,7 @@ func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
 		}
 
 		result[i] = make([][]byte, len(state.Row))
-		// nolint:gosimple
-		for j, rowBytes := range state.Row {
-			result[i][j] = rowBytes
-		}
+		copy(result[i], state.Row)
 	}
 
 	return result

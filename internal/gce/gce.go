@@ -3,6 +3,7 @@ package gce
 import (
 	"crypto/sha256"
 	"errors"
+	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"go.uber.org/zap"
@@ -66,6 +67,17 @@ func New(logger *zap.Logger) *Election {
 //
 // Returns the party’s LocalState or an error.
 func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
+	e.logger.Info("Initializing started",
+		zap.String("sid", sid),
+	)
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("Initialize completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
+
 	// Step 1: Sample a VRF key pair.
 	sk, vk, err := vrf.Generate(lambda)
 	if err != nil {
@@ -120,6 +132,17 @@ func (e *Election) CommitteeElection(
 	weight float64,
 	vrf VRF,
 	rbexp RBExp) ([]*common.CommitteeOutput, error) {
+
+	e.logger.Info("CommitteeElection started",
+		zap.String("sid", sid),
+	)
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		e.logger.Info("CommitteeElection completed",
+			zap.Duration("elapsed", elapsed),
+		)
+	}()
 
 	if state == nil || len(state.VRFSecret) == 0 {
 		return nil, errors.New("invalid local state")
