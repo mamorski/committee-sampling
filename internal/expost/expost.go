@@ -33,8 +33,7 @@ type ExPost struct {
 	network      network.Network
 	logger       *zap.Logger
 	mdag         MDAG
-	roundTimeout time.Duration
-	startTime    time.Time
+	synchronizer common.Synchronizer
 	d            int
 	D            int
 	lambda       int
@@ -64,8 +63,7 @@ func New(
 	mdag MDAG,
 	sid string,
 	vk []byte,
-	startTime time.Time,
-	roundTimeout time.Duration,
+	synchronizer common.Synchronizer,
 	gradeLevels int,
 	diameterBound int,
 	lambda int,
@@ -76,8 +74,7 @@ func New(
 		network:      net,
 		logger:       logger.Named("expost"),
 		mdag:         mdag,
-		roundTimeout: roundTimeout,
-		startTime:    startTime,
+		synchronizer: synchronizer,
 		d:            gradeLevels,
 		D:            diameterBound,
 		lambda:       lambda,
@@ -209,7 +206,13 @@ func (e *ExPost) Verify(
 	}
 
 	for r := 1; r <= R; r++ {
-		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
+		// Wait for round r synchronization
+		waitChan, err := e.synchronizer.WaitForRound(common.ExPostVerify, r)
+		if err != nil {
+			e.isRunning = false
+			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
+		}
+		<-waitChan
 		e.logger.Info("ExPost verification round",
 			zap.Int("round", r),
 			zap.String("node_id", e.network.GetNodeID()),

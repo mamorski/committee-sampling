@@ -9,6 +9,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
+
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -41,6 +42,16 @@ func (m *MockNetwork) SendProtocolMessage(protocolID string, data []byte) {
 func (m *MockNetwork) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
+	args := m.Called(topic)
+	return args.Get(0).(<-chan []byte), args.Error(1)
+}
+
+func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
+	args := m.Called(pubKey, message, signature)
+	return args.Bool(0), args.Error(1)
 }
 
 // MockMDAG is a mock implementation of the MDAG interface
@@ -124,8 +135,7 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		network:       suite.mockNetwork,
 		logger:        suite.logger.Named("exante"),
 		mdag:          suite.mockMDAG,
-		roundTimeout:  suite.testTimeout,
-		startTime:     suite.testStartTime,
+		synchronizer:  syncMock{},
 		d:             suite.testD,
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
@@ -163,8 +173,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 	logger := zap.NewNop()
 
 	testSID := "test-session"
-	testStartTime := time.Now()
-	testTimeout := 100 * time.Millisecond
+
 	testD := 5
 	testBigD := 3
 	testNeighbors := []string{"peer1", "peer2", "peer3"}
@@ -178,13 +187,11 @@ func (suite *ExAnteTestSuite) TestNew() {
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
 	// Call New function
-	exante := New(mockNetwork, mockMDAG, testSID, testStartTime, testTimeout, testD, testBigD, gradeFunc, logger)
+	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
 
 	// Verify the instance is properly initialized
 	suite.NotNil(exante)
 	suite.Equal(testSID, exante.sid)
-	suite.Equal(testStartTime, exante.startTime)
-	suite.Equal(testTimeout, exante.roundTimeout)
 	suite.Equal(testD, exante.d)
 	suite.Equal(testBigD, exante.D)
 	suite.True(exante.isRunning)
@@ -772,11 +779,8 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	}
 
 	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(3) // Called for logging and message creation
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(3)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
-
-	// Set start time to past so rounds execute immediately
-	suite.exante.startTime = time.Now().Add(-time.Hour)
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
@@ -837,11 +841,8 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Twice()
 
 	// Mock network calls for forwarding messages
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(2) // Called for logging and message creation
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
-
-	// Set start time to past so rounds execute immediately
-	suite.exante.startTime = time.Now().Add(-time.Hour)
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
@@ -925,11 +926,8 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
-
-	// Set start time to past so rounds execute immediately
-	suite.exante.startTime = time.Now().Add(-time.Hour)
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 	suite.NoError(err)

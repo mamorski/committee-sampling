@@ -4,12 +4,13 @@
     "max_outbound_degree": 10,
     "heartbeat_interval": "30s",
     "connect_timeout": "10s",
+    "topic": "committee-sampling",
     "discovery_config": {
       "discovery_type": "mdns",
       "protocol_id": "/committee-sampling/1.0.0",
       "interval": "5s",
       "bootstrap_peers": [],
-      "service_tag": "committee-sampling-dev"
+      "service_tag": "committee-sampling-stg"
     }
   },
   "graph": {
@@ -18,13 +19,19 @@
   },
   "run_time": {
     "session_id": "aef07cc6-b08c-48b0-9dbf-6043f593c1d6",
-    "start_time": 1748359139,
+    "lambda": 256,
+    "weight": 10,
+    "delta_w": 2.0,
+    "committee_size": 5
+  },
+  "synchronization": {
+    "type": 1,
     "ex_ante_round_timeout": "5s",
     "ex_post_round_timeout": "5s",
     "mdag_round_timeout": "5s",
-    "lambda": 256,
-    "weight": 10,
-    "committee_size": 5,
-    "delta_w": 2.0
+    "start_time": 1748359139,
+    "time_server": "time.google.com",
+    "certificate_path": "",
+    "topic": "sync-topic"
   }
 }

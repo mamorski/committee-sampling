@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -38,6 +40,8 @@ type Network interface {
 	GetNeighbors() []string
 	GetNodeID() string
 	Close() error
+	Subscribe(topic string) (<-chan []byte, error)
+	VerifySignature(pubKey, message, signature []byte) (bool, error)
 }
 
 type Host interface {
@@ -60,6 +64,8 @@ type P2PNode struct {
 	numOfNeighbors    int
 	heartbeatInterval time.Duration
 	key               crypto.PrivKey
+	topic             string
+	pubsub            *pubsub.PubSub
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode, error) {
@@ -89,6 +95,14 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode,
 		return nil, fmt.Errorf("failed to create h: %w", err)
 	}
 
+	// Create pubsub service using GossipSub
+	ps, err := pubsub.NewGossipSub(c, h)
+	if err != nil {
+		_ = h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to create pubsub: %w", err)
+	}
+
 	// Create d service
 	d, err := discovery.NewDiscovery(h, cfg.DiscoveryConfig)
 	if err != nil {
@@ -107,6 +121,8 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode,
 		logger:            logger.Named("network"),
 		numOfNeighbors:    0,
 		key:               priv,
+		topic:             cfg.Topic,
+		pubsub:            ps,
 	}
 
 	// Set stream handler
@@ -345,4 +361,53 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	n.neighbors.Store(addrInfo.ID, addrInfo)
 	n.numOfNeighbors++
 	return nil
+}
+
+// Subscribe implements the PubSub interface
+func (n *P2PNode) Subscribe(topic string) (<-chan []byte, error) {
+	topicHandle, err := n.pubsub.Join(topic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to join topic %s: %w", topic, err)
+	}
+
+	sub, err := topicHandle.Subscribe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	msgChan := make(chan []byte) // unbuffered channel for blocking behavior
+
+	go func() {
+		defer close(msgChan)
+		for {
+			msg, err := sub.Next(n.ctx)
+			if err != nil {
+				if n.ctx.Err() != nil {
+					// Context canceled, exit gracefully
+					return
+				}
+				n.logger.Error("Failed to get next pubsub message", zap.Error(err))
+				continue
+			}
+
+			select {
+			case msgChan <- msg.Data:
+			case <-n.ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return msgChan, nil
+}
+
+// VerifySignature implements the PubSub interface using Ed25519
+func (n *P2PNode) VerifySignature(pubKeyBytes, message, signature []byte) (bool, error) {
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		return false, fmt.Errorf("invalid public key size: expected %d, got %d", ed25519.PublicKeySize, len(pubKeyBytes))
+	}
+
+	pubKey := ed25519.PublicKey(pubKeyBytes)
+	valid := ed25519.Verify(pubKey, message, signature)
+	return valid, nil
 }

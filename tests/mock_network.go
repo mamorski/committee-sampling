@@ -20,6 +20,14 @@ type MockNetwork struct {
 	closed    bool
 }
 
+func (m *MockNetwork) Subscribe(_ string) (<-chan []byte, error) {
+	return nil, nil
+}
+
+func (m *MockNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
+	return true, nil
+}
+
 func NewMockNetwork() *MockNetwork {
 	mn := mocknet.New()
 	peer, _ := mn.GenPeer()

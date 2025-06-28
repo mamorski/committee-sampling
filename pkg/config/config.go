@@ -10,10 +10,29 @@ import (
 	"github.com/spf13/viper"
 )
 
+type SyncType int
+
+const (
+	ChannelSync SyncType = iota
+	TimeSync
+)
+
+func (s SyncType) String() string {
+	switch s {
+	case ChannelSync:
+		return "ChannelSync"
+	case TimeSync:
+		return "TimeSync"
+	default:
+		return "Unknown"
+	}
+}
+
 type Config struct {
-	Network Network       `mapstructure:"network"`
-	Graph   Graph         `mapstructure:"graph"`
-	RunTime RunTimeConfig `mapstructure:"run_time"` // Runtime configuration for the protocol
+	Network         Network         `mapstructure:"network"`
+	Graph           Graph           `mapstructure:"graph"`
+	RunTime         RunTimeConfig   `mapstructure:"run_time"`        // Runtime configuration for the protocol
+	Synchronization Synchronization `mapstructure:"synchronization"` // Configuration for the synchronization protocol
 }
 
 type Network struct {
@@ -21,7 +40,8 @@ type Network struct {
 	MaxOutboundDegree int           `mapstructure:"max_outbound_degree"` // Maximum number of outbound connections
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`  // Interval for heartbeat messages
 	ConnectTimeout    time.Duration `mapstructure:"connect_timeout"`     // Timeout for establishing connections
-	DiscoveryConfig   Discovery     `mapstructure:"discovery_config"`    // Configuration for peer discovery
+	DiscoveryConfig   Discovery     `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
+	Topic             string        `mapstructure:"topic"`               // Topic for the synchronization protocol
 }
 
 type Discovery struct {
@@ -38,15 +58,22 @@ type Graph struct {
 }
 
 type RunTimeConfig struct {
-	SessionID          string        `mapstructure:"session_id"`            // Unique identifier for the protocol session
-	StartTime          int64         `mapstructure:"start_time"`            // Start time as Unix timestamp UTC
-	Lambda             int           `mapstructure:"lambda"`                // Security parameter for VRF and VDF
-	Weight             float64       `mapstructure:"weight"`                // Threshold for weight in the protocol
-	DeltaW             float64       `mapstructure:"delta_w"`               // Acceptable weight deviation
-	CommitteeSize      int           `mapstructure:"committee_size"`        // Size of the committee to be formed
+	SessionID     string  `mapstructure:"session_id"`     // Unique identifier for the protocol session
+	Lambda        int     `mapstructure:"lambda"`         // Security parameter for VRF and VDF
+	Weight        float64 `mapstructure:"weight"`         // Threshold for weight in the protocol
+	DeltaW        float64 `mapstructure:"delta_w"`        // Acceptable weight deviation
+	CommitteeSize int     `mapstructure:"committee_size"` // Size of the committee to be formed
+}
+
+type Synchronization struct {
+	Type               SyncType      `mapstructure:"type"`                  // Type of synchronization (ChannelSync or TimeSync)
 	ExAnteRoundTimeout time.Duration `mapstructure:"ex_ante_round_timeout"` // Timeout for ExAnte rounds in milliseconds
 	ExPostRoundTimeout time.Duration `mapstructure:"ex_post_round_timeout"` // Timeout for ExPost rounds in milliseconds
 	MDAGRoundTimeout   time.Duration `mapstructure:"mdag_round_timeout"`    // Timeout for MDAG rounds in milliseconds
+	StartTime          int64         `mapstructure:"start_time"`            // Start time as Unix timestamp UTC
+	TimeServer         string        `mapstructure:"time_server"`           // NTP server for time synchronization
+	CertificatePath    string        `mapstructure:"certificate_path"`      // Path to certificate file containing public key
+	Topic              string        `mapstructure:"topic"`                 // Topic for sync messages
 }
 
 func Load(cfgFile string) (*Config, error) {

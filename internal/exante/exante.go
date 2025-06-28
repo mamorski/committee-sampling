@@ -27,8 +27,7 @@ type ExAnte struct {
 	network       network.Network
 	logger        *zap.Logger
 	mdag          MDAG
-	roundTimeout  time.Duration
-	startTime     time.Time
+	synchronizer  common.Synchronizer
 	d             int
 	D             int
 	gradeFunction common.GradeFunc
@@ -56,8 +55,7 @@ func New(
 	net network.Network,
 	mdag MDAG,
 	sid string,
-	startTime time.Time,
-	roundTimeout time.Duration,
+	synchronizer common.Synchronizer,
 	d int,
 	D int,
 	gradeFunction common.GradeFunc,
@@ -67,8 +65,7 @@ func New(
 		network:       net,
 		logger:        logger.Named("exante"),
 		mdag:          mdag,
-		roundTimeout:  roundTimeout,
-		startTime:     startTime,
+		synchronizer:  synchronizer,
 		d:             d,
 		D:             D,
 		gradeFunction: gradeFunction,
@@ -199,7 +196,13 @@ func (e *ExAnte) Verify(
 	results := &common.Committee{}
 
 	for r := 1; r < R; r++ {
-		time.Sleep(time.Until(e.startTime.Add(time.Duration(r) * e.roundTimeout)))
+		// Wait for round r synchronization
+		waitChan, err := e.synchronizer.WaitForRound(common.ExAnteVerify, r)
+		if err != nil {
+			e.isRunning = false
+			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
+		}
+		<-waitChan
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
 
 		e.mu.Lock()

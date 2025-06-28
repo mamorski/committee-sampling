@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 
@@ -42,6 +43,16 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
+func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
+	args := m.Called(topic)
+	return args.Get(0).(<-chan []byte), args.Error(1)
+}
+
+func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
+	args := m.Called(pubKey, message, signature)
+	return args.Bool(0), args.Error(1)
+}
+
 // Simple hash oracle for testing
 func testOracle(data []byte) []byte {
 	hash := sha256.Sum256(data)
@@ -51,24 +62,17 @@ func testOracle(data []byte) []byte {
 // MDAGTestSuite defines the test suite for MDAG
 type MDAGTestSuite struct {
 	suite.Suite
-	mockNetwork *MockNetwork
-	logger      *zap.Logger
-	mdag        *MDAG
+	mockNetwork      *MockNetwork
+	mockSynchronizer *syncMock
+	logger           *zap.Logger
+	mdag             *MDAG
 }
 
 // SetupTest runs before each test
 func (suite *MDAGTestSuite) SetupTest() {
 	suite.mockNetwork = new(MockNetwork)
-	var err error
-	suite.logger, err = zap.NewDevelopment()
-	suite.Require().NoError(err)
-}
-
-// TearDownTest runs after each test
-func (suite *MDAGTestSuite) TearDownTest() {
-	if suite.mockNetwork != nil {
-		suite.mockNetwork.AssertExpectations(suite.T())
-	}
+	suite.mockSynchronizer = new(syncMock)
+	suite.logger = zap.NewNop()
 }
 
 // setupMDAG creates a new MDAG instance with mocks
@@ -77,8 +81,7 @@ func (suite *MDAGTestSuite) setupMDAG() {
 	suite.mockNetwork.On("GetNodeID").Return("testNode").Maybe()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
-	startTime := time.Now().Add(100 * time.Millisecond)
-	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime, "")
+	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 	suite.Require().NotNil(suite.mdag)
 }
 
@@ -87,10 +90,10 @@ func (suite *MDAGTestSuite) TestNew() {
 	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2", "node3"}).Once()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
-	startTime := time.Now().Add(100 * time.Millisecond)
-	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, 100*time.Millisecond, suite.logger, startTime, "")
+	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 
 	suite.NotNil(mdagInstance)
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestOracle tests the Oracle function
@@ -126,6 +129,8 @@ func (suite *MDAGTestSuite) TestOracle() {
 	result5 := suite.mdag.Oracle(nil)
 	suite.NotNil(result5)
 	suite.Equal(32, len(result5))
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestGenerate tests the Generate function
@@ -151,6 +156,8 @@ func (suite *MDAGTestSuite) TestGenerate() {
 	case <-time.After(2 * time.Second):
 		suite.Fail("Protocol timed out")
 	}
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestGenerateSessionMismatch tests Generate with mismatched session ID
@@ -164,6 +171,7 @@ func (suite *MDAGTestSuite) TestGenerateSessionMismatch() {
 	suite.Error(err)
 	suite.Nil(state)
 	suite.Contains(err.Error(), "session ID mismatch")
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestGenerateAlreadyRunning tests Generate when protocol is already running
@@ -179,6 +187,7 @@ func (suite *MDAGTestSuite) TestGenerateAlreadyRunning() {
 	suite.Error(err)
 	suite.Nil(state)
 	suite.Contains(err.Error(), "protocol is already running")
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestHandleMessageNotRunning tests handleMessage when protocol is not running
@@ -209,6 +218,7 @@ func (suite *MDAGTestSuite) TestHandleMessageNotRunning() {
 	err = handler("node1", validData)
 	suite.Error(err)
 	suite.Contains(err.Error(), "protocol not running")
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestHandleMessageIntegration tests the handleMessage function during protocol execution
@@ -295,6 +305,8 @@ func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
 	case <-time.After(2 * time.Second):
 		suite.Fail("Protocol timed out")
 	}
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestGetComputedLabel tests the GetComputedLabel function
@@ -319,6 +331,8 @@ func (suite *MDAGTestSuite) TestGetComputedLabel() {
 	// Test getting a negative index
 	negativeLabel := suite.mdag.GetComputedLabel(-1)
 	suite.Nil(negativeLabel)
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestGetComputedLabelNotRunning tests GetComputedLabel when protocol hasn't run
@@ -331,6 +345,7 @@ func (suite *MDAGTestSuite) TestGetComputedLabelNotRunning() {
 
 	label = suite.mdag.GetComputedLabel(1)
 	suite.Nil(label)
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // Run the test suite

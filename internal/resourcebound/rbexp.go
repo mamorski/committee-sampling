@@ -82,7 +82,7 @@ func (r *RbExp) Generate(sid string, vk []byte) ([]byte, *common.RBExpProof, err
 	startTime := time.Now()
 	piRP, err := r.rp.Prove(vk, r.weight, challenge, auxRP)
 	r.logger.Debug("Resource Proof took: %d ms",
-		zap.Int64("runtime", time.Now().Sub(startTime).Milliseconds()))
+		zap.Int64("runtime", time.Since(startTime).Milliseconds()))
 	if err != nil {
 		return nil, nil, err
 	}
