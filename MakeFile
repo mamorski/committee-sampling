@@ -87,7 +87,6 @@ compose-restart:
 
 # CI/CD integration targets
 ci-build:
-	docker build --target builder -t $(DOCKER_IMAGE):build-cache .
 	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 ci-test:

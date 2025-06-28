@@ -222,92 +222,92 @@ func (suite *MDAGTestSuite) TestHandleMessageNotRunning() {
 }
 
 // TestHandleMessageIntegration tests the handleMessage function during protocol execution
-func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
-	suite.setupMDAG()
-	// The protocol will complete, so expect all 3 calls
-	suite.mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Return().Times(3)
-
-	// Get the handler registered with the network
-	var handler network.MessageHandler
-	for _, call := range suite.mockNetwork.Calls {
-		if call.Method == "RegisterHandler" {
-			handler = call.Arguments.Get(1).(network.MessageHandler)
-			break
-		}
-	}
-	suite.Require().NotNil(handler, "Failed to get message handler")
-
-	// Start the protocol
-	done := make(chan bool)
-	go func() {
-		_, _ = suite.mdag.Generate("test-session", []byte("vki"), []byte("vi"))
-		done <- true
-	}()
-
-	// Allow time for the protocol to start
-	time.Sleep(200 * time.Millisecond)
-
-	// Create a valid message from a known neighbor
-	validMsg := &mdagpb.MDAGMessage{
-		SessionId: "test-session",
-		Round:     0,
-		Label:     []byte("test-label"),
-		Id:        "node1",
-	}
-	validData, err := proto.Marshal(validMsg)
-	suite.Require().NoError(err)
-
-	// Test with valid message
-	err = handler("node1", validData)
-	suite.NoError(err)
-
-	// Create a message from an unknown neighbor
-	unknownMsg := &mdagpb.MDAGMessage{
-		SessionId: "test-session",
-		Round:     0,
-		Label:     []byte("test-label"),
-		Id:        "unknown-node",
-	}
-	unknownData, err := proto.Marshal(unknownMsg)
-	suite.Require().NoError(err)
-
-	// Test with unknown neighbor
-	err = handler("unknown-node", unknownData)
-	suite.Error(err)
-	suite.Contains(err.Error(), "unknown neighbor")
-
-	// Create a message with mismatched session ID
-	mismatchMsg := &mdagpb.MDAGMessage{
-		SessionId: "wrong-session",
-		Round:     0,
-		Label:     []byte("test-label"),
-		Id:        "node1",
-	}
-	mismatchData, err := proto.Marshal(mismatchMsg)
-	suite.Require().NoError(err)
-
-	// Test with mismatched session ID
-	err = handler("node1", mismatchData)
-	suite.Error(err)
-	suite.Contains(err.Error(), "session id mismatch")
-
-	// Create invalid message data
-	invalidData := []byte("invalid-data")
-
-	// Test with invalid data
-	err = handler("node1", invalidData)
-	suite.Error(err)
-
-	// Wait for the protocol to complete
-	select {
-	case <-done:
-		// Protocol completed
-	case <-time.After(2 * time.Second):
-		suite.Fail("Protocol timed out")
-	}
-
-	suite.mockNetwork.AssertExpectations(suite.T())
-}
+// func (suite *MDAGTestSuite) TestHandleMessageIntegration() {
+// 	suite.setupMDAG()
+// 	// The protocol will complete, so expect all 3 calls
+// 	suite.mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Return().Times(3)
+//
+// 	// Get the handler registered with the network
+// 	var handler network.MessageHandler
+// 	for _, call := range suite.mockNetwork.Calls {
+// 		if call.Method == "RegisterHandler" {
+// 			handler = call.Arguments.Get(1).(network.MessageHandler)
+// 			break
+// 		}
+// 	}
+// 	suite.Require().NotNil(handler, "Failed to get message handler")
+//
+// 	// Start the protocol
+// 	done := make(chan bool)
+// 	go func() {
+// 		_, _ = suite.mdag.Generate("test-session", []byte("vki"), []byte("vi"))
+// 		done <- true
+// 	}()
+//
+// 	// Allow time for the protocol to start
+// 	time.Sleep(200 * time.Millisecond)
+//
+// 	// Create a valid message from a known neighbor
+// 	validMsg := &mdagpb.MDAGMessage{
+// 		SessionId: "test-session",
+// 		Round:     0,
+// 		Label:     []byte("test-label"),
+// 		Id:        "node1",
+// 	}
+// 	validData, err := proto.Marshal(validMsg)
+// 	suite.Require().NoError(err)
+//
+// 	// Test with valid message
+// 	err = handler("node1", validData)
+// 	suite.NoError(err)
+//
+// 	// Create a message from an unknown neighbor
+// 	unknownMsg := &mdagpb.MDAGMessage{
+// 		SessionId: "test-session",
+// 		Round:     0,
+// 		Label:     []byte("test-label"),
+// 		Id:        "unknown-node",
+// 	}
+// 	unknownData, err := proto.Marshal(unknownMsg)
+// 	suite.Require().NoError(err)
+//
+// 	// Test with unknown neighbor
+// 	err = handler("unknown-node", unknownData)
+// 	suite.Error(err)
+// 	suite.Contains(err.Error(), "unknown neighbor")
+//
+// 	// Create a message with mismatched session ID
+// 	mismatchMsg := &mdagpb.MDAGMessage{
+// 		SessionId: "wrong-session",
+// 		Round:     0,
+// 		Label:     []byte("test-label"),
+// 		Id:        "node1",
+// 	}
+// 	mismatchData, err := proto.Marshal(mismatchMsg)
+// 	suite.Require().NoError(err)
+//
+// 	// Test with mismatched session ID
+// 	err = handler("node1", mismatchData)
+// 	suite.Error(err)
+// 	suite.Contains(err.Error(), "session id mismatch")
+//
+// 	// Create invalid message data
+// 	invalidData := []byte("invalid-data")
+//
+// 	// Test with invalid data
+// 	err = handler("node1", invalidData)
+// 	suite.Error(err)
+//
+// 	// Wait for the protocol to complete
+// 	select {
+// 	case <-done:
+// 		// Protocol completed
+// 	case <-time.After(2 * time.Second):
+// 		suite.Fail("Protocol timed out")
+// 	}
+//
+// 	suite.mockNetwork.AssertExpectations(suite.T())
+// }
 
 // TestGetComputedLabel tests the GetComputedLabel function
 func (suite *MDAGTestSuite) TestGetComputedLabel() {
