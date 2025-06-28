@@ -53,7 +53,7 @@ jobs:
       run: make build
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: committee-sampling-binary
         path: committee-sampling
@@ -129,7 +129,7 @@ jobs:
         output: 'trivy-results.sarif'
 
     - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
@@ -181,7 +181,7 @@ jobs:
     if: always()
     steps:
     - name: Clean up old container images
-      uses: actions/delete-package-versions@v4
+      uses: actions/delete-package-versions@v5
       with:
         package-name: ${{ github.event.repository.name }}
         package-type: 'container'
