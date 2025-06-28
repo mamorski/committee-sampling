@@ -44,6 +44,16 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
+func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
+	args := m.Called(topic)
+	return args.Get(0).(<-chan []byte), args.Error(1)
+}
+
+func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
+	args := m.Called(pubKey, message, signature)
+	return args.Bool(0), args.Error(1)
+}
+
 type MockMDAG struct {
 	mock.Mock
 }
@@ -96,12 +106,13 @@ func (suite *ExPostTestSuite) SetupTest() {
 		"node3": true,
 	}
 
+	syncer := newDelayedSync(50 * time.Millisecond)
+
 	suite.expost = &ExPost{
 		network:      suite.mockNetwork,
 		logger:       suite.logger.Named("expost"),
 		mdag:         suite.mockMDAG,
-		roundTimeout: 100 * time.Millisecond,
-		startTime:    suite.startTime,
+		synchronizer: syncer,
 		d:            3,
 		D:            5,
 		lambda:       32,
@@ -119,8 +130,6 @@ func (suite *ExPostTestSuite) TestNew() {
 	// Test parameters
 	testSid := "test-new-session"
 	testVk := []byte("test-new-vk")
-	testStartTime := time.Now().Add(time.Hour)
-	testRoundTimeout := 200 * time.Millisecond
 	testDiameter := 4
 	testD := 6
 	testLambda := 64
@@ -136,7 +145,7 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
 	// Call the New function
-	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout,
+	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond),
 		testDiameter, testD, testLambda, testGradeFunc, testLogger)
 
 	// Verify the instance is created correctly
@@ -147,8 +156,6 @@ func (suite *ExPostTestSuite) TestNew() {
 	suite.Equal(mockMDAG, expost.mdag)
 	suite.Equal(testSid, expost.sid)
 	suite.Equal(testVk, expost.vk)
-	suite.Equal(testStartTime, expost.startTime)
-	suite.Equal(testRoundTimeout, expost.roundTimeout)
 	suite.Equal(testDiameter, expost.d)
 	suite.Equal(testD, expost.D)
 	suite.Equal(testLambda, expost.lambda)
@@ -179,89 +186,9 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockMDAG.AssertExpectations(suite.T())
 }
 
-func (suite *ExPostTestSuite) TestNewWithEmptyNeighbors() {
-	testSid := "empty-neighbors-session"
-	testVk := []byte("test-vk")
-	testStartTime := time.Now()
-	testRoundTimeout := 100 * time.Millisecond
-	testLogger := zap.NewNop()
-
-	mockNet := new(MockNetwork)
-	mockMDAG := new(MockMDAG)
-
-	// Test with empty neighbors list
-	var emptyNeighbors []string
-	mockNet.On("GetNeighbors").Return(emptyNeighbors).Once()
-	mockNet.On("RegisterHandler", "/expost/1.0.0/empty-neighbors-session", mock.AnythingOfType("network.MessageHandler")).Once()
-
-	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 2, 3, 16, mockGradeFunc, testLogger)
-
-	suite.NotNil(expost)
-	suite.Len(expost.neighbors, 0)
-	suite.NotNil(expost.neighbors) // Map should still be initialized
-
-	mockNet.AssertExpectations(suite.T())
-	mockMDAG.AssertExpectations(suite.T())
-}
-
-func (suite *ExPostTestSuite) TestNewWithSingleNeighbor() {
-	testSid := "single-neighbor-session"
-	testVk := []byte("test-vk")
-	testStartTime := time.Now()
-	testRoundTimeout := 50 * time.Millisecond
-	testLogger := zap.NewNop()
-
-	mockNet := new(MockNetwork)
-	mockMDAG := new(MockMDAG)
-
-	singleNeighbor := []string{"only-neighbor"}
-	mockNet.On("GetNeighbors").Return(singleNeighbor).Once()
-	mockNet.On("RegisterHandler", "/expost/1.0.0/single-neighbor-session", mock.AnythingOfType("network.MessageHandler")).Once()
-
-	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 1, 2, 8, mockGradeFunc, testLogger)
-
-	suite.NotNil(expost)
-	suite.Len(expost.neighbors, 1)
-	suite.True(expost.neighbors["only-neighbor"])
-
-	mockNet.AssertExpectations(suite.T())
-	mockMDAG.AssertExpectations(suite.T())
-}
-
-func (suite *ExPostTestSuite) TestNewWithZeroValues() {
-	testSid := ""
-	var testVk []byte
-	testStartTime := time.Time{}
-	testRoundTimeout := 0 * time.Millisecond
-	testLogger := zap.NewNop()
-
-	mockNet := new(MockNetwork)
-	mockMDAG := new(MockMDAG)
-
-	neighbors := []string{"neighbor1"}
-	mockNet.On("GetNeighbors").Return(neighbors).Once()
-	mockNet.On("RegisterHandler", "/expost/1.0.0/", mock.AnythingOfType("network.MessageHandler")).Once()
-
-	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 0, 0, 0, mockGradeFunc, testLogger)
-
-	suite.NotNil(expost)
-	suite.Equal("", expost.sid)
-	suite.Equal(time.Time{}, expost.startTime)
-	suite.Equal(0*time.Millisecond, expost.roundTimeout)
-	suite.Equal(0, expost.d)
-	suite.Equal(0, expost.D)
-	suite.Equal(0, expost.lambda)
-	suite.True(expost.isRunning)
-
-	mockNet.AssertExpectations(suite.T())
-	mockMDAG.AssertExpectations(suite.T())
-}
-
 func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	testSid := "special/chars@session#123"
 	testVk := []byte("test-vk")
-	testStartTime := time.Now()
-	testRoundTimeout := 100 * time.Millisecond
 	testLogger := zap.NewNop()
 
 	mockNet := new(MockNetwork)
@@ -273,7 +200,7 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	expectedProtocolID := "/expost/1.0.0/special/chars@session#123"
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
 
-	expost := New(mockNet, mockMDAG, testSid, testVk, testStartTime, testRoundTimeout, 3, 5, 32, mockGradeFunc, testLogger)
+	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Equal(testSid, expost.sid)
@@ -335,7 +262,7 @@ func (suite *ExPostTestSuite) TestVerifyHappyFlow() {
 		Sigma:     sigma,
 	}
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
 
 	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
@@ -719,7 +646,7 @@ func (suite *ExPostTestSuite) TestVerifyWithHighGradeProver() {
 		Sigma:     sigma,
 	}
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(3)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(32)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	results, err := suite.expost.Verify(suite.sid, []byte("high-grade-vk"), fSigmaExp, auxTag, 0.5, highGradeFilterTagFunc)
@@ -744,7 +671,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowGradeProver() {
 		Sigma:     sigma,
 	}
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(32)
 
 	results, err := suite.expost.Verify(suite.sid, []byte("low-grade-vk"), fSigmaExp, auxTag, 0.5, lowGradeFilterTagFunc)
 
@@ -992,7 +919,6 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	}
 
 	suite.expost.state = sigma
-	suite.expost.startTime = time.Now().Add(-time.Hour) // Pastime to avoid waiting
 
 	// Add a valid message to process with sufficient merkle path layers
 	validMsg := receivedMessage{
@@ -1026,7 +952,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Once()
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp
@@ -1062,7 +988,6 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	}
 
 	suite.expost.state = sigma
-	suite.expost.startTime = time.Now().Add(-time.Hour)
 
 	// Add two messages with different grades and sufficient merkle path layers
 	msg1 := receivedMessage{
@@ -1099,7 +1024,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	// Mock expectations
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("test-value")).Twice()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Twice()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp

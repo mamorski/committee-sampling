@@ -11,7 +11,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -113,6 +112,18 @@ func (n *InMemoryNetwork) Close() error {
 	return nil
 }
 
+// Subscribe returns a closed channel (no pubsub used in these tests)
+func (n *InMemoryNetwork) Subscribe(_ string) (<-chan []byte, error) {
+	ch := make(chan []byte)
+	close(ch)
+	return ch, nil
+}
+
+// VerifySignature always returns true (signature verification not required in these tests)
+func (n *InMemoryNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
+	return true, nil
+}
+
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -145,8 +156,7 @@ func testFilterFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool 
 
 //nolint:funlen
 func TestExAnteIntegrationTwoNodes(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	// Create network nodes
 	node1 := NewInMemoryNetwork("node1", []string{"node2"})
@@ -159,21 +169,17 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 5
 	sessionID := "test-integration"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
-
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdagSynchronizer := syncMock{}
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 3
 	exanteBigD := 2
-	exanteRoundTimeout := 200 * time.Millisecond
-	// ExAnte starts after MDAG completes: mdagStartTime + (mdagRounds + 1) * mdagRoundTimeout + buffer
-	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
+	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
 
 	// Test data
 	vk := []byte("test-verification-key")
@@ -285,8 +291,7 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 
 // nolint:funlen
 func TestExAnteIntegrationThreeNodes(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	// Create network nodes
 	node1 := NewInMemoryNetwork("node1", []string{"node2", "node3"})
@@ -304,23 +309,19 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 4
 	sessionID := "test-three-nodes"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
-
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdagSynchronizer := syncMock{}
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagSynchronizer, logger, common.ExAnteMDAG, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 2
 	exanteBigD := 2
-	exanteRoundTimeout := 200 * time.Millisecond
-	// ExAnte starts after MDAG completes: mdagStartTime + (mdagRounds + 1) * mdagRoundTimeout + buffer
-	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
+	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
-	exante3 := New(node3, mdag3, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante3 := New(node3, mdag3, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
 
 	// Test data
 	vk := []byte("test-vk-three-nodes")
@@ -448,8 +449,7 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 
 // nolint:funlen
 func TestExAnteIntegrationProverBehavior(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	// Create network nodes
 	node1 := NewInMemoryNetwork("node1", []string{"node2"})
@@ -462,11 +462,9 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 3
 	sessionID := "test-prover"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
-
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdagSynchronizer := syncMock{}
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
 
 	// Create grade function that makes node1 a prover
 	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
@@ -480,12 +478,10 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 3
 	exanteBigD := 1
-	exanteRoundTimeout := 200 * time.Millisecond
-	// ExAnte starts after MDAG completes: mdagStartTime + (mdagRounds + 1) * mdagRoundTimeout + buffer
-	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
+	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, proverGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, proverGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger)
 
 	// Test data
 	vk1 := []byte("node1-vk")
@@ -598,8 +594,7 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 
 // TestExAnteIntegrationMessageFiltering tests message filtering behavior
 func TestExAnteIntegrationMessageFiltering(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	// Create network nodes with restricted neighbors
 	node1 := NewInMemoryNetwork("node1", []string{"node2"}) // Only node2 is neighbor
@@ -617,23 +612,19 @@ func TestExAnteIntegrationMessageFiltering(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 3
 	sessionID := "test-filtering"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
-
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagRoundTimeout, logger, mdagStartTime, "")
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagRoundTimeout, logger, mdagStartTime, "")
+	mdagSynchronizer := syncMock{}
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagSynchronizer, logger, common.ExAnteMDAG, "")
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 2
 	exanteBigD := 1
-	exanteRoundTimeout := 500 * time.Millisecond
-	// ExAnte starts after MDAG completes: mdagStartTime + (mdagRounds + 1) * mdagRoundTimeout + buffer
-	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
+	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
-	exante3 := New(node3, mdag3, sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante3 := New(node3, mdag3, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
 
 	// Test data
 	vk := []byte("test-vk-filtering")
@@ -694,8 +685,7 @@ func TestExAnteIntegrationLargeNetwork(t *testing.T) {
 		t.Skip("Skipping large network test in short mode")
 	}
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 5
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -725,17 +715,14 @@ func TestExAnteIntegrationLargeNetwork(t *testing.T) {
 	// Create MDAG and ExAnte instances
 	mdagRounds := 3
 	sessionID := "test-large-network"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(500 * time.Millisecond)
+	mdagSynchronizer := syncMock{}
 	exanteD := 2
 	exanteBigD := 1
-	exanteRoundTimeout := 200 * time.Millisecond
-	// ExAnte starts after MDAG completes: mdagStartTime + (mdagRounds + 1) * mdagRoundTimeout + buffer
-	exanteStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
+	exanteSynchronizer := syncMock{}
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
-		exantes[i] = New(nodes[i], mdags[i], sessionID, exanteStartTime, exanteRoundTimeout, exanteD, exanteBigD, testGradeFunction, logger)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagSynchronizer, logger, common.ExAnteMDAG, "")
+		exantes[i] = New(nodes[i], mdags[i], sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
 	}
 
 	// Test data

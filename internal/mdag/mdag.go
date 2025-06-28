@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 
@@ -21,14 +22,14 @@ const protocolID = "/mdag/1.0.0"
 type HashOracle func([]byte) []byte
 
 type MDAG struct {
-	rounds       int             // total number of rounds
-	oracle       HashOracle      // hash oracle (random oracle)
-	network      network.Network // network interface for asynchronous messaging
-	roundTimeout time.Duration   // time to wait each round before computing the next label
-	logger       *zap.Logger     // zap logger for logging events
-	isRunning    bool            // flag indicating if the protocol is running
-	startTime    time.Time       // time when the protocol should start
-	neighbors    map[string]bool // set of allowed neighbor node IDs
+	rounds       int                 // total number of rounds
+	oracle       HashOracle          // hash oracle (random oracle)
+	network      network.Network     // network interface for asynchronous messaging
+	synchronizer common.Synchronizer // synchronizer for round timing
+	logger       *zap.Logger         // zap logger for logging events
+	isRunning    bool                // flag indicating if the protocol is running
+	step         common.Step         // synchronizer step (ExPostMDAG or ExAnteMDAG)
+	neighbors    map[string]bool     // set of allowed neighbor node IDs
 
 	mu             sync.Mutex
 	messages       map[int][][]byte // messages received from the network, keyed by round number
@@ -46,9 +47,9 @@ type MDAG struct {
 //   - sid: Session identifier for this protocol instance
 //   - oracle: Hash oracle function used for computing labels
 //   - network: Network interface for message passing
-//   - roundTimeout: Duration to wait for each round before proceeding
+//   - synchronizer: Synchronizer for round timing
 //   - logger: Structured logger for recording events
-//   - startTime: Time when the protocol should start execution
+//   - step: Synchronizer step (common.ExPostMDAG or common.ExAnteMDAG)
 //
 // Returns a configured MDAG instance ready to run the protocol.
 func New(
@@ -56,9 +57,9 @@ func New(
 	sid string,
 	oracle HashOracle,
 	network network.Network,
-	roundTimeout time.Duration,
+	synchronizer common.Synchronizer,
 	logger *zap.Logger,
-	startTime time.Time,
+	step common.Step,
 	protocolType string) *MDAG {
 
 	neighborsList := network.GetNeighbors()
@@ -71,14 +72,14 @@ func New(
 		rounds:         rounds,
 		oracle:         oracle,
 		network:        network,
-		roundTimeout:   roundTimeout,
+		synchronizer:   synchronizer,
 		logger:         logger.Named("mdag"),
 		messages:       make(map[int][][]byte),
 		computedLabels: make([][]byte, rounds+1),
 		state:          make([][][]byte, rounds),
 		isRunning:      false,
 		sessionID:      sid,
-		startTime:      startTime,
+		step:           step,
 		neighbors:      neighbors,
 		protocolType:   protocolType,
 	}
@@ -137,16 +138,30 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	m.currentLabel = m.oracle(buffer.Bytes())
 	m.computedLabels[0] = m.currentLabel
 
-	// Wait until the protocol start time before broadcasting
-	time.Sleep(time.Until(m.startTime))
+	// Wait for round 0 synchronization before broadcasting
+	waitChan, err := m.synchronizer.WaitForRound(m.step, 0)
+	if err != nil {
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
+		return nil, fmt.Errorf("failed to wait for round 0: %w", err)
+	}
+	<-waitChan
 
 	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
 
 	// Run the protocol for rounds 1 to m.rounds
 	for r := 1; r <= m.rounds; r++ {
-		// Wait for messages to arrive for this round
-		time.Sleep(time.Until(m.startTime.Add(time.Duration(r) * m.roundTimeout)))
+		// Wait for round r synchronization
+		waitChan, err := m.synchronizer.WaitForRound(m.step, r)
+		if err != nil {
+			m.mu.Lock()
+			m.isRunning = false
+			m.mu.Unlock()
+			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
+		}
+		<-waitChan
 
 		m.logger.Info("Starting round", zap.Int("round", r))
 

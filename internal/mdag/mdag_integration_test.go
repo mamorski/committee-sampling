@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 
 	"github.com/stretchr/testify/suite"
@@ -197,6 +198,18 @@ func (n *InMemoryNetwork) Close() error {
 	return nil
 }
 
+func (n *InMemoryNetwork) Subscribe(_ string) (<-chan []byte, error) {
+	// Simple implementation for testing - not used in MDAG integration tests
+	ch := make(chan []byte)
+	close(ch)
+	return ch, nil
+}
+
+func (n *InMemoryNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
+	// Simple implementation for testing - not used in MDAG integration tests
+	return true, nil
+}
+
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -224,7 +237,7 @@ type IntegrationTestSuite struct {
 // SetupTest runs before each test
 func (suite *IntegrationTestSuite) SetupTest() {
 	var err error
-	suite.logger, err = zap.NewDevelopment()
+	suite.logger = zap.NewNop()
 	suite.Require().NoError(err)
 }
 
@@ -316,23 +329,21 @@ func (suite *IntegrationTestSuite) createChaosNetwork(nodeCount int) *ChaosTopol
 
 // createMDAGInstances creates MDAG instances for all nodes in the topology
 func (suite *IntegrationTestSuite) createMDAGInstances(topology *NetworkTopology, rounds int, sessionID string) {
-	roundTimeout := 100 * time.Millisecond
-	startTime := time.Now().Add(200 * time.Millisecond)
+	synchronizer := syncMock{}
 
 	topology.mdags = make([]*MDAG, len(topology.nodes))
 	for i, node := range topology.nodes {
-		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime, "")
+		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, synchronizer, suite.logger, common.ExPostMDAG, "test")
 	}
 }
 
 // createChaosMDAGInstances creates MDAG instances for chaos topology
 func (suite *IntegrationTestSuite) createChaosMDAGInstances(topology *ChaosTopology, rounds int, sessionID string) {
-	roundTimeout := 150 * time.Millisecond // Longer timeout for chaos conditions
-	startTime := time.Now().Add(300 * time.Millisecond)
+	synchronizer := syncMock{}
 
 	topology.mdags = make([]*MDAG, len(topology.nodes))
 	for i, node := range topology.nodes {
-		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, roundTimeout, suite.logger, startTime, "")
+		topology.mdags[i] = New(rounds, sessionID, testOracleIntegration, node, synchronizer, suite.logger, common.ExPostMDAG, "test")
 	}
 }
 
@@ -391,7 +402,6 @@ func (suite *IntegrationTestSuite) runChaosProtocol(
 		case <-done:
 			completed++
 		case <-time.After(timeout):
-			suite.T().Logf("Protocol timed out with %d/%d nodes completed", completed, nodeCount)
 			return states, errors
 		}
 	}
@@ -548,11 +558,9 @@ func (suite *IntegrationTestSuite) TestChaosMessageDrops() {
 
 	// Some nodes might have errors due to message drops, but protocol should still progress
 	successfulNodes := 0
-	for i, err := range errors {
+	for _, err := range errors {
 		if err == nil {
 			successfulNodes++
-		} else {
-			suite.T().Logf("Node %d had error (expected with chaos): %v", i+1, err)
 		}
 	}
 
@@ -696,18 +704,15 @@ func (suite *IntegrationTestSuite) TestChaosPartitionHealing() {
 		case <-done:
 			completed++
 		case <-time.After(8 * time.Second):
-			suite.T().Logf("Protocol completed with %d/%d nodes", completed, len(topology.mdags))
 			break
 		}
 	}
 
 	// At least some nodes should complete successfully
 	successfulNodes := 0
-	for i, err := range errors {
+	for _, err := range errors {
 		if err == nil {
 			successfulNodes++
-		} else {
-			suite.T().Logf("Node %d error: %v", i+1, err)
 		}
 	}
 
@@ -735,16 +740,11 @@ func (suite *IntegrationTestSuite) TestChaosCombinedFailures() {
 
 	// Count successful completions
 	successfulNodes := 0
-	for i, err := range errors {
+	for _, err := range errors {
 		if err == nil {
 			successfulNodes++
-		} else {
-			suite.T().Logf("Node %d failed with combined chaos: %v", i+1, err)
 		}
 	}
-
-	// Protocol should show some resilience even under combined failures
-	suite.T().Logf("Successful nodes under combined chaos: %d/%d", successfulNodes, len(topology.mdags))
 
 	// Verify that the network showed activity despite failures
 	totalMessages := 0
@@ -786,15 +786,12 @@ func (suite *IntegrationTestSuite) TestFullyConnectedNetworkConvergence() {
 			"All nodes in fully-connected network should converge to the same final label")
 	}
 
-	suite.T().Logf("All nodes converged to final label: %x", finalLabels[0])
-
 	// Create Merkle path verifier
 	verifier := NewMerklePathVerifier(testOracleIntegration)
 
 	// Test Merkle path verification for each node
 	for i, state := range states {
 		nodeID := i + 1
-		suite.T().Logf("Verifying Merkle paths for node %d", nodeID)
 
 		// Get computed labels from MDAG instance
 		computedLabels := verifier.GetComputedLabelsFromMDAG(topology.mdags[i], 3)
@@ -802,8 +799,6 @@ func (suite *IntegrationTestSuite) TestFullyConnectedNetworkConvergence() {
 		// Verify the Merkle path for this node's state
 		isValid := verifier.VerifyMerklePath(state, computedLabels)
 		suite.True(isValid, "Node %d Merkle path should be valid", nodeID)
-
-		suite.T().Logf("Node %d: Merkle path verified successfully", nodeID)
 	}
 
 	// Verify that all nodes have identical states (since they're fully connected)
@@ -854,8 +849,6 @@ func (suite *IntegrationTestSuite) TestFullyConnectedNetworkConvergence() {
 		suite.NotEqual(label0, labelI,
 			"Node 1 and node %d should have different initial labels (round 0)", i+1)
 	}
-
-	suite.T().Log("Fully-connected network convergence test passed successfully")
 }
 
 // MerklePathVerifier provides functionality to verify Merkle paths in MDAG state
@@ -976,7 +969,6 @@ func (suite *IntegrationTestSuite) TestConnectedNetworkWithMerkleVerification() 
 	// Test Merkle path verification for each node
 	for i, state := range states {
 		nodeID := i + 1
-		suite.T().Logf("Verifying Merkle paths for node %d", nodeID)
 
 		// Get computed labels from MDAG instance
 		computedLabels := verifier.GetComputedLabelsFromMDAG(topology.mdags[i], 3)
@@ -984,8 +976,6 @@ func (suite *IntegrationTestSuite) TestConnectedNetworkWithMerkleVerification() 
 		// Verify the Merkle path for this node's state
 		isValid := verifier.VerifyMerklePath(state, computedLabels)
 		suite.True(isValid, "Node %d Merkle path should be valid", nodeID)
-
-		suite.T().Logf("Node %d: Merkle path verified successfully", nodeID)
 	}
 
 	// In a connected but not fully-connected network, nodes may not converge to the same final label
@@ -997,7 +987,6 @@ func (suite *IntegrationTestSuite) TestConnectedNetworkWithMerkleVerification() 
 	for i, mdag := range topology.mdags {
 		finalLabels[i] = mdag.GetComputedLabel(3) // rounds
 		suite.NotNil(finalLabels[i], "Node %d final label should not be nil", i+1)
-		suite.T().Logf("Node %d final label: %x", i+1, finalLabels[i])
 	}
 
 	// Verify that each node's state is internally consistent
@@ -1047,8 +1036,8 @@ func (suite *IntegrationTestSuite) TestMerklePathVerificationEdgeCases() {
 	verifier := NewMerklePathVerifier(testOracleIntegration)
 
 	// Test with empty state
-	emptyState := [][][]byte{}
-	emptyLabels := [][]byte{}
+	var emptyState [][][]byte
+	var emptyLabels [][]byte
 	isValid := verifier.VerifyMerklePath(emptyState, emptyLabels)
 	suite.False(isValid, "Should return false for empty state")
 
@@ -1094,7 +1083,6 @@ func (suite *IntegrationTestSuite) TestMerklePathConsistency() {
 			suite.True(isValid, "Run %d: Node %d Merkle path should be valid", run, i+1)
 		}
 
-		suite.T().Logf("Run %d: All Merkle paths verified successfully", run)
 	}
 }
 

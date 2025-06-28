@@ -11,7 +11,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -108,6 +107,18 @@ func (n *InMemoryNetwork) Close() error {
 	return nil
 }
 
+// Subscribe returns a closed channel (no pubsub used in these tests)
+func (n *InMemoryNetwork) Subscribe(_ string) (<-chan []byte, error) {
+	ch := make(chan []byte)
+	close(ch)
+	return ch, nil
+}
+
+// VerifySignature always returns true (signature verification not required in these tests)
+func (n *InMemoryNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
+	return true, nil
+}
+
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -136,8 +147,7 @@ func testFilterTagFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bo
 
 //nolint:funlen,gocyclo
 func TestExPostIntegrationFiveNodes(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 5
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -167,22 +177,19 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 6
 	sessionID := "test-expost-five-nodes"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(20 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances
 	expostD := 3
 	expostBigD := 2
-	expostRoundTimeout := 200 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout, expostD,
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
 			expostBigD, 32, testGradeFunction, logger)
 	}
 
@@ -285,8 +292,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 
 //nolint:funlen,gocyclo
 func TestExPostIntegrationProverBehavior(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 3
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -316,11 +322,10 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 4
 	sessionID := "test-expost-prover"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(20 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create grade function that makes node0 a prover
@@ -335,12 +340,10 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	// Create ExPost instances
 	expostD := 3
 	expostBigD := 1
-	expostRoundTimeout := 200 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout, expostD,
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
 			expostBigD, 32, proverGradeFunction, logger)
 	}
 
@@ -435,8 +438,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 }
 
 func TestExPostIntegrationMessageFiltering(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 4
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -469,23 +471,20 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 3
 	sessionID := "test-expost-filtering"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(20 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances
 	expostD := 2
 	expostBigD := 1
-	expostRoundTimeout := 300 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
-			expostD, expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
+			expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -581,8 +580,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 }
 
 func TestExPostIntegrationConcurrentExecution(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 5
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -612,23 +610,20 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 	// Create MDAG instances
 	mdagRounds := 5
 	sessionID := "test-expost-concurrent"
-	mdagRoundTimeout := 150 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(150 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances with different parameters
 	expostD := 2
 	expostBigD := 2
-	expostRoundTimeout := 150 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(300 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
-			expostD, expostBigD, 16, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
+			expostBigD, 16, testGradeFunction, logger)
 	}
 
 	// Run generation and verification concurrently
@@ -712,8 +707,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 }
 
 func TestExPostIntegrationErrorHandling(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 3
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -743,24 +737,21 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 	// Create MDAG instances with insufficient rounds
 	mdagRounds := 3
 	sessionID := "test-expost-errors"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(200 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances where R = d * D > mdagRounds
 	// This will cause GetComputedLabel(R) to return nil during Generate()
 	expostD := 5    // d = 5
 	expostBigD := 3 // D = 3, so R = d * D = 15 > mdagRounds = 3
-	expostRoundTimeout := 200 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
-			expostD, expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
+			expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should fail because R = 15 > mdagRounds = 3
@@ -806,8 +797,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 
 //nolint:funlen,gocyclo
 func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := zap.NewNop()
 
 	nodeCount := 3
 	nodes := make([]*InMemoryNetwork, nodeCount)
@@ -837,24 +827,21 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	// Create MDAG instances with sufficient rounds for generation
 	mdagRounds := 6
 	sessionID := "test-expost-verify-errors"
-	mdagRoundTimeout := 200 * time.Millisecond
-	mdagStartTime := time.Now().Add(300 * time.Millisecond)
+	syncer := newDelayedSync(200 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagRoundTimeout, logger, mdagStartTime, "")
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances with parameters that will work for generation
 	// but will fail verification due to insufficient sigma length
 	expostD := 3
 	expostBigD := 2
-	expostRoundTimeout := 200 * time.Millisecond
-	expostStartTime := mdagStartTime.Add(time.Duration(mdagRounds+1) * mdagRoundTimeout).Add(500 * time.Millisecond)
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, expostStartTime, expostRoundTimeout,
-			expostD, expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
+			expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should succeed

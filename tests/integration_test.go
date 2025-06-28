@@ -61,7 +61,7 @@ func TestNetworkInterface(t *testing.T) {
 	)
 	wg.Add(len(cluster.networks))
 
-	cfg.RunTime.StartTime = time.Now().UTC().Add(1 * time.Minute).Unix()
+	cfg.Synchronization.StartTime = time.Now().UTC().Add(1 * time.Minute).Unix()
 	logger.Info("Configuration loaded",
 		zap.Any("cfg", cfg),
 	)
