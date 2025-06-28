@@ -1,8 +1,8 @@
 # Build stage
 FROM golang:1.23-alpine AS builder
 
-# Install protobuf compiler and make
-RUN apk add --no-cache protobuf-dev make
+# Install protobuf compiler
+RUN apk add --no-cache protobuf-dev
 
 # Install Go protobuf plugins
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest && \
@@ -21,7 +21,13 @@ RUN go mod download
 COPY . .
 
 # Generate proto files and build
-RUN make proto && go build -o committee-sampling ./cmd/committee-sampling
+RUN protoc \
+    --go_out=. \
+    --go_opt=paths=source_relative \
+    --go-grpc_out=. \
+    --go-grpc_opt=paths=source_relative \
+    pkg/proto/*.proto && \
+    go build -o committee-sampling ./cmd/committee-sampling
 
 # Runtime stage
 FROM alpine:latest
