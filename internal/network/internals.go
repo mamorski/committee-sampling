@@ -34,7 +34,7 @@ func (n *P2PNode) authenticateMessage(message proto.Message, data *pproto.Messag
 	data.Sign = sign
 
 	// restore peer id binary format from base58 encoded node id data
-	peerId, err := peer.Decode(data.NodeId)
+	peerID, err := peer.Decode(data.NodeId)
 	if err != nil {
 		n.logger.Error("Failed to decode node id from base58", zap.Error(err))
 		return false
@@ -42,7 +42,7 @@ func (n *P2PNode) authenticateMessage(message proto.Message, data *pproto.Messag
 
 	// verify the data was authored by the signing peer identified by the public key
 	// and signature included in the message
-	return n.verifyData(bin, sign, peerId, data.NodePubKey)
+	return n.verifyData(bin, sign, peerID, data.NodePubKey)
 }
 
 // sign an outgoing p2p message payload
@@ -68,7 +68,7 @@ func (n *P2PNode) signData(data []byte) ([]byte, error) {
 // signature: author signature provided in the message payload
 // peerId: author peer id from the message payload
 // pubKeyData: author public key from the message payload
-func (n *P2PNode) verifyData(data []byte, signature []byte, peerId peer.ID, pubKeyData []byte) bool {
+func (n *P2PNode) verifyData(data []byte, signature []byte, peerID peer.ID, pubKeyData []byte) bool {
 	key, err := crypto.UnmarshalPublicKey(pubKeyData)
 	if err != nil {
 		n.logger.Error("Failed to extract key from message key data", zap.Error(err))
@@ -84,7 +84,7 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerId peer.ID, pubK
 	}
 
 	// verify that message author node id matches the provided node public key
-	if idFromKey != peerId {
+	if idFromKey != peerID {
 		n.logger.Error("Node id and provided public key mismatch")
 		return false
 	}
@@ -100,7 +100,7 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerId peer.ID, pubK
 
 // newMessageData helper method - generate message data shared between all node's p2p protocols
 // messageId: unique for requests, copied from request for responses
-func (n *P2PNode) newMessageData(messageId string, gossip bool) *pproto.MessageData {
+func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageData {
 	// Add proto bin data for message author public key
 	// this is useful for authenticating  messages forwarded by a node authored by another node
 	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
@@ -113,7 +113,7 @@ func (n *P2PNode) newMessageData(messageId string, gossip bool) *pproto.MessageD
 		NodeId:     n.host.ID().String(),
 		NodePubKey: nodePubKey,
 		Timestamp:  time.Now().Unix(),
-		Id:         messageId,
+		Id:         messageID,
 		Gossip:     gossip}
 }
 
