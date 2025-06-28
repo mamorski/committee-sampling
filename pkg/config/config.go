@@ -33,6 +33,11 @@ type Config struct {
 	Graph           Graph           `mapstructure:"graph"`
 	RunTime         RunTimeConfig   `mapstructure:"run_time"`        // Runtime configuration for the protocol
 	Synchronization Synchronization `mapstructure:"synchronization"` // Configuration for the synchronization protocol
+	Logger          Logger          `mapstructure:"logger"`          // Configuration for the logger
+}
+
+type Logger struct {
+	Level string `mapstructure:"level"`
 }
 
 type Network struct {
@@ -76,16 +81,17 @@ type Synchronization struct {
 	Topic              string        `mapstructure:"topic"`                 // Topic for sync messages
 }
 
-func Load(cfgFile string) (*Config, error) {
+func Load() (*Config, error) {
 	viper.AutomaticEnv() // read in env vars
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.SetConfigType("json")
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		viper.AddConfigPath("./configs/")
-		viper.SetConfigName("dev.json")
+
+	env := viper.GetString("ENV")
+	if env == "" {
+		env = "dev"
 	}
+	viper.AddConfigPath("./configs/")
+	viper.SetConfigName(env + ".json")
 
 	if err := viper.ReadInConfig(); err != nil {
 		panic(fmt.Sprintf("Error reading config file: %s", err))
