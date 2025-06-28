@@ -176,14 +176,18 @@ jobs:
 
   # Cleanup old images
   cleanup:
-    needs: [deploy-dev, deploy-staging, deploy-production]
+    needs: [docker-build, security]
     runs-on: ubuntu-latest
-    if: always()
+    if: false  # Disabled for now - enable after several builds
+    permissions:
+      packages: write
     steps:
     - name: Clean up old container images
       uses: actions/delete-package-versions@v5
+      continue-on-error: true
       with:
-        package-name: ${{ github.event.repository.name }}
+        package-name: ${{ github.repository }}
         package-type: 'container'
         min-versions-to-keep: 10
-        delete-only-untagged-versions: true 
+        delete-only-untagged-versions: true
+        token: ${{ secrets.GITHUB_TOKEN }} 
