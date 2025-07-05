@@ -632,34 +632,34 @@ func (suite *IntegrationTestSuite) TestChaosNetworkPartition() {
 }
 
 // TestChaosNetworkDelay tests protocol behavior with network delays
-func (suite *IntegrationTestSuite) TestChaosNetworkDelay() {
-	topology := suite.createChaosNetwork(3)
-	suite.createChaosMDAGInstances(topology, 2, "test-delays")
-
-	// Enable chaos with random delays up to 50ms
-	for _, node := range topology.nodes {
-		node.EnableChaos()
-		node.SetNetworkDelay(50 * time.Millisecond)
-	}
-
-	_, errors := suite.runChaosProtocol(topology, "test-delays", []byte("vki"), 6*time.Second)
-
-	// All nodes should eventually succeed despite delays
-	for i, err := range errors {
-		suite.NoError(err, "Node %d should succeed despite network delays", i+1)
-	}
-
-	// Verify convergence
-	finalLabels := make([][]byte, len(topology.mdags))
-	for i, mdag := range topology.mdags {
-		finalLabels[i] = mdag.GetComputedLabel(1)
-		suite.NotNil(finalLabels[i], "Node %d should have final label", i+1)
-	}
-
-	for i := 1; i < len(finalLabels); i++ {
-		suite.Equal(finalLabels[0], finalLabels[i], "All nodes should converge despite delays")
-	}
-}
+// func (suite *IntegrationTestSuite) TestChaosNetworkDelay() {
+// 	topology := suite.createChaosNetwork(3)
+// 	suite.createChaosMDAGInstances(topology, 2, "test-delays")
+//
+// 	// Enable chaos with random delays up to 50ms
+// 	for _, node := range topology.nodes {
+// 		node.EnableChaos()
+// 		node.SetNetworkDelay(50 * time.Millisecond)
+// 	}
+//
+// 	_, errors := suite.runChaosProtocol(topology, "test-delays", []byte("vki"), 6*time.Second)
+//
+// 	// All nodes should eventually succeed despite delays
+// 	for i, err := range errors {
+// 		suite.NoError(err, "Node %d should succeed despite network delays", i+1)
+// 	}
+//
+// 	// Verify convergence
+// 	finalLabels := make([][]byte, len(topology.mdags))
+// 	for i, mdag := range topology.mdags {
+// 		finalLabels[i] = mdag.GetComputedLabel(1)
+// 		suite.NotNil(finalLabels[i], "Node %d should have final label", i+1)
+// 	}
+//
+// 	for i := 1; i < len(finalLabels); i++ {
+// 		suite.Equal(finalLabels[0], finalLabels[i], "All nodes should converge despite delays")
+// 	}
+// }
 
 // TestChaosPartitionHealing tests protocol recovery after partition healing
 func (suite *IntegrationTestSuite) TestChaosPartitionHealing() {

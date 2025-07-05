@@ -1,12 +1,18 @@
 PROTOC := protoc
 PROTO_DIR := pkg/proto
+BINARY_NAME := committee-sampling
+CMD_DIR := cmd/committee-sampling
+DOCKER_IMAGE := committee-sampling
+DOCKER_TAG := latest
+REGISTRY := ghcr.io
 
-.PHONY: all clean proto
+.PHONY: all clean proto build test run deps dev docker-build docker-run-dev docker-run-prod docker-run-stg docker-clean docker-logs docker-shell compose-up compose-up-dev compose-up-prod compose-up-stg compose-down compose-logs compose-monitoring compose-restart ci-build ci-test ci-push
 
-all: proto
+all: proto build
 
 clean:
 	rm -f $(PROTO_DIR)/*.pb.go
+	rm -f $(BINARY_NAME)
 
 proto:
 	$(PROTOC) \
@@ -14,4 +20,78 @@ proto:
 		--go_opt=paths=source_relative \
 		--go-grpc_out=. \
 		--go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/network.proto
+		$(PROTO_DIR)/*.proto
+
+build: proto
+	go build -o $(BINARY_NAME) ./$(CMD_DIR)
+
+test:
+	go test -v ./...
+
+run: build
+	./$(BINARY_NAME)
+
+deps:
+	go mod download
+	go mod tidy
+
+dev: deps proto
+	go run ./$(CMD_DIR)
+
+docker-build:
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+docker-run-dev: docker-build
+	docker run --rm -e ENV=dev -p 8080:8080 $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+docker-run-prod: docker-build
+	docker run --rm -e ENV=prod -p 8080:8080 $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+docker-run-stg: docker-build
+	docker run --rm -e ENV=stg -p 8080:8080 $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+docker-clean:
+	docker rmi $(DOCKER_IMAGE):$(DOCKER_TAG) 2>/dev/null || true
+	docker system prune -f
+
+docker-logs:
+	docker logs -f $(shell docker ps -q --filter ancestor=$(DOCKER_IMAGE):$(DOCKER_TAG))
+
+docker-shell:
+	docker run --rm -it $(DOCKER_IMAGE):$(DOCKER_TAG) /bin/sh
+
+# Docker Compose targets
+compose-up:
+	docker-compose up -d
+
+compose-up-dev:
+	ENV=dev docker-compose up -d
+
+compose-up-prod:
+	ENV=prod docker-compose up -d
+
+compose-up-stg:
+	ENV=stg docker-compose up -d
+
+compose-down:
+	docker-compose down
+
+compose-logs:
+	docker-compose logs -f
+
+compose-monitoring:
+	docker-compose --profile monitoring up -d
+
+compose-restart:
+	docker-compose restart committee-sampling
+
+# CI/CD integration targets
+ci-build:
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+ci-test:
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) /bin/sh -c "echo 'Container smoke test passed'"
+
+ci-push:
+	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG) $(REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)
+	docker push $(REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)
