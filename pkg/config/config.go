@@ -47,6 +47,8 @@ type Network struct {
 	ConnectTimeout    time.Duration `mapstructure:"connect_timeout"`     // Timeout for establishing connections
 	DiscoveryConfig   Discovery     `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
 	Topic             string        `mapstructure:"topic"`               // Topic for the synchronization protocol
+	FindPeersTimeout  time.Duration `mapstructure:"find_peers_timeout"`  // Timeout for finding peers
+
 }
 
 type Discovery struct {

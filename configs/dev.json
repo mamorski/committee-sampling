@@ -5,6 +5,7 @@
     "heartbeat_interval": "30s",
     "connect_timeout": "10s",
     "topic": "committee-sampling",
+    "find_peers_timeout": "1m",
     "discovery_config": {
       "discovery_type": "mdns",
       "protocol_id": "/committee-sampling/1.0.0",

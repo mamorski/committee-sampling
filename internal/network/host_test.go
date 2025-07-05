@@ -140,6 +140,7 @@ func (suite *HostTestSuite) SetupTest() {
 		maxOutbound:       5,
 		heartbeatInterval: time.Second,
 		key:               suite.testPrivKey,
+		findPeersTimeout:  10 * time.Second,
 	}
 }
 
@@ -789,6 +790,7 @@ func (suite *HostTestSuite) TestNewWithMDNS() {
 		MaxOutboundDegree: 10,
 		HeartbeatInterval: 30 * time.Second,
 		ConnectTimeout:    5 * time.Second,
+		FindPeersTimeout:  15 * time.Second,
 		DiscoveryConfig: config.Discovery{
 			DiscoveryType: "mdns",
 			ProtocolID:    "committee-sampling",
