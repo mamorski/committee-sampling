@@ -367,16 +367,6 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if msg.Id != from {
-		err := fmt.Errorf("sender id mismatch")
-
-		e.logger.Warn("Received message with mismatched sender id",
-			zap.String("expected", from),
-			zap.String("received", msg.Id))
-
-		return err
-	}
-
 	if !e.neighbors[from] {
 		err := fmt.Errorf("sender not in neighbors list")
 

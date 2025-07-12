@@ -23,6 +23,7 @@ func main() {
 		panic(err)
 	}
 
+	logger = logger.With(zap.String("node_id", node.GetNodeID()))
 	b, err := boot.New(cfg, node, logger)
 	if err != nil {
 		panic(err)

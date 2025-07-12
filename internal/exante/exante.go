@@ -298,14 +298,6 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if msg.Id != from {
-		err := errors.New("sender id mismatch")
-		e.logger.Error("Received message with mismatched sender id",
-			zap.String("expected", from),
-			zap.String("received", msg.Id))
-		return err
-	}
-
 	if !e.neighbors[from] {
 		err := errors.New("sender not in neighbors list")
 		e.logger.Error("Received message from non-neighbor sender",

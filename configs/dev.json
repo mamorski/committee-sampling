@@ -1,21 +1,21 @@
 {
   "network": {
-    "listen_port": 8080,
-    "max_outbound_degree": 10,
+    "listen_port": 0,
+    "max_outbound_degree": 4,
     "heartbeat_interval": "30s",
     "connect_timeout": "10s",
     "topic": "committee-sampling",
     "find_peers_timeout": "1m",
     "discovery_config": {
-      "discovery_type": "mdns",
+      "discovery_type": "dht",
       "protocol_id": "/committee-sampling/1.0.0",
       "interval": "5s",
-      "bootstrap_peers": [],
+      "bootstrap_peers": ["/ip4/127.0.0.1/tcp/4001", "/ip4/192.168.1.113/tcp/4001"],
       "service_tag": "committee-sampling-dev"
     }
   },
   "graph": {
-    "diameter": 6,
+    "diameter": 4,
     "grading_levels": 3
   },
   "run_time": {
@@ -30,7 +30,7 @@
     "ex_ante_round_timeout": "5s",
     "ex_post_round_timeout": "5s",
     "mdag_round_timeout": "5s",
-    "start_time": 1748359139,
+    "start_time": 1752311490,
     "time_server": "time.google.com",
     "certificate_path": "",
     "topic": "sync-topic"

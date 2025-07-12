@@ -67,8 +67,8 @@ func New(pubSub PubSub, cfg *config.Config, logger *zap.Logger) (*Synchronizer, 
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
-		s.roundChannels[step] = make([]chan struct{}, s.rounds)
-		for i := 0; i < s.rounds; i++ {
+		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
+		for i := 0; i < s.rounds+1; i++ {
 			s.roundChannels[step][i] = make(chan struct{})
 		}
 	}
@@ -164,7 +164,7 @@ func (s *Synchronizer) startTimeSync() {
 
 func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time, roundTimeout time.Duration) {
 	s.logger.Info("Scheduling rounds for step", zap.String("step", string(step)), zap.Time("startTime", startTime))
-	for i := 0; i < s.rounds; i++ {
+	for i := 0; i < s.rounds+1; i++ {
 		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout)
 		timer := time.NewTimer(time.Until(roundStartTime))
 
