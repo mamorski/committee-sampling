@@ -54,18 +54,20 @@ type Host interface {
 }
 
 type P2PNode struct {
-	host              Host
-	ctx               context.Context
-	cancel            context.CancelFunc
-	logger            *zap.Logger
-	neighbors         sync.Map
-	discovery         discovery.PeerDiscovery
-	maxOutbound       int
-	numOfNeighbors    int
-	heartbeatInterval time.Duration
-	key               crypto.PrivKey
-	topic             string
-	pubsub            *pubsub.PubSub
+	host               Host
+	ctx                context.Context
+	cancel             context.CancelFunc
+	logger             *zap.Logger
+	neighbors          sync.Map
+	discovery          discovery.PeerDiscovery
+	maxOutbound        int
+	numOfNeighbors     int
+	heartbeatInterval  time.Duration
+	key                crypto.PrivKey
+	topic              string
+	pubsub             *pubsub.PubSub
+	findPeersTimeout   time.Duration
+	stopReceivingPeers bool
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode, error) {
@@ -112,17 +114,19 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger) (*P2PNode,
 	}
 
 	node := &P2PNode{
-		host:              h,
-		ctx:               c,
-		cancel:            cancel,
-		maxOutbound:       cfg.MaxOutboundDegree,
-		heartbeatInterval: cfg.HeartbeatInterval,
-		discovery:         d,
-		logger:            logger.Named("network"),
-		numOfNeighbors:    0,
-		key:               priv,
-		topic:             cfg.Topic,
-		pubsub:            ps,
+		host:               h,
+		ctx:                c,
+		cancel:             cancel,
+		maxOutbound:        cfg.MaxOutboundDegree,
+		heartbeatInterval:  cfg.HeartbeatInterval,
+		discovery:          d,
+		logger:             logger.Named("network"),
+		numOfNeighbors:     0,
+		key:                priv,
+		topic:              cfg.Topic,
+		pubsub:             ps,
+		findPeersTimeout:   cfg.FindPeersTimeout,
+		stopReceivingPeers: false,
 	}
 
 	// Set stream handler
@@ -213,9 +217,14 @@ func (n *P2PNode) GetNodeID() string {
 
 func (n *P2PNode) handleDiscoveredPeers() {
 	ch := n.discovery.DiscoveredPeers()
+	timeout := time.NewTicker(n.findPeersTimeout)
+	defer timeout.Stop()
 	for {
 		select {
 		case <-n.ctx.Done():
+			return
+		case <-timeout.C:
+			n.stopReceivingPeers = true
 			return
 		case pi := <-ch:
 			n.sendRequestToNeighbor(pi)
@@ -350,6 +359,22 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	// Check if already connected
 	if _, ok := n.neighbors.Load(addrInfo.ID); ok {
 		return nil
+	}
+
+	// Check if we have reached the maximum number of neighbors
+	if n.numOfNeighbors >= n.maxOutbound {
+		n.logger.Debug(
+			"Already connected to max number of neighbors",
+			zap.Int("max", n.maxOutbound),
+			zap.Int("current", n.numOfNeighbors),
+		)
+		return fmt.Errorf("max number of neighbors reached")
+	}
+
+	// Check if timeout for receiving peers has been reached
+	if n.stopReceivingPeers {
+		n.logger.Debug("Stopping receiving peers, not adding new neighbor", zap.String("peer", addrInfo.ID.String()))
+		return fmt.Errorf("stopping receiving peers")
 	}
 
 	err := n.host.Connect(n.ctx, addrInfo)
