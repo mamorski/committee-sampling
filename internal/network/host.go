@@ -352,9 +352,10 @@ func (n *P2PNode) onNeighborResponse(s network.Stream) {
 }
 
 func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
-	// Remove the peer ID filtering - allow connections to all peers
-	// The original logic only connected to peers with lower IDs, which meant
-	// half of all peers were ignored
+	if info.ID > n.host.ID() {
+		n.logger.Debug("Ignoring peer with higher ID", zap.String("peer", info.ID.String()))
+		return
+	}
 
 	if n.numOfNeighbors >= n.maxOutbound {
 		n.logger.Debug(
