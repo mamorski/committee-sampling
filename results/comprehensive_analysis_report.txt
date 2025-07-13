@@ -1,0 +1,45 @@
+COMPREHENSIVE NETWORK ANALYSIS REPORT
+=====================================
+
+NETWORK STRUCTURE:
+• Total Nodes: 20
+• Total Edges: 60
+• Network Density: 0.316
+• Is Connected: True
+• Connected Components: 1
+
+CENTRALITY ANALYSIS:
+• Most central nodes (degree): [(2, 0.3684210526315789), (19, 0.3684210526315789), (8, 0.3684210526315789), (1, 0.3684210526315789), (13, 0.3684210526315789)]
+• Most central nodes (betweenness): [(4, 0.49122807017543857), (1, 0.4093567251461988), (6, 0.3508771929824561), (8, 0.19005847953216373), (5, 0.19005847953216373)]
+• Most central nodes (closeness): [(2, 0.475), (19, 0.475), (13, 0.475), (4, 0.475), (17, 0.475)]
+
+CLUSTERING ANALYSIS:
+• Average Clustering Coefficient: 0.894
+• Global Clustering (Transitivity): 0.872
+• Nodes with highest clustering: [(18, 1.0), (3, 1.0), (11, 1.0), (10, 1.0), (12, 1.0)]
+
+PATH ANALYSIS:
+• Network Diameter: 6
+• Network Radius: 3
+• Average Shortest Path Length: 2.76
+
+DEGREE DISTRIBUTION:
+• Average Degree: 6.00
+• Degree Variance: 1.30
+• Degree Distribution: {6: 6, 4: 4, 7: 9, 5: 1}
+
+COMMITTEE ANALYSIS:
+• Committee Participants: 16/20
+• Committee Consensus: False
+• Unique Committees: 16
+
+ASYMMETRIC EDGES:
+• One-directional edges: 7
+• Percentage asymmetric: 11.7%
+• Graph symmetry: False
+
+NETWORK HEALTH ASSESSMENT:
+• Connectivity: Good
+• Density: Medium
+• Clustering: High
+• Committee Consensus: Failed

@@ -262,7 +262,7 @@ func (suite *HostTestSuite) TestAddNeighbor() {
 
 	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(nil)
 
-	err := suite.node.addNeighbor(addrInfo)
+	err := suite.node.addNeighbor(addrInfo, false)
 	suite.NoError(err)
 	suite.Equal(1, suite.node.numOfNeighbors)
 
@@ -283,7 +283,7 @@ func (suite *HostTestSuite) TestAddNeighborConnectionError() {
 
 	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(assert.AnError)
 
-	err := suite.node.addNeighbor(addrInfo)
+	err := suite.node.addNeighbor(addrInfo, false)
 	suite.Error(err)
 	suite.Equal(0, suite.node.numOfNeighbors)
 
@@ -305,7 +305,7 @@ func (suite *HostTestSuite) TestAddNeighborAlreadyExists() {
 	suite.node.neighbors.Store(suite.testPeerID, addrInfo)
 
 	// Try to add again - should not call Connect
-	err := suite.node.addNeighbor(addrInfo)
+	err := suite.node.addNeighbor(addrInfo, false)
 	suite.NoError(err)
 }
 

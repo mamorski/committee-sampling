@@ -30,3 +30,7 @@ go.work.sum
 
 # MACOS files
 .DS_Store
+
+logs-*/
+
+venv/

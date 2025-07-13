@@ -297,7 +297,7 @@ func (n *P2PNode) onNeighborRequest(s network.Stream) {
 	err = n.addNeighbor(peer.AddrInfo{
 		ID:    s.Conn().RemotePeer(),
 		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
-	})
+	}, false)
 	if err != nil {
 		resp.Success = false
 	}
@@ -345,11 +345,10 @@ func (n *P2PNode) onNeighborResponse(s network.Stream) {
 	err = n.addNeighbor(peer.AddrInfo{
 		ID:    s.Conn().RemotePeer(),
 		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
-	})
+	}, true)
 	if err != nil {
 		n.logger.Error("Failed to add neighbor", zap.Error(err))
 	}
-
 }
 
 func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
@@ -402,15 +401,16 @@ func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
 	n.logger.Debug("Successfully sent neighbor request", zap.String("peer", info.ID.String()))
 }
 
-func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
+func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo, ignoreMax bool) error {
 	// Check if already connected
 	if _, ok := n.neighbors.Load(addrInfo.ID); ok {
 		n.logger.Debug("Neighbor already exists", zap.String("peer", addrInfo.ID.String()))
 		return nil
 	}
 
-	// Check if we have reached the maximum number of neighbors
-	if n.numOfNeighbors >= n.maxOutbound {
+	// Check if we have reached the maximum number of neighbors, unless ignoreMax is true - used for onNeighborResponse,
+	// since we already responded to the request and we want to add the neighbor regardless of the max limit
+	if n.numOfNeighbors >= n.maxOutbound && !ignoreMax {
 		n.logger.Debug(
 			"Already connected to max number of neighbors",
 			zap.Int("max", n.maxOutbound),

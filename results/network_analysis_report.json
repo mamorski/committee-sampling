@@ -1,0 +1,350 @@
+{
+  "timestamp": "2025-07-13T17:29:40.936620",
+  "total_nodes": 20,
+  "graph_analysis": {
+    "total_edges": 113,
+    "one_directional_edges": [
+      [
+        2,
+        4
+      ],
+      [
+        16,
+        2
+      ],
+      [
+        16,
+        15
+      ],
+      [
+        16,
+        19
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        4,
+        8
+      ],
+      [
+        6,
+        1
+      ]
+    ],
+    "one_directional_count": 7,
+    "diameter": 6,
+    "is_symmetric": false
+  },
+  "committee_analysis": {
+    "total_nodes_with_results": 16,
+    "unique_committees": 16,
+    "committee_groups": {
+      "('12D3KooWBej8ZrQxtCBnwzPxVL6wJQah37AZ1ybmjrg4SfLkCYFc', '12D3KooWC7K84wBHJSAeUQJcLaNwrocSKKfKWmWhBvqdsoD5fia6', '12D3KooWDgoNi9nzAGFy6h5wBiE2j6NU6PaF82kB2Z4c79TsycTj', '12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao', '12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a')": [
+        18
+      ],
+      "('12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao',)": [
+        11
+      ],
+      "('12D3KooWDapFHK9Q7ucoar9c2bKZ2mK1X6GhdkKxoxsaMAXDHty7', '12D3KooWGVDqAPShpFkaocVMHcYX9diQyjTciu2jFMHbKQGitCBi', '12D3KooWLVzH8NMnsMvzxX9hez5K8v6bkSYFWxgQ2NuHdETqeMHj')": [
+        10
+      ],
+      "('12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi', '12D3KooWBzpy6jhNfTAQmrpLrL8BWt6PLam4gYHXXRvPFBh7PmZc', '12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o', '12D3KooWGaD3pS6fXCYQvnZ7egtJQKQMxfzqUZjjwR69g4zbjm4w', '12D3KooWKa8uEBR2a9jkRkvBe2frBCSJVTX6CmND8QEMvUx6LnGL', '12D3KooWPniXo7oPqbeGrnbXbm69hnKTgr3TNc5Jx2bPQ4REvvye')": [
+        19
+      ],
+      "('12D3KooWBej8ZrQxtCBnwzPxVL6wJQah37AZ1ybmjrg4SfLkCYFc', '12D3KooWDgoNi9nzAGFy6h5wBiE2j6NU6PaF82kB2Z4c79TsycTj', '12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao', '12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a')": [
+        12
+      ],
+      "('12D3KooWDgoNi9nzAGFy6h5wBiE2j6NU6PaF82kB2Z4c79TsycTj', '12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao', '12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a')": [
+        9
+      ],
+      "('12D3KooWBej8ZrQxtCBnwzPxVL6wJQah37AZ1ybmjrg4SfLkCYFc', '12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao', '12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a')": [
+        8
+      ],
+      "('12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o',)": [
+        1
+      ],
+      "('12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi', '12D3KooWBzpy6jhNfTAQmrpLrL8BWt6PLam4gYHXXRvPFBh7PmZc', '12D3KooWCAk8QGXkwQcyi9wTyxyirYgpwswzLLxc5JHAEMaNGyyA', '12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o', '12D3KooWPniXo7oPqbeGrnbXbm69hnKTgr3TNc5Jx2bPQ4REvvye')": [
+        13
+      ],
+      "('12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi', '12D3KooWKa8uEBR2a9jkRkvBe2frBCSJVTX6CmND8QEMvUx6LnGL')": [
+        16
+      ],
+      "('12D3KooWBej8ZrQxtCBnwzPxVL6wJQah37AZ1ybmjrg4SfLkCYFc', '12D3KooWC7K84wBHJSAeUQJcLaNwrocSKKfKWmWhBvqdsoD5fia6', '12D3KooWDgoNi9nzAGFy6h5wBiE2j6NU6PaF82kB2Z4c79TsycTj', '12D3KooWHiEDMfj5h4TqGdUnzZTebSRSyHzxwubrHiBVSBxX9fCL', '12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao', '12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a')": [
+        20
+      ],
+      "('12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi', '12D3KooWBzpy6jhNfTAQmrpLrL8BWt6PLam4gYHXXRvPFBh7PmZc', '12D3KooWCAk8QGXkwQcyi9wTyxyirYgpwswzLLxc5JHAEMaNGyyA', '12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o', '12D3KooWKa8uEBR2a9jkRkvBe2frBCSJVTX6CmND8QEMvUx6LnGL', '12D3KooWPniXo7oPqbeGrnbXbm69hnKTgr3TNc5Jx2bPQ4REvvye')": [
+        17
+      ],
+      "('12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi', '12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o', '12D3KooWGaD3pS6fXCYQvnZ7egtJQKQMxfzqUZjjwR69g4zbjm4w', '12D3KooWKa8uEBR2a9jkRkvBe2frBCSJVTX6CmND8QEMvUx6LnGL', '12D3KooWPniXo7oPqbeGrnbXbm69hnKTgr3TNc5Jx2bPQ4REvvye')": [
+        15
+      ],
+      "('12D3KooWDapFHK9Q7ucoar9c2bKZ2mK1X6GhdkKxoxsaMAXDHty7', '12D3KooWLVzH8NMnsMvzxX9hez5K8v6bkSYFWxgQ2NuHdETqeMHj')": [
+        7
+      ],
+      "('12D3KooWDapFHK9Q7ucoar9c2bKZ2mK1X6GhdkKxoxsaMAXDHty7', '12D3KooWGVDqAPShpFkaocVMHcYX9diQyjTciu2jFMHbKQGitCBi', '12D3KooWLVzH8NMnsMvzxX9hez5K8v6bkSYFWxgQ2NuHdETqeMHj', '12D3KooWR32QEN6MiDw2oHXVQs5N5nqf1BNZWagYkxnDXGdLjaoL')": [
+        14
+      ],
+      "('12D3KooWDapFHK9Q7ucoar9c2bKZ2mK1X6GhdkKxoxsaMAXDHty7', '12D3KooWGVDqAPShpFkaocVMHcYX9diQyjTciu2jFMHbKQGitCBi')": [
+        6
+      ]
+    },
+    "consensus": false
+  },
+  "node_details": {
+    "18": {
+      "node_id": "12D3KooWHiEDMfj5h4TqGdUnzZTebSRSyHzxwubrHiBVSBxX9fCL",
+      "neighbors": [
+        5,
+        8,
+        9,
+        11,
+        12,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "3": {
+      "node_id": "12D3KooWDapFHK9Q7ucoar9c2bKZ2mK1X6GhdkKxoxsaMAXDHty7",
+      "neighbors": [
+        10,
+        7,
+        6,
+        14
+      ],
+      "neighbor_count": 4,
+      "has_committee_result": false
+    },
+    "11": {
+      "node_id": "12D3KooWPYbCf3zDoMbvM6JJVvg78myqpuJicpfwbG5po7epTD4a",
+      "neighbors": [
+        5,
+        8,
+        9,
+        12,
+        18,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "2": {
+      "node_id": "12D3KooWCir23kdppBZFw6pxviv3Xn2CBURn1BsoubJYBoBkBh4o",
+      "neighbors": [
+        1,
+        4,
+        13,
+        15,
+        17,
+        19
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": false
+    },
+    "10": {
+      "node_id": "12D3KooWR32QEN6MiDw2oHXVQs5N5nqf1BNZWagYkxnDXGdLjaoL",
+      "neighbors": [
+        3,
+        7,
+        6,
+        14
+      ],
+      "neighbor_count": 4,
+      "has_committee_result": true
+    },
+    "19": {
+      "node_id": "12D3KooWNiCg76s8WHHTiok3nara9QAMLaKfKUyd9GG2KGitwE6P",
+      "neighbors": [
+        1,
+        2,
+        4,
+        13,
+        15,
+        17
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "12": {
+      "node_id": "12D3KooWC7K84wBHJSAeUQJcLaNwrocSKKfKWmWhBvqdsoD5fia6",
+      "neighbors": [
+        5,
+        8,
+        9,
+        11,
+        18,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "9": {
+      "node_id": "12D3KooWBej8ZrQxtCBnwzPxVL6wJQah37AZ1ybmjrg4SfLkCYFc",
+      "neighbors": [
+        5,
+        8,
+        11,
+        12,
+        18,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "8": {
+      "node_id": "12D3KooWDgoNi9nzAGFy6h5wBiE2j6NU6PaF82kB2Z4c79TsycTj",
+      "neighbors": [
+        5,
+        9,
+        11,
+        12,
+        18,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "1": {
+      "node_id": "12D3KooWBjzgzUSrZueE6cmTFxhtZe9j6ycc4vXkKFkfeL81HNQi",
+      "neighbors": [
+        2,
+        13,
+        15,
+        16,
+        17,
+        19
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "13": {
+      "node_id": "12D3KooWKa8uEBR2a9jkRkvBe2frBCSJVTX6CmND8QEMvUx6LnGL",
+      "neighbors": [
+        1,
+        2,
+        4,
+        15,
+        16,
+        17,
+        19
+      ],
+      "neighbor_count": 7,
+      "has_committee_result": true
+    },
+    "16": {
+      "node_id": "12D3KooWCAk8QGXkwQcyi9wTyxyirYgpwswzLLxc5JHAEMaNGyyA",
+      "neighbors": [
+        1,
+        2,
+        13,
+        15,
+        17,
+        19
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "4": {
+      "node_id": "12D3KooWPniXo7oPqbeGrnbXbm69hnKTgr3TNc5Jx2bPQ4REvvye",
+      "neighbors": [
+        5,
+        8,
+        13,
+        15,
+        17,
+        19
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": false
+    },
+    "20": {
+      "node_id": "12D3KooWMW5vj2XK5smj7asJ4v7n46row5h5AmmLGpgSDaSVJSHY",
+      "neighbors": [
+        5,
+        8,
+        9,
+        11,
+        12,
+        18
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "17": {
+      "node_id": "12D3KooWGaD3pS6fXCYQvnZ7egtJQKQMxfzqUZjjwR69g4zbjm4w",
+      "neighbors": [
+        1,
+        2,
+        4,
+        13,
+        15,
+        16,
+        19
+      ],
+      "neighbor_count": 7,
+      "has_committee_result": true
+    },
+    "5": {
+      "node_id": "12D3KooWLNbfRZbyqCqCQ8v2TFc4GkykT9Cbyf4pSSkS6oyffJao",
+      "neighbors": [
+        8,
+        9,
+        11,
+        12,
+        18,
+        20
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": false
+    },
+    "15": {
+      "node_id": "12D3KooWBzpy6jhNfTAQmrpLrL8BWt6PLam4gYHXXRvPFBh7PmZc",
+      "neighbors": [
+        1,
+        2,
+        4,
+        13,
+        17,
+        19
+      ],
+      "neighbor_count": 6,
+      "has_committee_result": true
+    },
+    "7": {
+      "node_id": "12D3KooWGVDqAPShpFkaocVMHcYX9diQyjTciu2jFMHbKQGitCBi",
+      "neighbors": [
+        10,
+        3,
+        6,
+        14
+      ],
+      "neighbor_count": 4,
+      "has_committee_result": true
+    },
+    "14": {
+      "node_id": "12D3KooWLpCtEXW9w4Aqedk8oboEtcaPLkQ4VG7BqMUq57kGF33z",
+      "neighbors": [
+        10,
+        3,
+        6,
+        7
+      ],
+      "neighbor_count": 4,
+      "has_committee_result": true
+    },
+    "6": {
+      "node_id": "12D3KooWLVzH8NMnsMvzxX9hez5K8v6bkSYFWxgQ2NuHdETqeMHj",
+      "neighbors": [
+        1,
+        3,
+        7,
+        10,
+        14
+      ],
+      "neighbor_count": 5,
+      "has_committee_result": true
+    }
+  }
+}

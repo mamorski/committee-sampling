@@ -107,7 +107,7 @@ create_config() {
 {
   "network": {
     "listen_port": $port,
-    "max_outbound_degree": 4,
+    "max_outbound_degree": 6,
     "heartbeat_interval": "30s",
     "connect_timeout": "10s",
     "topic": "committee-sampling",
@@ -121,8 +121,8 @@ create_config() {
       }
   },
   "graph": {
-    "diameter": 4,
-    "grading_levels": 3
+    "diameter": 6,
+    "grading_levels": 5
   },
   "run_time": {
     "session_id": "$SESSION_ID",
@@ -133,9 +133,9 @@ create_config() {
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "5s",
-    "ex_post_round_timeout": "5s",
-    "mdag_round_timeout": "5s",
+    "ex_ante_round_timeout": "10s",
+    "ex_post_round_timeout": "10s",
+    "mdag_round_timeout": "10s",
     "start_time": $(($(date +%s) + 120)),
     "time_server": "time.google.com",
     "certificate_path": "",
