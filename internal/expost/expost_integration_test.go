@@ -107,16 +107,8 @@ func (n *InMemoryNetwork) Close() error {
 	return nil
 }
 
-// Subscribe returns a closed channel (no pubsub used in these tests)
-func (n *InMemoryNetwork) Subscribe(_ string) (<-chan []byte, error) {
-	ch := make(chan []byte)
-	close(ch)
-	return ch, nil
-}
-
-// VerifySignature always returns true (signature verification not required in these tests)
-func (n *InMemoryNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
-	return true, nil
+func (n *InMemoryNetwork) buildNetwork() {
+	// No network building needed in these tests
 }
 
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {

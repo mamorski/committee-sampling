@@ -198,16 +198,8 @@ func (n *InMemoryNetwork) Close() error {
 	return nil
 }
 
-func (n *InMemoryNetwork) Subscribe(_ string) (<-chan []byte, error) {
+func (n *InMemoryNetwork) buildNetwork() {
 	// Simple implementation for testing - not used in MDAG integration tests
-	ch := make(chan []byte)
-	close(ch)
-	return ch, nil
-}
-
-func (n *InMemoryNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
-	// Simple implementation for testing - not used in MDAG integration tests
-	return true, nil
 }
 
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {

@@ -43,14 +43,8 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
-	args := m.Called(topic)
-	return args.Get(0).(<-chan []byte), args.Error(1)
-}
-
-func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
-	args := m.Called(pubKey, message, signature)
-	return args.Bool(0), args.Error(1)
+func (m *MockNetwork) buildNetwork() {
+	m.Called()
 }
 
 // Simple hash oracle for testing

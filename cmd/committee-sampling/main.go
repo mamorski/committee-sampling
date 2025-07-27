@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 
 	"github.com/mamorski/committee-sampling/internal/boot"
 	"github.com/mamorski/committee-sampling/internal/network"
+	"github.com/mamorski/committee-sampling/internal/synchronizer"
 	"github.com/mamorski/committee-sampling/pkg/config"
 
 	"go.uber.org/zap"
@@ -12,19 +14,33 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	configPath := flag.String("config", "", "path to config file (optional, defaults to ./configs/{env}.json)")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		panic(err)
 	}
 
+	ctx := context.Background()
 	logger := createLogger(cfg)
-	node, err := network.New(context.Background(), cfg.Network, logger)
+
+	// Create synchronizer instance
+	sync, err := synchronizer.New(ctx, cfg, logger)
+	if err != nil {
+		panic(err)
+	}
+
+	// Start the synchronizer
+	sync.Start()
+
+	node, err := network.New(ctx, cfg.Network, logger, sync)
 	if err != nil {
 		panic(err)
 	}
 
 	logger = logger.With(zap.String("node_id", node.GetNodeID()))
-	b, err := boot.New(cfg, node, logger)
+	b, err := boot.New(ctx, cfg, node, logger, sync)
 	if err != nil {
 		panic(err)
 	}

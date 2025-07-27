@@ -1,6 +1,7 @@
 package synchronizer
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/json"
@@ -16,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var AllSteps = []common.Step{common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
+var AllSteps = []common.Step{common.Network, common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
 
 type PubSub interface {
 	Subscribe(topic string) (<-chan []byte, error)
@@ -30,10 +31,11 @@ type SyncMessage struct {
 }
 
 type StartTimes struct {
-	ExPostMDAG   time.Time
-	ExAnteMDAG   time.Time
-	ExPostVerify time.Time
-	ExAnteVerify time.Time
+	StartBuildingNetwork time.Time
+	ExPostMDAG           time.Time
+	ExAnteMDAG           time.Time
+	ExPostVerify         time.Time
+	ExAnteVerify         time.Time
 }
 
 type Synchronizer struct {
@@ -45,15 +47,17 @@ type Synchronizer struct {
 	rounds        int
 	mu            sync.Mutex
 	publicKey     ed25519.PublicKey
+	ownsPubSub    bool
+	stopOnce      sync.Once
 }
 
-func New(pubSub PubSub, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
+func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
 	s := &Synchronizer{
-		pubSub:        pubSub,
 		cfg:           cfg,
 		logger:        logger,
 		stopChan:      make(chan struct{}),
 		roundChannels: make(map[common.Step][]chan struct{}),
+		ownsPubSub:    false,
 	}
 
 	// Only read public key from certificate file if using ChannelSync
@@ -63,10 +67,27 @@ func New(pubSub PubSub, cfg *config.Config, logger *zap.Logger) (*Synchronizer, 
 			return nil, fmt.Errorf("failed to read public key from certificate: %w", err)
 		}
 		s.publicKey = pubKey
+		s.ownsPubSub = true
+		pubsubService, err := NewPubSubService(ctx, cfg.Network.ListenPort+1000, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pubsub service: %w", err)
+		}
+		s.pubSub = pubsubService
 	}
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
+		if step == common.Network {
+			// Network has no rounds, so we create a single channel
+			// to signal when the step is triggered.
+			s.roundChannels[step] = make([]chan struct{}, 2)
+			// The first channel is used to signal the start of the network step,
+			// and the second channel is used to signal the end of the network step.
+			s.roundChannels[step][0] = make(chan struct{})
+			s.roundChannels[step][1] = make(chan struct{})
+			continue
+		}
+
 		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
 		for i := 0; i < s.rounds+1; i++ {
 			s.roundChannels[step][i] = make(chan struct{})
@@ -108,7 +129,19 @@ func (s *Synchronizer) Start() {
 }
 
 func (s *Synchronizer) Stop() {
-	close(s.stopChan)
+	s.stopOnce.Do(func() {
+		close(s.stopChan)
+	})
+}
+
+func (s *Synchronizer) Close() error {
+	s.Stop()
+	if s.ownsPubSub {
+		if pubSubService, ok := s.pubSub.(*PubSubService); ok {
+			return pubSubService.Close()
+		}
+	}
+	return nil
 }
 
 func (s *Synchronizer) startChannelSync() {
@@ -153,6 +186,7 @@ func (s *Synchronizer) startTimeSync() {
 	startTimes := CalculateStartTimes(s.cfg, s.logger)
 	s.logger.Info("Starting time-based synchronization")
 
+	go s.runTimeSyncForStep(common.Network, startTimes.StartBuildingNetwork, s.cfg.Synchronization.BuildingGraphTimeout)
 	go s.runTimeSyncForStep(common.ExPostMDAG, startTimes.ExPostMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExAnteMDAG, startTimes.ExAnteMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostVerify, startTimes.ExPostVerify, s.cfg.Synchronization.ExPostRoundTimeout)
@@ -164,7 +198,12 @@ func (s *Synchronizer) startTimeSync() {
 
 func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time, roundTimeout time.Duration) {
 	s.logger.Info("Scheduling rounds for step", zap.String("step", string(step)), zap.Time("startTime", startTime))
-	for i := 0; i < s.rounds+1; i++ {
+	rounds := s.rounds
+	if step == common.Network {
+		rounds = 1 // Network has only one round
+	}
+
+	for i := 0; i < rounds+1; i++ {
 		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout)
 		timer := time.NewTimer(time.Until(roundStartTime))
 
@@ -213,8 +252,9 @@ func (s *Synchronizer) WaitForRound(step common.Step, round int) (<-chan struct{
 	if !ok {
 		return nil, fmt.Errorf("unknown step: %s", step)
 	}
+
 	if round >= len(stepChannels) {
-		return nil, fmt.Errorf("round %d exceeds total rounds %d", round, len(stepChannels))
+		return nil, fmt.Errorf("round %d exceeds total rounds %d", round, s.rounds)
 	}
 
 	return stepChannels[round], nil
@@ -226,17 +266,23 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	if err != nil {
 		logger.Warn("Failed to query NTP server, using local time", zap.Error(err))
 	} else {
-		logger.Info("Calculated start times", zap.Int64("clockOffset", response.ClockOffset.Milliseconds()))
+		logger.Info("Calculated clock offset", zap.Int64("clockOffset", response.ClockOffset.Milliseconds()))
 		clockOffset = response.ClockOffset
 	}
 
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	startTime := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
 
+	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + time.Minute)
+	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Minute)
+	exPostVerifyTime := exAnteMDAGTime.Add(
+		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.RunTime.Delay)*time.Second + time.Minute)
+
 	return &StartTimes{
-		ExPostMDAG:   startTime,
-		ExAnteMDAG:   startTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Minute),
-		ExPostVerify: startTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + (time.Second * 120)),
-		ExAnteVerify: startTime.Add(cfg.Synchronization.ExPostRoundTimeout*time.Duration(rounds) + (time.Second * 10)),
+		StartBuildingNetwork: startTime,
+		ExPostMDAG:           exPostMDAGTime,
+		ExAnteMDAG:           exAnteMDAGTime,
+		ExPostVerify:         exPostVerifyTime,
+		ExAnteVerify:         exPostVerifyTime,
 	}
 }

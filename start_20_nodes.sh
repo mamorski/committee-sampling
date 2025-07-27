@@ -97,21 +97,19 @@ cleanup() {
 # Trap signals to cleanup
 trap cleanup SIGINT SIGTERM
 
-# Function to create config file for a node
+# Function to create config file
 create_config() {
-    local node_id=$1
-    local port=$2
-    local config_file="$CONFIGS_DIR/node-$node_id.json"
+    local config_file="$CONFIGS_DIR/test-config.json"
     
     cat > "$config_file" << EOF
 {
   "network": {
-    "listen_port": $port,
-    "max_outbound_degree": 6,
+    "listen_port": 0,
+    "max_outbound_degree": 3,
     "heartbeat_interval": "30s",
-    "connect_timeout": "10s",
+    "connect_timeout": "20s",
     "topic": "committee-sampling",
-    "find_peers_timeout": "1m",
+    "find_peers_timeout": "2m",
           "discovery_config": {
         "discovery_type": "dht",
         "protocol_id": "/committee-sampling/1.0.0",
@@ -121,22 +119,24 @@ create_config() {
       }
   },
   "graph": {
-    "diameter": 6,
+    "diameter": 4,
     "grading_levels": 5
   },
   "run_time": {
     "session_id": "$SESSION_ID",
-    "lambda": 256,
+    "lambda": 384,
     "weight": 10,
-    "delta_w": 2.0,
-    "committee_size": 10
+    "delta_w": 3.0,
+    "committee_size": 7,
+    "delay": 20
   },
   "synchronization": {
     "type": 1,
     "ex_ante_round_timeout": "10s",
     "ex_post_round_timeout": "10s",
     "mdag_round_timeout": "10s",
-    "start_time": $(($(date +%s) + 120)),
+    "start_time": $(($(date +%s) + 60)),
+    "building_graph_timeout": "1m",
     "time_server": "time.google.com",
     "certificate_path": "",
     "topic": "sync-topic"
@@ -153,29 +153,19 @@ EOF
 # Function to start a node
 start_node() {
     local node_id=$1
-    local port=$2
-    local config_file=$3
+    local config_file=$2
     local log_file="$LOGS_DIR/node-$node_id-log.log"
     
-    echo "Starting node-$node_id on port $port..."
+    echo "Starting node-$node_id with config: $config_file..."
     
-    # Create a temporary directory for this node
-    local node_dir="$CONFIGS_DIR/node-$node_id"
-    local node_config_dir="$node_dir/configs"
-    mkdir -p "$node_config_dir"
-    
-    # Copy the config file to the expected location
-    cp "$config_file" "$node_config_dir/test.json"
-    
-    # Start the node in the background with ENV=test
-    local current_dir=$(pwd)
-    (cd "$node_dir" && ENV=test go run "$current_dir/cmd/committee-sampling") > "$log_file" 2>&1 &
+    # Start the node in the background with -config flag
+    go run ./cmd/committee-sampling -config "$config_file" > "$log_file" 2>&1 &
     
     # Save PID
     local pid=$!
     echo "$pid" >> "$PIDS_FILE"
     
-    echo "Node-$node_id started (PID: $pid, Port: $port, Log: $log_file)"
+    echo "Node-$node_id started (PID: $pid, Port: auto-assigned, Log: $log_file)"
 }
 
 # Start bootstrap server first
@@ -212,13 +202,16 @@ fi
 echo "Building committee-sampling application..."
 make -f MakeFile build
 
+# Create config file
+echo ""
+echo "Creating configuration..."
+config_file=$(create_config)
+
 # Start all nodes
 echo ""
 echo "Starting nodes..."
 for i in $(seq 1 $NUM_NODES); do
-    port=$((BASE_PORT + i - 1))
-    config_file=$(create_config "$i" "$port")
-    start_node "$i" "$port" "$config_file"
+    start_node "$i" "$config_file"
 done
 
 echo ""
@@ -226,11 +219,12 @@ echo "All $NUM_NODES nodes started successfully!"
 echo ""
 echo "Node Status:"
 echo "- Nodes: $NUM_NODES"
-echo "- Ports: $BASE_PORT-$((BASE_PORT + NUM_NODES - 1))"
+echo "- Ports: Auto-assigned by system (port 0 configured)"
 echo "- Session ID: $SESSION_ID"
 echo "- Discovery: DHT with bootstrap server on port 4001"
 echo "- Log files: $LOGS_DIR/node-*-log.log"
 echo "- Bootstrap log: bootstrap.log"
+echo "- Config file: $config_file"
 echo ""
 echo "Useful commands:"
 echo "- Monitor node logs: tail -f $LOGS_DIR/node-1-log.log"

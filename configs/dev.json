@@ -23,13 +23,15 @@
     "lambda": 256,
     "weight": 10,
     "delta_w": 2.0,
-    "committee_size": 10
+    "committee_size": 10,
+    "delay": 20
   },
   "synchronization": {
     "type": 1,
     "ex_ante_round_timeout": "5s",
     "ex_post_round_timeout": "5s",
     "mdag_round_timeout": "5s",
+    "building_graph_timeout": "30s",
     "start_time": 1752311490,
     "time_server": "time.google.com",
     "certificate_path": "",

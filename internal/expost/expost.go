@@ -86,11 +86,6 @@ func New(
 		isRunning:    true,
 	}
 
-	neighborsList := net.GetNeighbors()
-	for _, neighbor := range neighborsList {
-		e.neighbors[neighbor] = true
-	}
-
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
 	net.RegisterHandler(protocolID, e.handleMessage)
 
@@ -129,6 +124,8 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 	if labelR == nil {
 		return nil, nil, fmt.Errorf("computed label for round R is nil")
 	}
+	e.initializeNeighbors()
+	e.logger.Info("ExPost Generation phase completed")
 	return state, labelR, nil
 }
 
@@ -230,7 +227,7 @@ func (e *ExPost) Verify(
 				// Debug logging
 				e.logger.Debug("Processing valid message", zap.Int("round", r),
 					zap.Int("merklePath_length", len(msg.merklePath)),
-					zap.String("from_vk", string(msg.vk)))
+					zap.Binary("from_vk", msg.vk))
 
 				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal))
 				if results.Add(msg.vk, msg.v, msg.id, g) {
@@ -406,6 +403,19 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		merklePath: convertTimestampToBytes(&msg),
 	}
 	return nil
+}
+
+func (e *ExPost) initializeNeighbors() {
+	neighborsList := e.network.GetNeighbors()
+	e.neighbors = make(map[string]bool, len(neighborsList))
+	for _, neighbor := range neighborsList {
+		e.neighbors[neighbor] = true
+	}
+
+	e.logger.Info("Initialized neighbors",
+		zap.Int("num_neighbors", len(e.neighbors)),
+		zap.Strings("neighbors", neighborsList),
+	)
 }
 
 func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {

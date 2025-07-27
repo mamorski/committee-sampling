@@ -121,7 +121,6 @@ func (r *RbExp) Verify(
 	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
 		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)
 	}
-	// Step 1
 	auxTag := &common.AuxTag{
 		PiRP:   proof.PiRP,
 		AuxKey: auxKey,
@@ -130,20 +129,44 @@ func (r *RbExp) Verify(
 		Challenge: ch,
 		Sigma:     proof.SigmaExp,
 	}
-	oP, err := r.exp.Verify(sid, vk, fSigmaExp, auxTag, auxLocal, fTag)
-	if err != nil {
-		return nil, err
+
+	type verifyResult struct {
+		committee *common.Committee
+		err       error
 	}
+
+	// Run verifications in parallel
+	exPostCh := make(chan verifyResult, 1)
+	exAnteCh := make(chan verifyResult, 1)
+
+	go func() {
+		committee, err := r.exp.Verify(sid, vk, fSigmaExp, auxTag, auxLocal, fTag)
+		exPostCh <- verifyResult{committee, err}
+	}()
+
+	go func() {
+		committee, err := r.exa.Verify(sid, vk, proof.SigmaExa, auxTag, auxLocal, fTag)
+		exAnteCh <- verifyResult{committee, err}
+	}()
+
+	// Wait for both results
+	exPostResult := <-exPostCh
+	exAnteResult := <-exAnteCh
+
+	if exPostResult.err != nil {
+		return nil, exPostResult.err
+	}
+	if exAnteResult.err != nil {
+		return nil, exAnteResult.err
+	}
+
+	oP := exPostResult.committee
+	oA := exAnteResult.committee
+
 	r.logger.Debug("RBExp outputs from ExPost verification",
 		zap.String("sid", sid),
 		zap.Int("num_outputs", oP.Len()),
 	)
-
-	// Step 2
-	oA, err := r.exa.Verify(sid, vk, proof.SigmaExa, auxTag, auxLocal, fTag)
-	if err != nil {
-		return nil, err
-	}
 	r.logger.Debug("RBExp outputs from ExAnte verification",
 		zap.String("sid", sid),
 		zap.Int("num_outputs", oA.Len()),

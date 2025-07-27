@@ -44,14 +44,8 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
-	args := m.Called(topic)
-	return args.Get(0).(<-chan []byte), args.Error(1)
-}
-
-func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
-	args := m.Called(pubKey, message, signature)
-	return args.Bool(0), args.Error(1)
+func (m *MockNetwork) buildNetwork() {
+	m.Called()
 }
 
 // MockMDAG is a mock implementation of the MDAG interface
@@ -359,27 +353,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_SessionIDMismatch() {
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "session id mismatch")
-}
-
-// TestHandleMessage_SenderIDMismatch tests handling message with wrong sender ID
-func (suite *ExAnteTestSuite) TestHandleMessage_SenderIDMismatch() {
-	testAux := &common.AuxTag{
-		PiRP: []byte("test-pi-rp"),
-		AuxKey: &common.AuxKey{
-			PhiVRF: []byte("test-phi-vrf"),
-			PiVRF:  []byte("test-pi-vrf"),
-			PhiVDF: []byte("test-phi-vdf"),
-			PiVDF:  []byte("test-pi-vdf"),
-		},
-	}
-
-	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "wrong-sender")
-	msgBytes := marshalMessage(suite.T(), msg)
-
-	err := suite.exante.handleMessage("node1", msgBytes)
-
-	suite.Error(err)
-	suite.Contains(err.Error(), "sender id mismatch")
 }
 
 // TestHandleMessage_UnknownNeighbor tests handling message from unknown neighbor

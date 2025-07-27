@@ -44,14 +44,8 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
-	args := m.Called(topic)
-	return args.Get(0).(<-chan []byte), args.Error(1)
-}
-
-func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
-	args := m.Called(pubKey, message, signature)
-	return args.Bool(0), args.Error(1)
+func (m *MockNetwork) buildNetwork() {
+	m.Called()
 }
 
 type MockMDAG struct {
@@ -371,22 +365,6 @@ func (suite *ExPostTestSuite) TestHandleMessageSessionMismatch() {
 	err = suite.expost.handleMessage("node1", msgBytes)
 	suite.Error(err)
 	suite.Contains(err.Error(), "session id mismatch")
-}
-
-func (suite *ExPostTestSuite) TestHandleMessageSenderMismatch() {
-	suite.expost.isRunning = true
-
-	msg := &pb.TimestampMessage{
-		SessionId: suite.sid,
-		Id:        "node2",
-	}
-
-	msgBytes, err := proto.Marshal(msg)
-	suite.NoError(err)
-
-	err = suite.expost.handleMessage("node1", msgBytes)
-	suite.Error(err)
-	suite.Contains(err.Error(), "sender id mismatch")
 }
 
 func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {

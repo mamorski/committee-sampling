@@ -75,11 +75,6 @@ func New(
 		isRunning:     true,
 	}
 
-	neighborsList := net.GetNeighbors()
-	for _, neighbor := range neighborsList {
-		e.neighbors[neighbor] = true
-	}
-
 	// Register message handler
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, sid)
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -119,6 +114,7 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []by
 	}
 
 	e.challenge = challenge
+	e.initializeNeighbors()
 	e.logger.Info("ExAnte Generation phase completed")
 	return state, nil
 }
@@ -391,6 +387,19 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	}
 
 	return true
+}
+
+func (e *ExAnte) initializeNeighbors() {
+	neighborsList := e.network.GetNeighbors()
+	e.neighbors = make(map[string]bool, len(neighborsList))
+	for _, neighbor := range neighborsList {
+		e.neighbors[neighbor] = true
+	}
+
+	e.logger.Info("Initialized neighbors",
+		zap.Int("num_neighbors", len(e.neighbors)),
+		zap.Strings("neighbors", neighborsList),
+	)
 }
 
 func isValueInState(value []byte, state [][]byte) bool {

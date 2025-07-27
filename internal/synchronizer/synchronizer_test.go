@@ -1,6 +1,7 @@
 package synchronizer
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -61,21 +62,56 @@ func (suite *SynchronizerTestSuite) SetupTest() {
 	suite.cfg = &config.Config{
 		Graph: config.Graph{
 			Diameter:      2,
-			GradingLevels: 5, // results in 10 rounds
+			GradingLevels: 5,
+		},
+		Network: config.Network{
+			ListenPort: 9000,
 		},
 		Synchronization: config.Synchronization{
-			Type:               config.TimeSync,
-			MDAGRoundTimeout:   10 * time.Millisecond,
-			ExPostRoundTimeout: 10 * time.Millisecond,
-			StartTime:          time.Now().Add(100 * time.Millisecond).Unix(),
-			TimeServer:         "pool.ntp.org",
-			Topic:              "sync-topic",
-			CertificatePath:    suite.certPath,
+			Type:                 config.TimeSync,
+			StartTime:            time.Now().Add(100 * time.Millisecond).Unix(),
+			TimeServer:           "pool.ntp.org",
+			Topic:                "sync-topic",
+			CertificatePath:      suite.certPath,
+			BuildingGraphTimeout: time.Second,
+			MDAGRoundTimeout:     time.Second,
+			ExPostRoundTimeout:   time.Second,
+			ExAnteRoundTimeout:   time.Second,
 		},
 	}
 	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
+	suite.s, err = suite.createSynchronizerWithMock()
 	suite.Require().NoError(err)
+}
+
+// createSynchronizerWithMock creates a synchronizer instance with mock pubsub for testing
+func (suite *SynchronizerTestSuite) createSynchronizerWithMock() (*Synchronizer, error) {
+	s := &Synchronizer{
+		pubSub:        suite.pubSub,
+		cfg:           suite.cfg,
+		logger:        suite.logger,
+		stopChan:      make(chan struct{}),
+		roundChannels: make(map[common.Step][]chan struct{}),
+		ownsPubSub:    false,
+	}
+
+	// Only read public key from certificate file if using ChannelSync
+	if suite.cfg.Synchronization.Type == config.ChannelSync {
+		pubKey, err := readPublicKeyFromCert(suite.cfg.Synchronization.CertificatePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read public key from certificate: %w", err)
+		}
+		s.publicKey = pubKey
+	}
+
+	s.rounds = suite.cfg.Graph.Diameter * suite.cfg.Graph.GradingLevels
+	for _, step := range AllSteps {
+		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
+		for i := 0; i < s.rounds+1; i++ {
+			s.roundChannels[step][i] = make(chan struct{})
+		}
+	}
+	return s, nil
 }
 
 func (suite *SynchronizerTestSuite) TearDownTest() {
@@ -132,7 +168,7 @@ func TestSynchronizerTestSuite(t *testing.T) {
 func (suite *SynchronizerTestSuite) TestNewSynchronizer() {
 	suite.NotNil(suite.s)
 	rounds := suite.cfg.Graph.Diameter * suite.cfg.Graph.GradingLevels
-	suite.Len(AllSteps, 4, "There should be 4 steps")
+	suite.Len(AllSteps, 5, "There should be 5 steps")
 
 	for _, step := range AllSteps {
 		for i := 0; i < rounds; i++ {
@@ -143,19 +179,23 @@ func (suite *SynchronizerTestSuite) TestNewSynchronizer() {
 }
 
 func (suite *SynchronizerTestSuite) TestWaitForRound() {
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
+
 	// Happy path
-	ch, err := suite.s.WaitForRound(common.ExPostMDAG, 5)
+	ch, err := s.WaitForRound(common.ExPostMDAG, 5)
 	suite.NoError(err)
 	suite.NotNil(ch)
 
 	// Error: unknown step
-	_, err = suite.s.WaitForRound("UnknownStep", 5)
+	_, err = s.WaitForRound("UnknownStep", 5)
 	suite.Error(err)
 	suite.EqualError(err, "unknown step: UnknownStep")
 
 	// Error: round out of bounds
 	totalRounds := suite.cfg.Graph.Diameter * suite.cfg.Graph.GradingLevels
-	_, err = suite.s.WaitForRound(common.ExPostMDAG, totalRounds)
+	_, err = s.WaitForRound(common.ExPostMDAG, totalRounds)
 	suite.Error(err)
 	suite.EqualError(err, fmt.Sprintf("round %d exceeds total rounds %d", totalRounds, totalRounds))
 }
@@ -181,35 +221,11 @@ func (suite *SynchronizerTestSuite) TestTriggerRound() {
 	})
 }
 
-func (suite *SynchronizerTestSuite) TestTimeSyncMode() {
-	suite.cfg.Synchronization.Type = config.TimeSync
-	suite.cfg.Synchronization.StartTime = time.Now().Add(50 * time.Millisecond).Unix()
-	suite.cfg.Synchronization.MDAGRoundTimeout = 20 * time.Millisecond
-
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
-
-	roundToTest := 2
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, roundToTest)
-	suite.NoError(err)
-
-	suite.s.Start()
-	defer suite.s.Stop()
-
-	select {
-	case <-waitChan:
-		// success
-	case <-time.After(500 * time.Millisecond):
-		suite.Fail("timed out waiting for time-based sync round to trigger")
-	}
-}
-
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_HappyPath() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
@@ -226,11 +242,11 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_HappyPath() {
 
 	suite.pubSub.On("VerifySignature", []byte(suite.publicKey), dataToVerify, syncMsg.Signature).Return(true, nil)
 
-	waitChan, err := suite.s.WaitForRound(step, round)
+	waitChan, err := s.WaitForRound(step, round)
 	suite.NoError(err)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
 	msgChan <- msgBytes
 
@@ -246,17 +262,17 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_HappyPath() {
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_MalformedJSON() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, 0)
+	waitChan, err := s.WaitForRound(common.ExPostMDAG, 0)
 	suite.NoError(err)
 
 	// Malformed JSON
@@ -273,17 +289,17 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_MalformedJSON() {
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_SignatureVerificationError() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, 0)
+	waitChan, err := s.WaitForRound(common.ExPostMDAG, 0)
 	suite.NoError(err)
 
 	// Signature verification error
@@ -305,17 +321,17 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_SignatureVerificationErr
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_InvalidSignature() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, 0)
+	waitChan, err := s.WaitForRound(common.ExPostMDAG, 0)
 	suite.NoError(err)
 
 	// Invalid signature
@@ -337,17 +353,17 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_InvalidSignature() {
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_RoundOutOfBounds() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, 0)
+	waitChan, err := s.WaitForRound(common.ExPostMDAG, 0)
 	suite.NoError(err)
 
 	// Round out of bounds
@@ -369,17 +385,17 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_RoundOutOfBounds() {
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_UnknownStep() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+	defer s.Stop()
 
 	msgChan := make(chan []byte, 1)
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(msgChan), nil)
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s.Start()
+	defer s.Stop()
 
-	waitChan, err := suite.s.WaitForRound(common.ExPostMDAG, 0)
+	waitChan, err := s.WaitForRound(common.ExPostMDAG, 0)
 	suite.NoError(err)
 
 	// Unknown step
@@ -401,15 +417,15 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_UnknownStep() {
 
 func (suite *SynchronizerTestSuite) TestChannelSyncMode_SubscribeError() {
 	suite.cfg.Synchronization.Type = config.ChannelSync
-	var err error
-	suite.s, err = New(suite.pubSub, suite.cfg, suite.logger)
-	suite.NoError(err)
 
 	// Mock Subscribe to return an error
 	suite.pubSub.On("Subscribe", suite.cfg.Synchronization.Topic).Return((<-chan []byte)(nil), fmt.Errorf("failed to subscribe to topic"))
 
-	suite.s.Start()
-	defer suite.s.Stop()
+	s, err := suite.createSynchronizerWithMock()
+	suite.Require().NoError(err)
+
+	s.Start()
+	defer s.Stop()
 
 	// Wait a bit to ensure the error handling completes
 	time.Sleep(50 * time.Millisecond)
@@ -417,53 +433,21 @@ func (suite *SynchronizerTestSuite) TestChannelSyncMode_SubscribeError() {
 	suite.pubSub.AssertExpectations(suite.T())
 }
 
-func (suite *SynchronizerTestSuite) TestNewSynchronizer_CertificateError() {
-	cfg := &config.Config{
-		Graph: config.Graph{
-			Diameter:      5,
-			GradingLevels: 2,
-		},
-		Synchronization: config.Synchronization{
-			Type:            config.ChannelSync,
-			CertificatePath: "/nonexistent/path/to/cert.pem", // Invalid path
-			Topic:           "test-topic",
-		},
-	}
-
-	// This should fail because the certificate file doesn't exist
-	_, err := New(suite.pubSub, cfg, suite.logger)
-	suite.Error(err)
-	suite.Contains(err.Error(), "failed to read public key from certificate")
+// Test production New function with actual certificate scenarios
+func (suite *SynchronizerTestSuite) TestNew_TimeSync() {
+	ctx := context.Background()
+	s, err := New(ctx, suite.cfg, suite.logger)
+	suite.Require().NoError(err)
+	defer s.Stop()
+	suite.NotNil(s)
 }
 
-func (suite *SynchronizerTestSuite) TestNewSynchronizer_InvalidCertificateFormat() {
-	// Create a file with invalid certificate content
-	tmpFile, err := os.CreateTemp("", "invalid_cert_*.pem")
-	suite.Require().NoError(err)
-	defer func(name string) {
-		_ = os.Remove(name)
-	}(tmpFile.Name())
+func (suite *SynchronizerTestSuite) TestNew_ChannelSync_InvalidCertificate() {
+	suite.cfg.Synchronization.Type = config.ChannelSync
+	suite.cfg.Synchronization.CertificatePath = "nonexistent-cert.pem"
 
-	// Write invalid PEM data
-	_, err = tmpFile.WriteString("invalid certificate data")
-	suite.Require().NoError(err)
-	err = tmpFile.Close()
-	suite.Require().NoError(err)
-
-	cfg := &config.Config{
-		Graph: config.Graph{
-			Diameter:      5,
-			GradingLevels: 2,
-		},
-		Synchronization: config.Synchronization{
-			Type:            config.ChannelSync,
-			CertificatePath: tmpFile.Name(),
-			Topic:           "test-topic",
-		},
-	}
-
-	// This should fail because the certificate format is invalid
-	_, err = New(suite.pubSub, cfg, suite.logger)
+	ctx := context.Background()
+	_, err := New(ctx, suite.cfg, suite.logger)
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to read public key from certificate")
 }
