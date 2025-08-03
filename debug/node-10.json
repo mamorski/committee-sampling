@@ -1,0 +1,54 @@
+[
+    {
+        "level": "DEBUG",
+        "timestamp": "2025-08-02T17:16:54.119+0300",
+        "caller": "expost/expost.go:411",
+        "msg": "ExPost: Received message",
+        "node_id": "12D3KooWN4TfUcCpvUwRHZheCP3cmJmn5tesm51ni8fNVoFucvy5",
+        "from": "12D3KooWKw8tu3afy2RMStnn7H4uWCMQjxBfck9KGXngwrv87tWx",
+        "sender_id": "12D3KooWKw8tu3afy2RMStnn7H4uWCMQjxBfck9KGXngwrv87tWx",
+        "round": 0,
+        "verification_key": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEg3WuFSDa0ABhqmdbFlPBBYwxo7pUMyRzkUwC42fmNqIY6bU3VbUxPDGlInTCyoIa8cGAig88O5LdtpjHZeDO6kbFZnTz9JrazGawo9OJx71989waTy2jw5MrS/n0VPFc",
+        "value": "CrulYbwofXDu+lNZVyUWFVRx+U1DdR+12qWI78Vfne4=",
+        "proof": "AAAAAAAAAlc="
+    },
+    {
+        "level": "DEBUG",
+        "timestamp": "2025-08-02T17:18:04.127+0300",
+        "caller": "expost/expost.go:411",
+        "msg": "ExPost: Received message",
+        "node_id": "12D3KooWN4TfUcCpvUwRHZheCP3cmJmn5tesm51ni8fNVoFucvy5",
+        "from": "12D3KooWSAQYJvYJ8iDisqZA7VTabXQz42bXyq2bxhX1363c75TJ",
+        "sender_id": "12D3KooWKw8tu3afy2RMStnn7H4uWCMQjxBfck9KGXngwrv87tWx",
+        "round": 1,
+        "verification_key": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEg3WuFSDa0ABhqmdbFlPBBYwxo7pUMyRzkUwC42fmNqIY6bU3VbUxPDGlInTCyoIa8cGAig88O5LdtpjHZeDO6kbFZnTz9JrazGawo9OJx71989waTy2jw5MrS/n0VPFc",
+        "value": "CrulYbwofXDu+lNZVyUWFVRx+U1DdR+12qWI78Vfne4=",
+        "proof": ""
+    },
+    {
+        "level": "DEBUG",
+        "timestamp": "2025-08-02T17:18:04.131+0300",
+        "caller": "expost/expost.go:411",
+        "msg": "ExPost: Received message",
+        "node_id": "12D3KooWN4TfUcCpvUwRHZheCP3cmJmn5tesm51ni8fNVoFucvy5",
+        "from": "12D3KooWKw8tu3afy2RMStnn7H4uWCMQjxBfck9KGXngwrv87tWx",
+        "sender_id": "12D3KooWG5GZKKPBebGfwPNymdiThS1KPqQYhbphg8PusknLVspi",
+        "round": 1,
+        "verification_key": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEd+IhXSCigXk8Uk/ovl29NMFnjLpIUEE87M+4aMaoZdNQtCq5qBtK2ugkjGrcC5darR+ublL22rAvCimix1kCihiHNwlU25mLSWE/oN4YCqGeXU3whGIsylp5aYJjpCM1",
+        "value": "kMTNs/4HRiC32juCeEqdRxbvXLhFrAVIf16j5fHVZNk=",
+        "proof": ""
+    },
+    {
+        "level": "DEBUG",
+        "timestamp": "2025-08-02T17:18:04.143+0300",
+        "caller": "expost/expost.go:411",
+        "msg": "ExPost: Received message",
+        "node_id": "12D3KooWN4TfUcCpvUwRHZheCP3cmJmn5tesm51ni8fNVoFucvy5",
+        "from": "12D3KooWKw8tu3afy2RMStnn7H4uWCMQjxBfck9KGXngwrv87tWx",
+        "sender_id": "12D3KooWJf89Ngm42PsgYA4SSKN3zFboePq1btwie3mZUHTFEhuR",
+        "round": 1,
+        "verification_key": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE0CE96/3yeOQ6T0aXiga/tSSlWmzOJV/KlBObDnUX/HTPCW8Mr0yuNd5tR8mrEtE/u4QTts0siCSJynrLgZD5+qt8SRU6D9VLF3ckzCqNj5+9vEk6iCibDJ9XnEer1yiY",
+        "value": "Jet96aiikVNrOYP+MqVzKuLitL8wj7y0Q+NApiJx9n0=",
+        "proof": ""
+    }
+]

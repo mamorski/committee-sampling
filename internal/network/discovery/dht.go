@@ -191,10 +191,10 @@ func (d *DHTDiscovery) discoverPeers(ctx context.Context, routingDiscovery *rout
 					continue
 				}
 
-				d.logger.Debug("Discovered peer",
-					zap.String("peer_id", p.ID.String()),
-					zap.Strings("addresses", addrsToStrings(p.Addrs)),
-				)
+				// d.logger.Debug("Discovered peer",
+				// 	zap.String("peer_id", p.ID.String()),
+				// 	zap.Strings("addresses", addrsToStrings(p.Addrs)),
+				// )
 
 				select {
 				case d.discoveredPeers <- p:

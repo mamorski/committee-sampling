@@ -64,7 +64,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		vrfInput := gce.HashData(auxKey.PhiVDF, []byte(sid))
 
 		logger.Debug("Filter function called, verifying VDF and VRF",
-			zap.String("node_id", id),
+			zap.String("sender_id", id),
 			zap.String("sid", sid),
 			zap.Binary("vk", vk),
 			zap.Binary("challenge", ch),
@@ -113,6 +113,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			zap.Int("g", g),
 			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
 			zap.Binary("Phi^VRF", auxKey.PhiVRF),
+			zap.Binary("vk", vk),
 		)
 
 		return g

@@ -115,7 +115,7 @@ func (suite *ExPostTestSuite) SetupTest() {
 		sid:          suite.sid,
 		vk:           suite.vk,
 		mu:           sync.Mutex{},
-		messages:     make(map[int]map[string]receivedMessage),
+		messages:     make(map[int][]receivedMessage),
 		neighbors:    neighbors,
 	}
 }
@@ -131,11 +131,9 @@ func (suite *ExPostTestSuite) TestNew() {
 	testLogger := zap.NewNop()
 
 	// Setup mock expectations
-	testNeighbors := []string{"neighbor1", "neighbor2", "neighbor3", "neighbor4"}
 	mockNet := new(MockNetwork)
 	mockMDAG := new(MockMDAG)
 
-	mockNet.On("GetNeighbors").Return(testNeighbors).Once()
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
 	// Call the New function
@@ -166,11 +164,8 @@ func (suite *ExPostTestSuite) TestNew() {
 	suite.NotNil(expost.neighbors)
 	suite.Len(expost.messages, 0) // Should be empty initially
 
-	// Verify neighbors are populated correctly
-	suite.Len(expost.neighbors, 4)
-	for _, neighbor := range testNeighbors {
-		suite.True(expost.neighbors[neighbor])
-	}
+	// Verify neighbors are empty initially (populated in Generate)
+	suite.Len(expost.neighbors, 0)
 
 	// Verify initial state
 	suite.Nil(expost.state)
@@ -188,8 +183,6 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	mockNet := new(MockNetwork)
 	mockMDAG := new(MockMDAG)
 
-	neighbors := []string{"neighbor1"}
-	mockNet.On("GetNeighbors").Return(neighbors).Once()
 	// Verify the protocol ID is generated correctly with special characters
 	expectedProtocolID := "/expost/1.0.0/special/chars@session#123"
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
@@ -212,6 +205,7 @@ func (suite *ExPostTestSuite) TestGenerateHappyFlow() {
 
 	suite.mockMDAG.On("Generate", suite.sid, suite.vk, mock.Anything).Return(expectedState, nil).Once()
 	suite.mockMDAG.On("GetComputedLabel", 15).Return(expectedLabel).Once() // d*D = 3*5 = 15
+	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	state, label, err := suite.expost.Generate(suite.sid, suite.vk)
 
@@ -221,6 +215,7 @@ func (suite *ExPostTestSuite) TestGenerateHappyFlow() {
 	suite.Equal(expectedState, suite.expost.state)
 
 	suite.mockMDAG.AssertExpectations(suite.T())
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestGenerateMDAGError() {
@@ -327,10 +322,11 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 	suite.NoError(err)
 
 	suite.expost.mu.Lock()
-	receivedMsg, exists := suite.expost.messages[1]["node1"]
+	messages := suite.expost.messages[1]
 	suite.expost.mu.Unlock()
 
-	suite.True(exists)
+	suite.Require().Len(messages, 1)
+	receivedMsg := messages[0]
 	suite.Equal(suite.sid, receivedMsg.sid)
 	suite.Equal([]byte("test-vk"), receivedMsg.vk)
 	suite.Equal([]byte("test-value"), receivedMsg.v)
@@ -383,13 +379,13 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 	suite.Contains(err.Error(), "sender not in neighbors list")
 }
 
-func (suite *ExPostTestSuite) TestHandleMessageDuplicate() {
+func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 	suite.expost.isRunning = true
 
-	msg := &pb.TimestampMessage{
+	msg1 := &pb.TimestampMessage{
 		SessionId:       suite.sid,
 		VerificationKey: []byte("test-vk"),
-		Value:           []byte("test-value"),
+		Value:           []byte("test-value-1"),
 		Aux: &pb.Aux{
 			AuxKey: &pb.AuxKeyMessage{},
 		},
@@ -398,22 +394,36 @@ func (suite *ExPostTestSuite) TestHandleMessageDuplicate() {
 		Id:         "node1",
 	}
 
-	msgBytes, err := proto.Marshal(msg)
+	msg2 := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value-2"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{},
+		Round:      1,
+		Id:         "node1",
+	}
+
+	msgBytes1, err := proto.Marshal(msg1)
+	suite.NoError(err)
+	msgBytes2, err := proto.Marshal(msg2)
 	suite.NoError(err)
 
 	// First message should succeed
-	err = suite.expost.handleMessage("node1", msgBytes)
+	err = suite.expost.handleMessage("node1", msgBytes1)
 	suite.NoError(err)
 
-	// Second message should be ignored (no error, but not stored)
-	err = suite.expost.handleMessage("node1", msgBytes)
+	// Second message from same sender should also be stored
+	err = suite.expost.handleMessage("node1", msgBytes2)
 	suite.NoError(err)
 
 	suite.expost.mu.Lock()
 	messages := suite.expost.messages[1]
 	suite.expost.mu.Unlock()
 
-	suite.Len(messages, 1) // Only one message stored
+	suite.Len(messages, 2) // Both messages stored
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathHappyFlow() {
@@ -920,9 +930,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	}
 
 	suite.expost.mu.Lock()
-	suite.expost.messages[0] = map[string]receivedMessage{
-		"node1": validMsg,
-	}
+	suite.expost.messages[0] = []receivedMessage{validMsg}
 	suite.expost.mu.Unlock()
 
 	// Mock expectations for message validation
@@ -993,10 +1001,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	}
 
 	suite.expost.mu.Lock()
-	suite.expost.messages[0] = map[string]receivedMessage{
-		"node1": msg1,
-		"node2": msg2,
-	}
+	suite.expost.messages[0] = []receivedMessage{msg1, msg2}
 	suite.expost.mu.Unlock()
 
 	// Mock expectations

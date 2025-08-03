@@ -127,7 +127,7 @@ create_config() {
     "lambda": 384,
     "weight": 10,
     "delta_w": 3.0,
-    "committee_size": 7,
+    "committee_size": 4,
     "delay": 20
   },
   "synchronization": {

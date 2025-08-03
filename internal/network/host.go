@@ -333,7 +333,6 @@ func (n *P2PNode) onNeighborResponse(s network.Stream) {
 	}
 
 	n.logger.Debug("Received negotiation response",
-		zap.Any("data", data),
 		zap.String("NodeId", data.MessageData.NodeId),
 		zap.Binary("PK", data.MessageData.NodePubKey),
 	)

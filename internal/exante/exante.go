@@ -36,7 +36,7 @@ type ExAnte struct {
 	challenge     []byte
 
 	mu        sync.Mutex
-	messages  map[int]map[string]receivedMessage
+	messages  map[int][]receivedMessage
 	neighbors map[string]bool // set of allowed neighbor node IDs
 	state     [][][]byte
 }
@@ -69,7 +69,7 @@ func New(
 		d:             d,
 		D:             D,
 		gradeFunction: gradeFunction,
-		messages:      make(map[int]map[string]receivedMessage),
+		messages:      make(map[int][]receivedMessage),
 		neighbors:     make(map[string]bool),
 		sid:           sid,
 		isRunning:     true,
@@ -157,10 +157,13 @@ func (e *ExAnte) Verify(
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 
 	// Check if P_i is also acts like a prover
-	if e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal) >= e.d+1 &&
-		filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxTag) {
+	grade := e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal)
+	if grade >= e.d+1 && filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxTag) {
 
-		e.logger.Info("Node is a prover, sending initial message")
+		e.logger.Info("Node is a prover, sending initial message",
+			zap.Int("grade", grade),
+			zap.Int("d", e.d),
+		)
 
 		msg := &pb.TimestampMessage{
 			SessionId:       session,
@@ -213,13 +216,20 @@ func (e *ExAnte) Verify(
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
 				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
+				e.logger.Info("Processing valid message",
+					zap.String("sender_id", msg.id),
+					zap.Int("round", r),
+					zap.Int("grade", g),
+				)
 				if results.Add(msg.vk, msg.v, msg.id, g) {
-					e.logger.Debug("Added to results",
+					e.logger.Info("Added to results",
+						zap.String("sender_id", msg.id),
 						zap.Binary("vk", msg.vk),
 						zap.Binary("value", msg.v),
 						zap.Int("grade", g))
 				} else {
-					e.logger.Debug("Skipping message with lower grade",
+					e.logger.Info("Skipping message with lower grade",
+						zap.String("sender_id", msg.id),
 						zap.Binary("vk", msg.vk),
 						zap.Binary("value", msg.v),
 						zap.Int("grade", g))
@@ -259,6 +269,10 @@ func (e *ExAnte) Verify(
 				}
 
 				e.network.SendProtocolMessage(protocolID, pMsgBytes)
+			} else {
+				e.logger.Info("Message validation failed",
+					zap.String("sender_id", msg.id),
+					zap.Int("round", r))
 			}
 		}
 	}
@@ -307,18 +321,16 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, exists := e.messages[round]; !exists {
-		e.messages[round] = make(map[string]receivedMessage)
-	}
+	e.logger.Debug("ExAnte: Received message",
+		zap.String("from", from),
+		zap.String("sender_id", msg.Id),
+		zap.Int("round", round),
+		zap.Binary("verification_key", msg.VerificationKey),
+		zap.Binary("value", msg.Value),
+		zap.Binary("proof", msg.Aux.PiRP),
+	)
 
-	if _, exists := e.messages[round][from]; exists {
-		e.logger.Debug("Ignoring duplicate message from sender for this round",
-			zap.String("from", from),
-			zap.Int("round", round))
-		return nil
-	}
-
-	e.messages[round][from] = receivedMessage{
+	e.messages[round] = append(e.messages[round], receivedMessage{
 		id:  msg.Id,
 		sid: msg.SessionId,
 		vk:  msg.VerificationKey,
@@ -333,7 +345,7 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 			},
 		},
 		merklePath: convertTimestampToBytes(&msg),
-	}
+	})
 
 	return nil
 }
@@ -371,18 +383,30 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	}
 
 	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
+		e.logger.Debug("Message filtered out by filter function",
+			zap.String("session_id", msg.sid),
+		)
 		return false
 	}
 
 	if !(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
+		e.logger.Debug("Message filtered out by grade function",
+			zap.String("sender_id", msg.id),
+		)
 		return false
 	}
 
 	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.v, msg.aux.PiRP), msg.merklePath[0]) {
+		e.logger.Debug("Message filtered out by merkle path",
+			zap.String("sender_id", msg.id),
+		)
 		return false
 	}
 
 	if !e.validateMerklePath(msg.merklePath, r) {
+		e.logger.Debug("Message filtered out by merkle path",
+			zap.String("sender_id", msg.id),
+		)
 		return false
 	}
 
