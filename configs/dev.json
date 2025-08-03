@@ -19,7 +19,7 @@
     "grading_levels": 3
   },
   "run_time": {
-    "session_id": "dev-session-001",
+    "session_id": "test-session-1753023248",
     "lambda": 256,
     "weight": 10,
     "delta_w": 2.0,

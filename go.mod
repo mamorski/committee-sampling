@@ -1,8 +1,8 @@
 module github.com/mamorski/committee-sampling
 
-go 1.23.0
+go 1.24
 
-toolchain go1.23.1
+toolchain go1.24.5
 
 require (
 	github.com/google/uuid v1.6.0

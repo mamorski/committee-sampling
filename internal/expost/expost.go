@@ -209,7 +209,7 @@ func (e *ExPost) Verify(
 		e.network.SendProtocolMessage(protocolID, msgBytes)
 	}
 
-	for r := 1; r <= R; r++ {
+	for r := 1; r < R; r++ {
 		// Wait for round r synchronization
 		waitChan, err := e.synchronizer.WaitForRound(common.ExPostVerify, r)
 		if err != nil {
@@ -277,7 +277,7 @@ func (e *ExPost) Verify(
 					pMsg.MerklePath[i+1] = &pb.State{Row: msg.merklePath[i]}
 				}
 
-				pMsg.MerklePath[0] = &pb.State{Row: sigma[R-r]}
+				pMsg.MerklePath[0] = &pb.State{Row: sigma[len(sigma)-1-r]}
 				pMsgBytes, err := proto.Marshal(pMsg)
 				if err != nil {
 					e.logger.Warn("Failed to marshal message", zap.Error(err))

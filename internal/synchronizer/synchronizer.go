@@ -68,11 +68,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Synchron
 		}
 		s.publicKey = pubKey
 		s.ownsPubSub = true
-		pubsubService, err := NewPubSubService(ctx, cfg.Network.ListenPort+1000, logger)
+		pubSubService, err := NewPubSubService(ctx, 0, logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create pubsub service: %w", err)
+			return nil, fmt.Errorf("failed to create pubSub service: %w", err)
 		}
-		s.pubSub = pubsubService
+		s.pubSub = pubSubService
 	}
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels

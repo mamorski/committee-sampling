@@ -27,6 +27,7 @@ go.work.sum
 
 # Goland files
 .idea/
+.vscode/
 
 # MACOS files
 .DS_Store

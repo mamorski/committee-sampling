@@ -84,7 +84,7 @@ func (suite *SynchronizerTestSuite) SetupTest() {
 	suite.Require().NoError(err)
 }
 
-// createSynchronizerWithMock creates a synchronizer instance with mock pubsub for testing
+// createSynchronizerWithMock creates a synchronizer instance with mock pubSub for testing
 func (suite *SynchronizerTestSuite) createSynchronizerWithMock() (*Synchronizer, error) {
 	s := &Synchronizer{
 		pubSub:        suite.pubSub,

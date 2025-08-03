@@ -138,7 +138,7 @@ create_config() {
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
     "time_server": "time.google.com",
-    "certificate_path": "",
+    "certificate_path": "/home/igor/repos/committee-sampling-server/certs/sync-sender.crt",
     "topic": "sync-topic"
   },
   "logger": {

@@ -3,20 +3,22 @@ package synchronizer
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
 
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
 
+const DiscoveryServiceTag = "pubsub-chat-example"
+
 type PubSubService struct {
 	host   host.Host
-	pubsub *pubsub.PubSub
+	pubSub *pubsub.PubSub
 	ctx    context.Context
 	cancel context.CancelFunc
 	logger *zap.Logger
@@ -24,13 +26,6 @@ type PubSubService struct {
 
 func NewPubSubService(ctx context.Context, listenPort int, logger *zap.Logger) (*PubSubService, error) {
 	c, cancel := context.WithCancel(ctx)
-
-	// Generate private key
-	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to generate key pair: %w", err)
-	}
 
 	// Create multiaddress for listening
 	listenAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort))
@@ -44,32 +39,37 @@ func NewPubSubService(ctx context.Context, listenPort int, logger *zap.Logger) (
 	// Create libp2p host
 	h, err := libp2p.New(
 		libp2p.ListenAddrs(listenAddr),
-		libp2p.Identity(priv),
 	)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create host: %w", err)
 	}
 
-	// Create pubsub service using GossipSub
+	// Create pubSub service using GossipSub
 	ps, err := pubsub.NewGossipSub(c, h)
 	if err != nil {
 		_ = h.Close()
 		cancel()
-		return nil, fmt.Errorf("failed to create pubsub: %w", err)
+		return nil, fmt.Errorf("failed to create pubSub: %w", err)
+	}
+
+	// 3. Setup peer discovery
+	// We use mDNS for local peer discovery
+	if err := mdns.NewMdnsService(h, DiscoveryServiceTag, &discoveryNotifee{h: h}).Start(); err != nil {
+		panic(err)
 	}
 
 	return &PubSubService{
 		host:   h,
-		pubsub: ps,
+		pubSub: ps,
 		ctx:    c,
 		cancel: cancel,
-		logger: logger.Named("pubsub"),
+		logger: logger.Named("pubSub"),
 	}, nil
 }
 
 func (ps *PubSubService) Subscribe(topic string) (<-chan []byte, error) {
-	topicHandle, err := ps.pubsub.Join(topic)
+	topicHandle, err := ps.pubSub.Join(topic)
 	if err != nil {
 		return nil, fmt.Errorf("failed to join topic %s: %w", topic, err)
 	}
@@ -89,7 +89,7 @@ func (ps *PubSubService) Subscribe(topic string) (<-chan []byte, error) {
 				if ps.ctx.Err() != nil {
 					return
 				}
-				ps.logger.Error("Failed to get next pubsub message", zap.Error(err))
+				ps.logger.Error("Failed to get next pubSub message", zap.Error(err))
 				continue
 			}
 
@@ -117,4 +117,20 @@ func (ps *PubSubService) VerifySignature(pubKeyBytes, message, signature []byte)
 func (ps *PubSubService) Close() error {
 	ps.cancel()
 	return ps.host.Close()
+}
+
+// discoveryNotifee gets notified when we find a new peer via mDNS discovery
+type discoveryNotifee struct {
+	h host.Host
+}
+
+// HandlePeerFound connects to peers discovered via mDNS. Once they're connected,
+// the PubSub system will automatically start interacting with them if they also
+// support PubSub.
+func (n *discoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
+	fmt.Printf("discovered new peer %s\n", pi.ID)
+	err := n.h.Connect(context.Background(), pi)
+	if err != nil {
+		fmt.Printf("error connecting to peer %s: %s\n", pi.ID, err)
+	}
 }
