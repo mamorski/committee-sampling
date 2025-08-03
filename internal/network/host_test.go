@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -97,6 +98,15 @@ func (m *MockConn) ConnState() network.ConnectionState {
 	return args.Get(0).(network.ConnectionState)
 }
 
+type MockSync struct {
+	mock.Mock
+}
+
+func (m *MockSync) WaitForRound(step common.Step, round int) (<-chan struct{}, error) {
+	args := m.Called(step, round)
+	return args.Get(0).(chan struct{}), args.Error(1)
+}
+
 type HostTestSuite struct {
 	suite.Suite
 	mockHost      *MockHost
@@ -141,6 +151,7 @@ func (suite *HostTestSuite) SetupTest() {
 		heartbeatInterval: time.Second,
 		key:               suite.testPrivKey,
 		findPeersTimeout:  10 * time.Second,
+		neighbors:         make(map[peer.ID]peer.AddrInfo),
 	}
 }
 
@@ -183,14 +194,14 @@ func (suite *HostTestSuite) TestGetNeighbors() {
 	testPeerID2, _ := peer.IDFromPublicKey(pub2)
 
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	suite.node.neighbors.Store(suite.testPeerID, peer.AddrInfo{
+	suite.node.neighbors[suite.testPeerID] = peer.AddrInfo{
 		ID:    suite.testPeerID,
 		Addrs: []multiaddr.Multiaddr{addr},
-	})
-	suite.node.neighbors.Store(testPeerID2, peer.AddrInfo{
+	}
+	suite.node.neighbors[testPeerID2] = peer.AddrInfo{
 		ID:    testPeerID2,
 		Addrs: []multiaddr.Multiaddr{addr},
-	})
+	}
 
 	neighbors := suite.node.GetNeighbors()
 	suite.Len(neighbors, 2)
@@ -224,10 +235,11 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 
 	// Add a neighbor
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	suite.node.neighbors.Store(suite.testPeerID, peer.AddrInfo{
+	suite.node.neighbors = make(map[peer.ID]peer.AddrInfo) // Initialize the map
+	suite.node.neighbors[suite.testPeerID] = peer.AddrInfo{
 		ID:    suite.testPeerID,
 		Addrs: []multiaddr.Multiaddr{addr},
-	})
+	}
 
 	suite.node.SendProtocolMessage("test-protocol", []byte("test-data"))
 
@@ -260,14 +272,14 @@ func (suite *HostTestSuite) TestAddNeighbor() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(nil)
+	suite.mockHost.On("Connect", context.Background(), addrInfo).Return(nil)
 
 	err := suite.node.addNeighbor(addrInfo)
 	suite.NoError(err)
-	suite.Equal(1, suite.node.numOfNeighbors)
+	suite.Equal(1, len(suite.node.neighbors))
 
 	// Verify neighbor was stored
-	stored, ok := suite.node.neighbors.Load(suite.testPeerID)
+	stored, ok := suite.node.neighbors[suite.testPeerID]
 	suite.True(ok)
 	suite.Equal(addrInfo, stored)
 
@@ -281,14 +293,14 @@ func (suite *HostTestSuite) TestAddNeighborConnectionError() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(assert.AnError)
+	suite.mockHost.On("Connect", context.Background(), addrInfo).Return(assert.AnError)
 
 	err := suite.node.addNeighbor(addrInfo)
 	suite.Error(err)
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	// Verify neighbor was not stored
-	_, ok := suite.node.neighbors.Load(suite.testPeerID)
+	_, ok := suite.node.neighbors[suite.testPeerID]
 	suite.False(ok)
 
 	suite.mockHost.AssertExpectations(suite.T())
@@ -302,7 +314,7 @@ func (suite *HostTestSuite) TestAddNeighborAlreadyExists() {
 	}
 
 	// Add neighbor first time
-	suite.node.neighbors.Store(suite.testPeerID, addrInfo)
+	suite.node.neighbors[suite.testPeerID] = addrInfo
 
 	// Try to add again - should not call Connect
 	err := suite.node.addNeighbor(addrInfo)
@@ -339,42 +351,6 @@ func (suite *HostTestSuite) TestSendRequestToNeighborSuccess() {
 	mockStream.AssertExpectations(suite.T())
 }
 
-func (suite *HostTestSuite) TestSendRequestToNeighborHigherID() {
-	// Create a peer with higher ID
-	higherPeerID := peer.ID("z" + suite.testPeerID.String())
-
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-
-	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	addrInfo := peer.AddrInfo{
-		ID:    higherPeerID,
-		Addrs: []multiaddr.Multiaddr{addr},
-	}
-
-	// Should ignore peer with higher ID
-	suite.node.sendRequestToNeighbor(addrInfo)
-
-	suite.mockHost.AssertExpectations(suite.T())
-}
-
-func (suite *HostTestSuite) TestSendRequestToNeighborMaxOutbound() {
-	suite.node.numOfNeighbors = suite.node.maxOutbound
-
-	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	addrInfo := peer.AddrInfo{
-		ID:    suite.testPeerID,
-		Addrs: []multiaddr.Multiaddr{addr},
-	}
-
-	// Create a peer ID that's definitely lower
-	suite.mockHost.On("ID").Return(peer.ID("z" + suite.testPeerID.String()))
-
-	// Should not send request when at max capacity
-	suite.node.sendRequestToNeighbor(addrInfo)
-
-	suite.mockHost.AssertExpectations(suite.T())
-}
-
 func (suite *HostTestSuite) TestSendRequestToNeighborAlreadyConnected() {
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
 	addrInfo := peer.AddrInfo{
@@ -383,13 +359,11 @@ func (suite *HostTestSuite) TestSendRequestToNeighborAlreadyConnected() {
 	}
 
 	// Add neighbor first
-	suite.node.neighbors.Store(suite.testPeerID, addrInfo)
-
-	suite.mockHost.On("ID").Return(peer.ID("z" + suite.testPeerID.String()))
+	suite.node.neighbors[suite.testPeerID] = addrInfo
 
 	// Should not send request to already connected peer
 	suite.node.sendRequestToNeighbor(addrInfo)
-
+	// Should not call any methods on mockHost
 	suite.mockHost.AssertExpectations(suite.T())
 }
 
@@ -429,8 +403,8 @@ func (suite *HostTestSuite) TestOnNeighborRequestSuccess() {
 	}).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
-	mockStream.On("Conn").Return(mockConn).Times(3)
-	mockConn.On("RemotePeer").Return(suite.testPeerID).Twice()
+	mockStream.On("Conn").Return(mockConn).Times(4)
+	mockConn.On("RemotePeer").Return(suite.testPeerID).Times(3)
 	mockConn.On("RemoteMultiaddr").Return(addr).Once()
 
 	// Setup host expectations for adding neighbor
@@ -448,8 +422,8 @@ func (suite *HostTestSuite) TestOnNeighborRequestSuccess() {
 	suite.node.onNeighborRequest(mockStream)
 
 	// Verify neighbor was added
-	suite.Equal(1, suite.node.numOfNeighbors)
-	_, exists := suite.node.neighbors.Load(suite.testPeerID)
+	suite.Equal(1, len(suite.node.neighbors))
+	_, exists := suite.node.neighbors[suite.testPeerID]
 	suite.True(exists)
 
 	// Verify all expectations
@@ -478,7 +452,7 @@ func (suite *HostTestSuite) TestOnNeighborRequestInvalidMessage() {
 	suite.node.onNeighborRequest(mockStream)
 
 	// Verify no neighbor was added
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	mockStream.AssertExpectations(suite.T())
 }
@@ -502,6 +476,7 @@ func (suite *HostTestSuite) TestOnNeighborRequestAuthenticationFailure() {
 	suite.Require().NoError(err)
 
 	mockStream := &MockStream{}
+	mockConn := &MockConn{}
 
 	// Setup stream read expectations
 	mockStream.On("Read", mock.Anything).Return(len(messageBytes), nil).Run(func(args mock.Arguments) {
@@ -510,12 +485,14 @@ func (suite *HostTestSuite) TestOnNeighborRequestAuthenticationFailure() {
 	}).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
+	mockStream.On("Conn").Return(mockConn)
+	mockConn.On("RemotePeer").Return(suite.testPeerID)
 
 	// Call the method
 	suite.node.onNeighborRequest(mockStream)
 
 	// Verify no neighbor was added due to authentication failure
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	mockStream.AssertExpectations(suite.T())
 }
@@ -552,13 +529,13 @@ func (suite *HostTestSuite) TestOnNeighborRequestAddNeighborFailure() {
 	mockConn.On("RemoteMultiaddr").Return(addr)
 
 	// Simulate connection failure exactly once
-	suite.mockHost.On("Connect", suite.ctx, mock.Anything).Return(assert.AnError).Once()
+	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(assert.AnError).Once()
 
 	// Execute
 	suite.node.onNeighborRequest(mockStream)
 
 	// Expect no neighbor added
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	// Verify all expectations
 	mockStream.AssertExpectations(suite.T())
@@ -609,14 +586,14 @@ func (suite *HostTestSuite) TestOnNeighborResponseSuccess() {
 	mockConn.On("RemoteMultiaddr").Return(addr)
 
 	// Setup host expectations for adding neighbor
-	suite.mockHost.On("Connect", suite.ctx, mock.Anything).Return(nil)
+	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(nil)
 
 	// Call the method
 	suite.node.onNeighborResponse(mockStream)
 
 	// Verify neighbor was added
-	suite.Equal(1, suite.node.numOfNeighbors)
-	_, exists := suite.node.neighbors.Load(suite.testPeerID)
+	suite.Equal(1, len(suite.node.neighbors))
+	_, exists := suite.node.neighbors[suite.testPeerID]
 	suite.True(exists)
 
 	// Verify all expectations
@@ -668,7 +645,7 @@ func (suite *HostTestSuite) TestOnNeighborResponseRejected() {
 	suite.node.onNeighborResponse(mockStream)
 
 	// Verify no neighbor was added due to rejection
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	// Verify all expectations
 	mockStream.AssertExpectations(suite.T())
@@ -693,7 +670,7 @@ func (suite *HostTestSuite) TestOnNeighborResponseInvalidMessage() {
 	suite.node.onNeighborResponse(mockStream)
 
 	// Verify no neighbor was added
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	mockStream.AssertExpectations(suite.T())
 }
@@ -731,7 +708,7 @@ func (suite *HostTestSuite) TestOnNeighborResponseAuthenticationFailure() {
 	suite.node.onNeighborResponse(mockStream)
 
 	// Verify no neighbor was added due to authentication failure
-	suite.Equal(0, suite.node.numOfNeighbors)
+	suite.Equal(0, len(suite.node.neighbors))
 
 	mockStream.AssertExpectations(suite.T())
 }
@@ -740,6 +717,7 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 	// Create a test peer
 	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
 	testPeerID, _ := peer.IDFromPublicKey(pub)
+	myPeerID := peer.ID("test-peer-id")
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
 
 	addrInfo := peer.AddrInfo{
@@ -750,21 +728,9 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 	// Setup discovery channel
 	ch := make(chan peer.AddrInfo, 1)
 	suite.mockDiscovery.On("DiscoveredPeers").Return((<-chan peer.AddrInfo)(ch))
-
-	// Setup expectations for sendRequestToNeighbor
-	suite.mockHost.On("ID").Return(peer.ID("z" + testPeerID.String())) // Higher ID to trigger request
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-	suite.mockPeerstore.On("PubKey", mock.Anything).Return(suite.testPubKey)
-	suite.mockPeerstore.On("PrivKey", mock.Anything).Return(suite.testPrivKey)
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
-
-	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(100, nil)
-	mockStream.On("Close").Return(nil)
-
+	suite.mockHost.On("ID").Return(myPeerID).Once()
 	// Start the handler in a goroutine
-	go suite.node.handleDiscoveredPeers()
+	go suite.node.handleDiscoveredPeers(suite.ctx)
 
 	// Send a peer to the channel
 	ch <- addrInfo
@@ -775,10 +741,11 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 	// Cancel context to stop the handler
 	suite.cancel()
 
+	suite.NotEmpty(suite.node.potentialNeighbors.Load(testPeerID))
 	suite.mockDiscovery.AssertExpectations(suite.T())
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
-	mockStream.AssertExpectations(suite.T())
+
 }
 
 func (suite *HostTestSuite) TestNewWithMDNS() {
@@ -799,7 +766,17 @@ func (suite *HostTestSuite) TestNewWithMDNS() {
 		},
 	}
 
-	node, err := New(ctx, cfg, logger)
+	sync := &MockSync{}
+	ch0 := make(chan struct{})
+	ch1 := make(chan struct{})
+	sync.On("WaitForRound", mock.Anything, 0).Return(ch0, nil)
+	sync.On("WaitForRound", mock.Anything, 1).Return(ch1, nil)
+
+	node, err := New(ctx, cfg, logger, sync)
+
+	ch0 <- struct{}{}
+	ch1 <- struct{}{}
+
 	suite.NoError(err)
 	suite.NotNil(node)
 
@@ -812,7 +789,7 @@ func (suite *HostTestSuite) TestNewWithMDNS() {
 	suite.NotNil(node.key)
 	suite.Equal(cfg.MaxOutboundDegree, node.maxOutbound)
 	suite.Equal(cfg.HeartbeatInterval, node.heartbeatInterval)
-	suite.Equal(0, node.numOfNeighbors)
+	suite.Equal(0, len(node.neighbors)) // No neighbors initially
 
 	// Verify node ID is valid
 	nodeID := node.GetNodeID()

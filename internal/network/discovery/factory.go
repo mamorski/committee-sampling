@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/multiformats/go-multiaddr"
+	"go.uber.org/zap"
 )
 
 type Host interface {
@@ -30,10 +31,10 @@ type Host interface {
 	EventBus() event.Bus
 }
 
-func NewDiscovery(host Host, config config.Discovery) (PeerDiscovery, error) {
+func NewDiscovery(host Host, config config.Discovery, logger *zap.Logger) (PeerDiscovery, error) {
 	switch config.DiscoveryType {
 	case "dht":
-		return NewDHTDiscovery(host, config), nil
+		return NewDHTDiscovery(host, config, logger), nil
 	case "mdns":
 		return NewMDNSDiscovery(host, config), nil
 	default:

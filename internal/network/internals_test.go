@@ -51,9 +51,10 @@ func (suite *InternalsTestSuite) SetupTest() {
 	suite.mockPeerstore = &MockPeerstore{}
 
 	suite.node = &P2PNode{
-		host:   suite.mockHost,
-		logger: suite.logger,
-		key:    suite.testPrivKey,
+		host:      suite.mockHost,
+		logger:    suite.logger,
+		key:       suite.testPrivKey,
+		neighbors: make(map[peer.ID]peer.AddrInfo),
 	}
 }
 
@@ -359,7 +360,7 @@ func (suite *InternalsTestSuite) TestSendProtoMessageSuccess() {
 		ID:    suite.testPeerID,
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
-	suite.node.neighbors.Store(suite.testPeerID, addrInfo)
+	suite.node.neighbors[suite.testPeerID] = addrInfo
 
 	// Setup mock expectations
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)

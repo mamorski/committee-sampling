@@ -1,12 +1,8 @@
 package synchronizer
 
 import (
-	"crypto/ed25519"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
+	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -16,143 +12,75 @@ import (
 	"go.uber.org/zap"
 )
 
-var AllSteps = []common.Step{common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
-
-type PubSub interface {
-	Subscribe(topic string) (<-chan []byte, error)
-	VerifySignature(pubKey, message, signature []byte) (bool, error)
-}
-
-type SyncMessage struct {
-	Step      common.Step `json:"step"`
-	Round     int         `json:"round"`
-	Signature []byte      `json:"signature"`
-}
+var AllSteps = []common.Step{common.Network, common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
 
 type StartTimes struct {
-	ExPostMDAG   time.Time
-	ExAnteMDAG   time.Time
-	ExPostVerify time.Time
-	ExAnteVerify time.Time
+	StartBuildingNetwork time.Time
+	ExPostMDAG           time.Time
+	ExAnteMDAG           time.Time
+	ExPostVerify         time.Time
+	ExAnteVerify         time.Time
 }
 
 type Synchronizer struct {
-	pubSub        PubSub
 	cfg           *config.Config
 	logger        *zap.Logger
 	stopChan      chan struct{}
 	roundChannels map[common.Step][]chan struct{}
 	rounds        int
 	mu            sync.Mutex
-	publicKey     ed25519.PublicKey
+	stopOnce      sync.Once
 }
 
-func New(pubSub PubSub, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
+func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
 	s := &Synchronizer{
-		pubSub:        pubSub,
 		cfg:           cfg,
 		logger:        logger,
 		stopChan:      make(chan struct{}),
 		roundChannels: make(map[common.Step][]chan struct{}),
 	}
 
-	// Only read public key from certificate file if using ChannelSync
-	if cfg.Synchronization.Type == config.ChannelSync {
-		pubKey, err := readPublicKeyFromCert(cfg.Synchronization.CertificatePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read public key from certificate: %w", err)
-		}
-		s.publicKey = pubKey
-	}
-
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
-		s.roundChannels[step] = make([]chan struct{}, s.rounds)
-		for i := 0; i < s.rounds; i++ {
+		if step == common.Network {
+			// Network has no rounds, so we create a single channel
+			// to signal when the step is triggered.
+			s.roundChannels[step] = make([]chan struct{}, 2)
+			// The first channel is used to signal the start of the network step,
+			// and the second channel is used to signal the end of the network step.
+			s.roundChannels[step][0] = make(chan struct{})
+			s.roundChannels[step][1] = make(chan struct{})
+			continue
+		}
+
+		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
+		for i := 0; i < s.rounds+1; i++ {
 			s.roundChannels[step][i] = make(chan struct{})
 		}
 	}
 	return s, nil
 }
 
-func readPublicKeyFromCert(certPath string) (ed25519.PublicKey, error) {
-	certData, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate file: %w", err)
-	}
-
-	block, _ := pem.Decode(certData)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block from certificate")
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("certificate does not contain Ed25519 public key")
-	}
-
-	return pubKey, nil
-}
-
 func (s *Synchronizer) Start() {
-	if s.cfg.Synchronization.Type == config.TimeSync {
-		go s.startTimeSync()
-	} else {
-		go s.startChannelSync()
-	}
+	go s.startTimeSync()
 }
 
 func (s *Synchronizer) Stop() {
-	close(s.stopChan)
+	s.stopOnce.Do(func() {
+		close(s.stopChan)
+	})
 }
 
-func (s *Synchronizer) startChannelSync() {
-	msgChan, err := s.pubSub.Subscribe(s.cfg.Synchronization.Topic)
-	if err != nil {
-		s.logger.Error("Failed to subscribe to sync topic", zap.Error(err))
-		return
-	}
-
-	s.logger.Info("Starting channel-based synchronization")
-	for {
-		select {
-		case msgBytes := <-msgChan:
-			var msg SyncMessage
-			if err := json.Unmarshal(msgBytes, &msg); err != nil {
-				s.logger.Warn("Failed to unmarshal sync message", zap.Error(err))
-				continue
-			}
-
-			dataToVerify := []byte(fmt.Sprintf("%s:%d", msg.Step, msg.Round))
-			valid, err := s.pubSub.VerifySignature(s.publicKey, dataToVerify, msg.Signature)
-			if err != nil {
-				s.logger.Warn("Error verifying signature", zap.Error(err))
-				continue
-			}
-
-			if !valid {
-				s.logger.Warn("Invalid signature for sync message")
-				continue
-			}
-
-			s.logger.Info("Received and verified sync message", zap.String("step", string(msg.Step)), zap.Int("round", msg.Round))
-			s.triggerRound(msg.Step, msg.Round)
-		case <-s.stopChan:
-			s.logger.Info("Stopping channel-based synchronization")
-			return
-		}
-	}
+func (s *Synchronizer) Close() error {
+	s.Stop()
+	return nil
 }
 
 func (s *Synchronizer) startTimeSync() {
 	startTimes := CalculateStartTimes(s.cfg, s.logger)
 	s.logger.Info("Starting time-based synchronization")
 
+	go s.runTimeSyncForStep(common.Network, startTimes.StartBuildingNetwork, s.cfg.Synchronization.BuildingGraphTimeout)
 	go s.runTimeSyncForStep(common.ExPostMDAG, startTimes.ExPostMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExAnteMDAG, startTimes.ExAnteMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostVerify, startTimes.ExPostVerify, s.cfg.Synchronization.ExPostRoundTimeout)
@@ -164,7 +92,12 @@ func (s *Synchronizer) startTimeSync() {
 
 func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time, roundTimeout time.Duration) {
 	s.logger.Info("Scheduling rounds for step", zap.String("step", string(step)), zap.Time("startTime", startTime))
-	for i := 0; i < s.rounds; i++ {
+	rounds := s.rounds
+	if step == common.Network {
+		rounds = 1 // Network has only one round
+	}
+
+	for i := 0; i < rounds+1; i++ {
 		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout)
 		timer := time.NewTimer(time.Until(roundStartTime))
 
@@ -213,8 +146,9 @@ func (s *Synchronizer) WaitForRound(step common.Step, round int) (<-chan struct{
 	if !ok {
 		return nil, fmt.Errorf("unknown step: %s", step)
 	}
+
 	if round >= len(stepChannels) {
-		return nil, fmt.Errorf("round %d exceeds total rounds %d", round, len(stepChannels))
+		return nil, fmt.Errorf("round %d exceeds total rounds %d", round, s.rounds)
 	}
 
 	return stepChannels[round], nil
@@ -226,17 +160,23 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	if err != nil {
 		logger.Warn("Failed to query NTP server, using local time", zap.Error(err))
 	} else {
-		logger.Info("Calculated start times", zap.Int64("clockOffset", response.ClockOffset.Milliseconds()))
+		logger.Info("Calculated clock offset", zap.Int64("clockOffset", response.ClockOffset.Milliseconds()))
 		clockOffset = response.ClockOffset
 	}
 
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	startTime := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
 
+	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + time.Minute)
+	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Minute)
+	exPostVerifyTime := exAnteMDAGTime.Add(
+		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.RunTime.Delay)*time.Second + time.Minute)
+
 	return &StartTimes{
-		ExPostMDAG:   startTime,
-		ExAnteMDAG:   startTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Minute),
-		ExPostVerify: startTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + (time.Second * 120)),
-		ExAnteVerify: startTime.Add(cfg.Synchronization.ExPostRoundTimeout*time.Duration(rounds) + (time.Second * 10)),
+		StartBuildingNetwork: startTime,
+		ExPostMDAG:           exPostMDAGTime,
+		ExAnteMDAG:           exAnteMDAGTime,
+		ExPostVerify:         exPostVerifyTime,
+		ExAnteVerify:         exPostVerifyTime,
 	}
 }

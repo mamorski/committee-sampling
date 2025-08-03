@@ -20,12 +20,8 @@ type MockNetwork struct {
 	closed    bool
 }
 
-func (m *MockNetwork) Subscribe(_ string) (<-chan []byte, error) {
-	return nil, nil
-}
-
-func (m *MockNetwork) VerifySignature(_, _, _ []byte) (bool, error) {
-	return true, nil
+func (m *MockNetwork) buildNetwork() {
+	// No-op implementation for testing
 }
 
 func NewMockNetwork() *MockNetwork {

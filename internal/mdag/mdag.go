@@ -62,12 +62,6 @@ func New(
 	step common.Step,
 	protocolType string) *MDAG {
 
-	neighborsList := network.GetNeighbors()
-	neighbors := make(map[string]bool, len(neighborsList))
-	for _, neighbor := range neighborsList {
-		neighbors[neighbor] = true
-	}
-
 	m := &MDAG{
 		rounds:         rounds,
 		oracle:         oracle,
@@ -80,14 +74,13 @@ func New(
 		isRunning:      false,
 		sessionID:      sid,
 		step:           step,
-		neighbors:      neighbors,
 		protocolType:   protocolType,
 	}
 
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
 	m.logger.Info("MDAG instance created",
 		zap.Int("rounds", rounds),
-		zap.Int("neighbors", len(neighbors)))
+	)
 	return m
 }
 
@@ -147,6 +140,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		return nil, fmt.Errorf("failed to wait for round 0: %w", err)
 	}
 	<-waitChan
+	m.initializeNeighbors()
 
 	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
@@ -324,4 +318,17 @@ func (m *MDAG) Oracle(h ...[]byte) []byte {
 	}
 
 	return m.oracle(buffer.Bytes())
+}
+
+func (m *MDAG) initializeNeighbors() {
+	neighborsList := m.network.GetNeighbors()
+	m.neighbors = make(map[string]bool, len(neighborsList))
+	for _, neighbor := range neighborsList {
+		m.neighbors[neighbor] = true
+	}
+
+	m.logger.Info("Initialized neighbors",
+		zap.Int("num_neighbors", len(m.neighbors)),
+		zap.Strings("neighbors", neighborsList),
+	)
 }

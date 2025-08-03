@@ -52,7 +52,15 @@ func (r *ResourceProof) Ver(vk []byte, omega float64, ch []byte, pi []byte) bool
 	var challenge bytes.Buffer
 	challenge.Write(vk)
 	challenge.Write(ch)
-	return r.proofOfWork.Verify(challenge.Bytes(), int(omega), pi)
+	result := r.proofOfWork.Verify(challenge.Bytes(), int(omega), pi)
+	r.logger.Debug("Verifying proof of work",
+		zap.Binary("vk", vk),
+		zap.Bool("result", result),
+		zap.Int("omega", int(omega)),
+		zap.Binary("challenge", ch),
+		zap.Binary("proof", pi),
+	)
+	return result
 }
 
 func New(logger *zap.Logger) *ResourceProof {

@@ -1,11 +1,11 @@
 package boot
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"math"
 	"math/big"
-	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/exante"
@@ -15,7 +15,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/resourcebound"
 	"github.com/mamorski/committee-sampling/internal/resourceproof"
-	"github.com/mamorski/committee-sampling/internal/synchronizer"
 	"github.com/mamorski/committee-sampling/internal/vdf"
 	"github.com/mamorski/committee-sampling/internal/vrf"
 	"github.com/mamorski/committee-sampling/pkg/config"
@@ -42,13 +41,7 @@ type Bootstrap struct {
 	Config     *config.Config
 	Network    network.Network
 	Logger     *zap.Logger
-}
-
-type StartTimes struct {
-	ExAnteMDAG   time.Time
-	ExPostMDAG   time.Time
-	ExPostVerify time.Time
-	ExAnteVerify time.Time
+	Context    context.Context
 }
 
 func Oracle(data []byte) []byte {
@@ -57,16 +50,7 @@ func Oracle(data []byte) []byte {
 }
 
 //nolint:funlen
-func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstrap, error) {
-
-	// Create synchronizer instance
-	sync, err := synchronizer.New(node, cfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create synchronizer: %w", err)
-	}
-
-	// Start the synchronizer
-	sync.Start()
+func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer) (*Bootstrap, error) {
 
 	vdFunc := vdf.New(logger)
 	vrFunc := vrf.New(logger)
@@ -80,7 +64,7 @@ func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstr
 		vrfInput := gce.HashData(auxKey.PhiVDF, []byte(sid))
 
 		logger.Debug("Filter function called, verifying VDF and VRF",
-			zap.String("node_id", id),
+			zap.String("sender_id", id),
 			zap.String("sid", sid),
 			zap.Binary("vk", vk),
 			zap.Binary("challenge", ch),
@@ -114,14 +98,8 @@ func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstr
 	// and returns grade min {d + 1, ⌊g⌋}.
 	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, weight float64) int {
 
-		g, err := computeGrade(
-			cfg.Graph.GradingLevels,
-			cfg.RunTime.CommitteeSize,
-			cfg.RunTime.Lambda,
-			weight,
-			cfg.RunTime.DeltaW,
-			auxKey.PhiVRF,
-		)
+		g, err := computeGrade(cfg.Graph.GradingLevels, cfg.RunTime.CommitteeSize, cfg.RunTime.Lambda, weight, cfg.RunTime.DeltaW,
+			auxKey.PhiVRF, logger.Named("GradeFunction"))
 		if err != nil {
 			logger.Warn("Failed to compute grade",
 				zap.String("sid", sid),
@@ -135,6 +113,7 @@ func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstr
 			zap.Int("g", g),
 			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
 			zap.Binary("Phi^VRF", auxKey.PhiVRF),
+			zap.Binary("vk", vk),
 		)
 
 		return g
@@ -205,12 +184,13 @@ func New(cfg *config.Config, node network.Network, logger *zap.Logger) (*Bootstr
 		Network:    node,
 		Config:     cfg,
 		Logger:     logger,
+		Context:    ctx,
 	}, nil
 
 }
 
 func (b *Bootstrap) Run() error {
-	state, err := b.GCE.Initialize(b.id, b.Config.RunTime.SessionID, b.VRF, b.RbExp, b.VDF, 20, b.Config.RunTime.Lambda)
+	state, err := b.GCE.Initialize(b.id, b.Config.RunTime.SessionID, b.VRF, b.RbExp, b.VDF, b.Config.RunTime.Delay, b.Config.RunTime.Lambda)
 	if err != nil {
 		return fmt.Errorf("failed to initialize GCE: %w", err)
 	}
@@ -250,7 +230,7 @@ func (b *Bootstrap) Run() error {
 //
 // This implementation uses big.Int and big.Float to compute 2^λ/(φ+1) with enough precision
 // before converting to float64. Finally, it floors and clamps as specified.
-func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte) (int, error) {
+func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap.Logger) (int, error) {
 	// 1) Validate inputs
 	if deltaW == 0 {
 		return 0, fmt.Errorf("deltaW must be nonzero")
@@ -285,14 +265,24 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte) (int, error
 	// 9) Compute gᵢ = (d + 1) − term
 	g := float64(d+1) - term
 
+	// Log the computed values for debugging
+	logger.Debug("Computed grade components",
+		zap.Int("d", d),
+		zap.Int("n", n),
+		zap.Float64("Wi", Wi),
+		zap.Float64("ratioF", ratioF),
+		zap.Float64("sub", sub),
+		zap.Float64("term", term),
+		zap.Float64("g", g),
+		zap.String("phi", phiInt.String()),
+		zap.String("phi_plus_one", phiPlusOne.String()),
+		zap.String("twoToLambdaInt", twoToLambdaInt.String()),
+		zap.Int("lambda", lambda),
+	)
 	// 10) Take floor(gᵢ)
 	floorG := math.Floor(g)
 
-	// 11) Clamp to ≤ (d + 1)
-	maxGrade := float64(d + 1)
-	if floorG > maxGrade {
-		floorG = maxGrade
-	}
+	finalGrade := math.Min(float64(d+1), floorG)
 
-	return int(floorG), nil
+	return int(finalGrade), nil
 }

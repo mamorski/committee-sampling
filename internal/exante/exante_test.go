@@ -44,14 +44,8 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) Subscribe(topic string) (<-chan []byte, error) {
-	args := m.Called(topic)
-	return args.Get(0).(<-chan []byte), args.Error(1)
-}
-
-func (m *MockNetwork) VerifySignature(pubKey, message, signature []byte) (bool, error) {
-	args := m.Called(pubKey, message, signature)
-	return args.Bool(0), args.Error(1)
+func (m *MockNetwork) buildNetwork() {
+	m.Called()
 }
 
 // MockMDAG is a mock implementation of the MDAG interface
@@ -139,7 +133,7 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		d:             suite.testD,
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
-		messages:      make(map[int]map[string]receivedMessage),
+		messages:      make(map[int][]receivedMessage),
 		neighbors:     make(map[string]bool),
 		sid:           suite.testSID,
 		isRunning:     true,
@@ -176,14 +170,12 @@ func (suite *ExAnteTestSuite) TestNew() {
 
 	testD := 5
 	testBigD := 3
-	testNeighbors := []string{"peer1", "peer2", "peer3"}
 
 	gradeFunc := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
 		return 10
 	}
 
 	// Setup mock expectations
-	mockNetwork.On("GetNeighbors").Return(testNeighbors).Once()
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
 
 	// Call New function
@@ -197,12 +189,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 	suite.True(exante.isRunning)
 	suite.NotNil(exante.messages)
 	suite.NotNil(exante.neighbors)
-	suite.Len(exante.neighbors, len(testNeighbors))
-
-	// Verify neighbors are properly set
-	for _, neighbor := range testNeighbors {
-		suite.True(exante.neighbors[neighbor])
-	}
+	suite.Len(exante.neighbors, 0) // Neighbors should be empty initially (populated in Generate)
 
 	mockNetwork.AssertExpectations(suite.T())
 }
@@ -221,6 +208,7 @@ func (suite *ExAnteTestSuite) TestGenerate_Success() {
 			string(args[1]) == string(testPiRP)
 	})).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -283,6 +271,7 @@ func (suite *ExAnteTestSuite) TestGenerate_EmptySessionID() {
 			string(args[1]) == string(testPiRP)
 	})).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	result, err := suite.exante.Generate(newSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -312,9 +301,9 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 
 	suite.NoError(err)
 	suite.Contains(suite.exante.messages, 0)
-	suite.Contains(suite.exante.messages[0], "node1")
+	suite.Require().Len(suite.exante.messages[0], 1)
 
-	receivedMsg := suite.exante.messages[0]["node1"]
+	receivedMsg := suite.exante.messages[0][0]
 	suite.Equal(suite.testSID, receivedMsg.sid)
 	suite.Equal(suite.testVK, receivedMsg.vk)
 	suite.Equal(suite.testChallenge, receivedMsg.v)
@@ -361,27 +350,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_SessionIDMismatch() {
 	suite.Contains(err.Error(), "session id mismatch")
 }
 
-// TestHandleMessage_SenderIDMismatch tests handling message with wrong sender ID
-func (suite *ExAnteTestSuite) TestHandleMessage_SenderIDMismatch() {
-	testAux := &common.AuxTag{
-		PiRP: []byte("test-pi-rp"),
-		AuxKey: &common.AuxKey{
-			PhiVRF: []byte("test-phi-vrf"),
-			PiVRF:  []byte("test-pi-vrf"),
-			PhiVDF: []byte("test-phi-vdf"),
-			PiVDF:  []byte("test-pi-vdf"),
-		},
-	}
-
-	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "wrong-sender")
-	msgBytes := marshalMessage(suite.T(), msg)
-
-	err := suite.exante.handleMessage("node1", msgBytes)
-
-	suite.Error(err)
-	suite.Contains(err.Error(), "sender id mismatch")
-}
-
 // TestHandleMessage_UnknownNeighbor tests handling message from unknown neighbor
 func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 	testAux := &common.AuxTag{
@@ -403,8 +371,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 	suite.Contains(err.Error(), "sender not in neighbors list")
 }
 
-// TestHandleMessage_DuplicateMessage tests handling duplicate message from same sender
-func (suite *ExAnteTestSuite) TestHandleMessage_DuplicateMessage() {
+// TestHandleMessage_MultipleMessages tests handling multiple messages from same sender
+func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 	testAux := &common.AuxTag{
 		PiRP: []byte("test-pi-rp"),
 		AuxKey: &common.AuxKey{
@@ -415,19 +383,21 @@ func (suite *ExAnteTestSuite) TestHandleMessage_DuplicateMessage() {
 		},
 	}
 
-	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
-	msgBytes := marshalMessage(suite.T(), msg)
+	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
+	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")
+	msgBytes1 := marshalMessage(suite.T(), msg1)
+	msgBytes2 := marshalMessage(suite.T(), msg2)
 
 	// Send first message
-	err1 := suite.exante.handleMessage("node1", msgBytes)
+	err1 := suite.exante.handleMessage("node1", msgBytes1)
 	suite.NoError(err1)
 
-	// Send duplicate message
-	err2 := suite.exante.handleMessage("node1", msgBytes)
-	suite.NoError(err2) // Should not error, just ignore
+	// Send second message from same sender
+	err2 := suite.exante.handleMessage("node1", msgBytes2)
+	suite.NoError(err2)
 
-	// Verify only one message is stored
-	suite.Len(suite.exante.messages[0], 1)
+	// Verify both messages are stored
+	suite.Len(suite.exante.messages[0], 2)
 }
 
 // TestValidateMerklePath_Success tests successful Merkle path validation
@@ -818,8 +788,8 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	}
 
 	// Pre-populate messages to simulate incoming messages
-	suite.exante.messages[0] = map[string]receivedMessage{
-		"node1": {
+	suite.exante.messages[0] = []receivedMessage{
+		{
 			sid: suite.testSID,
 			vk:  suite.testVK,
 			v:   suite.testChallenge,
@@ -894,8 +864,8 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	}
 
 	// Pre-populate messages with same key but different senders
-	suite.exante.messages[0] = map[string]receivedMessage{
-		"node1": {
+	suite.exante.messages[0] = []receivedMessage{
+		{
 			sid: suite.testSID,
 			vk:  suite.testVK,
 			v:   suite.testChallenge,
@@ -904,10 +874,10 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 				{[]byte("oracle-result")},
 			},
 		},
-		"node2": {
+		{
 			sid: suite.testSID,
 			vk:  suite.testVK,
-			v:   suite.testChallenge, // Same key as node1
+			v:   suite.testChallenge, // Same key as first message
 			aux: testAux,
 			merklePath: [][][]byte{
 				{[]byte("oracle-result")},

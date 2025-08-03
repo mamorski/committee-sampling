@@ -10,6 +10,7 @@ type GradeFunc func(string, []byte, []byte, *AuxKey, float64) int
 type Step string
 
 const (
+	Network      Step = "Network"
 	ExPostMDAG   Step = "ExPostMDAG"
 	ExAnteMDAG   Step = "ExAnteMDAG"
 	ExPostVerify Step = "ExPostVerify"

@@ -121,13 +121,13 @@ func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageD
 // data: reference of proto go data object to send (not the object itself)
 // s: network stream to write the data to
 func (n *P2PNode) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool {
-	addrInfo, ok := n.neighbors.Load(id)
+	addrInfo, ok := n.neighbors[id]
 	if !ok {
 		n.logger.Error("Failed to find peer", zap.String("peer", id.String()))
 		return false
 	}
 
-	return n.send(addrInfo.(peer.AddrInfo), p, data)
+	return n.send(addrInfo, p, data)
 }
 
 func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {

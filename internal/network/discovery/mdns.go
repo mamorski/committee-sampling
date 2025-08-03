@@ -17,6 +17,10 @@ type MDNSDiscovery struct {
 	cancel          context.CancelFunc
 }
 
+type mdnsNotifee struct {
+	md *MDNSDiscovery
+}
+
 func NewMDNSDiscovery(host Host, config config.Discovery) *MDNSDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MDNSDiscovery{
@@ -28,11 +32,12 @@ func NewMDNSDiscovery(host Host, config config.Discovery) *MDNSDiscovery {
 	}
 }
 
-func (m *MDNSDiscovery) Start(_ context.Context) error {
+func (m *MDNSDiscovery) Start(ctx context.Context) error {
 	m.mdns = mdns.NewMdnsService(m.host, m.config.ServiceTag, &mdnsNotifee{m})
 	if err := m.mdns.Start(); err != nil {
 		return err
 	}
+	go m.cancelWatch(ctx)
 	return nil
 }
 
@@ -45,8 +50,12 @@ func (m *MDNSDiscovery) DiscoveredPeers() <-chan peer.AddrInfo {
 	return m.discoveredPeers
 }
 
-type mdnsNotifee struct {
-	md *MDNSDiscovery
+func (m *MDNSDiscovery) cancelWatch(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		m.cancel()
+	default:
+	}
 }
 
 func (n *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
