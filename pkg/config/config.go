@@ -13,14 +13,11 @@ import (
 type SyncType int
 
 const (
-	ChannelSync SyncType = iota
-	TimeSync
+	TimeSync SyncType = iota
 )
 
 func (s SyncType) String() string {
 	switch s {
-	case ChannelSync:
-		return "ChannelSync"
 	case TimeSync:
 		return "TimeSync"
 	default:
@@ -74,7 +71,7 @@ type RunTimeConfig struct {
 }
 
 type Synchronization struct {
-	Type                 SyncType      `mapstructure:"type"`                   // Type of synchronization (ChannelSync or TimeSync)
+	Type                 SyncType      `mapstructure:"type"`                   // Type of synchronization (TimeSync only)
 	ExAnteRoundTimeout   time.Duration `mapstructure:"ex_ante_round_timeout"`  // Timeout for ExAnte rounds in milliseconds
 	ExPostRoundTimeout   time.Duration `mapstructure:"ex_post_round_timeout"`  // Timeout for ExPost rounds in milliseconds
 	MDAGRoundTimeout     time.Duration `mapstructure:"mdag_round_timeout"`     // Timeout for MDAG rounds in milliseconds

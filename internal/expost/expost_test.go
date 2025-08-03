@@ -251,7 +251,7 @@ func (suite *ExPostTestSuite) TestVerifyHappyFlow() {
 		Sigma:     sigma,
 	}
 
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 
 	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
@@ -938,7 +938,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Once()
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp
@@ -1007,7 +1007,7 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	// Mock expectations
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("test-value")).Twice()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Twice()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(16)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp

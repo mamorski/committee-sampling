@@ -71,7 +71,6 @@ func (suite *MDAGTestSuite) SetupTest() {
 
 // setupMDAG creates a new MDAG instance with mocks
 func (suite *MDAGTestSuite) setupMDAG() {
-	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2", "node3"}).Once()
 	suite.mockNetwork.On("GetNodeID").Return("testNode").Maybe()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
@@ -81,7 +80,6 @@ func (suite *MDAGTestSuite) setupMDAG() {
 
 // TestNew tests the New function
 func (suite *MDAGTestSuite) TestNew() {
-	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2", "node3"}).Once()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
 	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
@@ -130,6 +128,7 @@ func (suite *MDAGTestSuite) TestOracle() {
 // TestGenerate tests the Generate function
 func (suite *MDAGTestSuite) TestGenerate() {
 	suite.setupMDAG()
+	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2", "node3"}).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Return().Times(3) // 3 rounds of broadcasting
 
 	// Run Generate in a goroutine since it's a long-running function
@@ -306,6 +305,7 @@ func (suite *MDAGTestSuite) TestHandleMessageNotRunning() {
 // TestGetComputedLabel tests the GetComputedLabel function
 func (suite *MDAGTestSuite) TestGetComputedLabel() {
 	suite.setupMDAG()
+	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2", "node3"}).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.Anything, mock.Anything).Return().Times(3)
 
 	_, err := suite.mdag.Generate("test-session", []byte("vki"), []byte("vi"))

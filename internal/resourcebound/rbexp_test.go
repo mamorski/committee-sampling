@@ -253,6 +253,7 @@ func (s *RbExpSuite) TestVer_ErrorExPost() {
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, assert.AnError).Once()
+	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
 
 	_, err := s.rbexp.Verify(sid, vk, challenge, proof, auxKey, 0)
 	require.Error(s.T(), err)

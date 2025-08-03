@@ -272,7 +272,7 @@ func (suite *HostTestSuite) TestAddNeighbor() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(nil)
+	suite.mockHost.On("Connect", context.Background(), addrInfo).Return(nil)
 
 	err := suite.node.addNeighbor(addrInfo)
 	suite.NoError(err)
@@ -293,7 +293,7 @@ func (suite *HostTestSuite) TestAddNeighborConnectionError() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	suite.mockHost.On("Connect", suite.ctx, addrInfo).Return(assert.AnError)
+	suite.mockHost.On("Connect", context.Background(), addrInfo).Return(assert.AnError)
 
 	err := suite.node.addNeighbor(addrInfo)
 	suite.Error(err)
@@ -529,7 +529,7 @@ func (suite *HostTestSuite) TestOnNeighborRequestAddNeighborFailure() {
 	mockConn.On("RemoteMultiaddr").Return(addr)
 
 	// Simulate connection failure exactly once
-	suite.mockHost.On("Connect", suite.ctx, mock.Anything).Return(assert.AnError).Once()
+	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(assert.AnError).Once()
 
 	// Execute
 	suite.node.onNeighborRequest(mockStream)
@@ -586,7 +586,7 @@ func (suite *HostTestSuite) TestOnNeighborResponseSuccess() {
 	mockConn.On("RemoteMultiaddr").Return(addr)
 
 	// Setup host expectations for adding neighbor
-	suite.mockHost.On("Connect", suite.ctx, mock.Anything).Return(nil)
+	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(nil)
 
 	// Call the method
 	suite.node.onNeighborResponse(mockStream)

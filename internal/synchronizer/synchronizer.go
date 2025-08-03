@@ -2,12 +2,7 @@ package synchronizer
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -19,17 +14,6 @@ import (
 
 var AllSteps = []common.Step{common.Network, common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
 
-type PubSub interface {
-	Subscribe(topic string) (<-chan []byte, error)
-	VerifySignature(pubKey, message, signature []byte) (bool, error)
-}
-
-type SyncMessage struct {
-	Step      common.Step `json:"step"`
-	Round     int         `json:"round"`
-	Signature []byte      `json:"signature"`
-}
-
 type StartTimes struct {
 	StartBuildingNetwork time.Time
 	ExPostMDAG           time.Time
@@ -39,40 +23,21 @@ type StartTimes struct {
 }
 
 type Synchronizer struct {
-	pubSub        PubSub
 	cfg           *config.Config
 	logger        *zap.Logger
 	stopChan      chan struct{}
 	roundChannels map[common.Step][]chan struct{}
 	rounds        int
 	mu            sync.Mutex
-	publicKey     ed25519.PublicKey
-	ownsPubSub    bool
 	stopOnce      sync.Once
 }
 
-func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
+func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
 	s := &Synchronizer{
 		cfg:           cfg,
 		logger:        logger,
 		stopChan:      make(chan struct{}),
 		roundChannels: make(map[common.Step][]chan struct{}),
-		ownsPubSub:    false,
-	}
-
-	// Only read public key from certificate file if using ChannelSync
-	if cfg.Synchronization.Type == config.ChannelSync {
-		pubKey, err := readPublicKeyFromCert(cfg.Synchronization.CertificatePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read public key from certificate: %w", err)
-		}
-		s.publicKey = pubKey
-		s.ownsPubSub = true
-		pubSubService, err := NewPubSubService(ctx, 0, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create pubSub service: %w", err)
-		}
-		s.pubSub = pubSubService
 	}
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
@@ -96,36 +61,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Synchron
 	return s, nil
 }
 
-func readPublicKeyFromCert(certPath string) (ed25519.PublicKey, error) {
-	certData, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate file: %w", err)
-	}
-
-	block, _ := pem.Decode(certData)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block from certificate")
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("certificate does not contain Ed25519 public key")
-	}
-
-	return pubKey, nil
-}
-
 func (s *Synchronizer) Start() {
-	if s.cfg.Synchronization.Type == config.TimeSync {
-		go s.startTimeSync()
-	} else {
-		go s.startChannelSync()
-	}
+	go s.startTimeSync()
 }
 
 func (s *Synchronizer) Stop() {
@@ -136,50 +73,7 @@ func (s *Synchronizer) Stop() {
 
 func (s *Synchronizer) Close() error {
 	s.Stop()
-	if s.ownsPubSub {
-		if pubSubService, ok := s.pubSub.(*PubSubService); ok {
-			return pubSubService.Close()
-		}
-	}
 	return nil
-}
-
-func (s *Synchronizer) startChannelSync() {
-	msgChan, err := s.pubSub.Subscribe(s.cfg.Synchronization.Topic)
-	if err != nil {
-		s.logger.Error("Failed to subscribe to sync topic", zap.Error(err))
-		return
-	}
-
-	s.logger.Info("Starting channel-based synchronization")
-	for {
-		select {
-		case msgBytes := <-msgChan:
-			var msg SyncMessage
-			if err := json.Unmarshal(msgBytes, &msg); err != nil {
-				s.logger.Warn("Failed to unmarshal sync message", zap.Error(err))
-				continue
-			}
-
-			dataToVerify := []byte(fmt.Sprintf("%s:%d", msg.Step, msg.Round))
-			valid, err := s.pubSub.VerifySignature(s.publicKey, dataToVerify, msg.Signature)
-			if err != nil {
-				s.logger.Warn("Error verifying signature", zap.Error(err))
-				continue
-			}
-
-			if !valid {
-				s.logger.Warn("Invalid signature for sync message")
-				continue
-			}
-
-			s.logger.Info("Received and verified sync message", zap.String("step", string(msg.Step)), zap.Int("round", msg.Round))
-			s.triggerRound(msg.Step, msg.Round)
-		case <-s.stopChan:
-			s.logger.Info("Stopping channel-based synchronization")
-			return
-		}
-	}
 }
 
 func (s *Synchronizer) startTimeSync() {
