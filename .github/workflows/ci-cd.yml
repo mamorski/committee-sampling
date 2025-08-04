@@ -52,7 +52,7 @@ jobs:
     - name: Lint code
       uses: golangci/golangci-lint-action@v3
       with:
-        version: 2.3.1
+        version: v2.3.1
         args: --fast --config=.golangci.yml --timeout=5m
 
     - name: Run tests
