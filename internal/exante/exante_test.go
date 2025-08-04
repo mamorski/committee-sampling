@@ -752,7 +752,7 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	}
 
 	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(3)
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -814,7 +814,6 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Twice()
 
 	// Mock network calls for forwarding messages
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -899,7 +898,6 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
