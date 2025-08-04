@@ -42,10 +42,9 @@ type ExPost struct {
 	sid          string
 	vk           []byte
 
-	mu        sync.Mutex
-	messages  map[int][]receivedMessage
-	neighbors map[string]bool // incoming neighbors
-	state     [][][]byte
+	mu       sync.Mutex
+	messages map[int][]receivedMessage
+	state    [][][]byte
 }
 
 type receivedMessage struct {
@@ -80,7 +79,6 @@ func New(
 		lambda:       lambda,
 		gradeFunc:    gradeFunc,
 		messages:     make(map[int][]receivedMessage),
-		neighbors:    make(map[string]bool),
 		sid:          sid,
 		vk:           vk,
 		isRunning:    true,
@@ -105,7 +103,7 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 		)
 	}()
 
-	// Step 1: Choose random string ri
+	// Step 1: Choose a random string ri
 	ri, err := secureRandomBytes(e.lambda, charset)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate randomness: %w", err)
@@ -124,7 +122,7 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 	if labelR == nil {
 		return nil, nil, fmt.Errorf("computed label for round R is nil")
 	}
-	e.initializeNeighbors()
+
 	e.logger.Info("ExPost Generation phase completed")
 	return state, labelR, nil
 }
@@ -229,6 +227,7 @@ func (e *ExPost) Verify(
 			e.logger.Info("No messages received for round", zap.Int("round", r))
 		}
 
+		loopStart := time.Now()
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
@@ -240,13 +239,13 @@ func (e *ExPost) Verify(
 					zap.Int("grade", g),
 				)
 				if results.Add(msg.vk, msg.v, msg.id, g) {
-					e.logger.Debug("Added to results",
+					e.logger.Info("Added to results",
 						zap.String("sender_id", msg.id),
 						zap.Binary("vk", msg.vk),
 						zap.Binary("value", msg.v),
 						zap.Int("grade", g))
 				} else {
-					e.logger.Debug("Skipping message with lower grade",
+					e.logger.Info("Skipping message with lower grade",
 						zap.String("sender_id", msg.id),
 						zap.Binary("vk", msg.vk),
 						zap.Binary("value", msg.v),
@@ -292,6 +291,11 @@ func (e *ExPost) Verify(
 				)
 			}
 		}
+		e.logger.Info("Finished processing messages for round",
+			zap.Int("round", r),
+			zap.Duration("elapsed", time.Since(loopStart)),
+			zap.Int("messages_processed", len(msgs)),
+		)
 	}
 
 	e.isRunning = false
@@ -308,7 +312,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	// Check if we have enough layers in the merkle path
 	// We need layers from R-round+1 to R (inclusive)
 	if len(msg.merklePath) < r {
-		e.logger.Debug("Invalid Merkle path length",
+		e.logger.Warn("Invalid Merkle path length",
 			zap.Int("expected", r),
 			zap.Int("actual", len(msg.merklePath)),
 			zap.String("sender_id", msg.id),
@@ -317,14 +321,14 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	}
 
 	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
-		e.logger.Debug("Message does not pass filter function",
+		e.logger.Warn("Message does not pass filter function",
 			zap.String("sender_id", msg.id),
 		)
 		return false
 	}
 
 	if !(e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
-		e.logger.Debug("Message does not pass grade function",
+		e.logger.Warn("Message does not pass grade function",
 			zap.String("sender_id", msg.id),
 		)
 		return false
@@ -332,7 +336,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 
 	// vj = H(sort(LR))
 	if msg.v == nil || string(msg.v) != string(e.mdag.Oracle(msg.merklePath[len(msg.merklePath)-1]...)) {
-		e.logger.Debug("Message does not pass value check",
+		e.logger.Warn("Message does not pass value check",
 			zap.String("sender_id", msg.id),
 		)
 		return false
@@ -340,7 +344,7 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 
 	if !e.validateMerklePath(msg.merklePath, r) {
 
-		e.logger.Debug("Merkle path validation failed",
+		e.logger.Warn("Merkle path validation failed",
 			zap.String("sender_id", msg.id),
 		)
 		return false
@@ -356,7 +360,7 @@ func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 	// The local label at round R-round should be in the first layer of merkle path
 	localLabel := e.mdag.GetComputedLabel(R - round)
 	if !isValueInState(localLabel, merklePath[0]) {
-		e.logger.Debug("Local label not found in merkle path", zap.Int("round", round), zap.Int("label_round", R-round))
+		e.logger.Warn("Local label not found in merkle path", zap.Int("round", round), zap.Int("label_round", R-round))
 		return false
 	}
 
@@ -366,7 +370,7 @@ func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 		// Hash the previous layer (i-1) and check if it's in current layer (i)
 		prevLayerHash := e.mdag.Oracle(merklePath[i-1]...)
 		if !isValueInState(prevLayerHash, merklePath[i]) {
-			e.logger.Debug("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
+			e.logger.Warn("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
 			return false
 		}
 	}
@@ -397,7 +401,7 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if !e.neighbors[from] {
+	if !e.network.IsNeighbor(from) {
 		err := fmt.Errorf("sender not in neighbors list")
 
 		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from))
@@ -435,19 +439,6 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 		merklePath: convertTimestampToBytes(&msg),
 	})
 	return nil
-}
-
-func (e *ExPost) initializeNeighbors() {
-	neighborsList := e.network.GetNeighbors()
-	e.neighbors = make(map[string]bool, len(neighborsList))
-	for _, neighbor := range neighborsList {
-		e.neighbors[neighbor] = true
-	}
-
-	e.logger.Info("Initialized neighbors",
-		zap.Int("num_neighbors", len(e.neighbors)),
-		zap.Strings("neighbors", neighborsList),
-	)
 }
 
 func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {

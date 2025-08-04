@@ -41,13 +41,11 @@ func (suite *SynchronizerTestSuite) SetupTest() {
 			ExAnteRoundTimeout:   time.Second,
 		},
 	}
-	var err error
-	suite.s, err = suite.createSynchronizerWithMock()
-	suite.Require().NoError(err)
+	suite.s = suite.createSynchronizerWithMock()
 }
 
 // createSynchronizerWithMock creates a synchronizer instance for testing
-func (suite *SynchronizerTestSuite) createSynchronizerWithMock() (*Synchronizer, error) {
+func (suite *SynchronizerTestSuite) createSynchronizerWithMock() *Synchronizer {
 	s := &Synchronizer{
 		cfg:           suite.cfg,
 		logger:        suite.logger,
@@ -73,7 +71,7 @@ func (suite *SynchronizerTestSuite) createSynchronizerWithMock() (*Synchronizer,
 			s.roundChannels[step][i] = make(chan struct{})
 		}
 	}
-	return s, nil
+	return s
 }
 
 func (suite *SynchronizerTestSuite) TearDownTest() {
@@ -107,8 +105,7 @@ func (suite *SynchronizerTestSuite) TestNewSynchronizer() {
 }
 
 func (suite *SynchronizerTestSuite) TestWaitForRound() {
-	s, err := suite.createSynchronizerWithMock()
-	suite.Require().NoError(err)
+	s := suite.createSynchronizerWithMock()
 	defer s.Stop()
 
 	// Happy path

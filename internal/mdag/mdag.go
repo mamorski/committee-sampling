@@ -29,7 +29,6 @@ type MDAG struct {
 	logger       *zap.Logger         // zap logger for logging events
 	isRunning    bool                // flag indicating if the protocol is running
 	step         common.Step         // synchronizer step (ExPostMDAG or ExAnteMDAG)
-	neighbors    map[string]bool     // set of allowed neighbor node IDs
 
 	mu             sync.Mutex
 	messages       map[int][][]byte // messages received from the network, keyed by round number
@@ -49,7 +48,7 @@ type MDAG struct {
 //   - network: Network interface for message passing
 //   - synchronizer: Synchronizer for round timing
 //   - logger: Structured logger for recording events
-//   - step: Synchronizer step (common.ExPostMDAG or common.ExAnteMDAG)
+//   - step: A synchronizer step (common.ExPostMDAG or common.ExAnteMDAG)
 //
 // Returns a configured MDAG instance ready to run the protocol.
 func New(
@@ -140,7 +139,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		return nil, fmt.Errorf("failed to wait for round 0: %w", err)
 	}
 	<-waitChan
-	m.initializeNeighbors()
 
 	// Broadcast the initial label
 	m.broadcast(0, m.currentLabel)
@@ -231,7 +229,7 @@ func (m *MDAG) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if !m.neighbors[from] {
+	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
 		m.logger.Warn("Received message from unknown neighbor",
 			zap.String("from", from))
@@ -318,17 +316,4 @@ func (m *MDAG) Oracle(h ...[]byte) []byte {
 	}
 
 	return m.oracle(buffer.Bytes())
-}
-
-func (m *MDAG) initializeNeighbors() {
-	neighborsList := m.network.GetNeighbors()
-	m.neighbors = make(map[string]bool, len(neighborsList))
-	for _, neighbor := range neighborsList {
-		m.neighbors[neighbor] = true
-	}
-
-	m.logger.Info("Initialized neighbors",
-		zap.Int("num_neighbors", len(m.neighbors)),
-		zap.Strings("neighbors", neighborsList),
-	)
 }

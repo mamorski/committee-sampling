@@ -127,12 +127,12 @@ func (m *MockPeerstore) PeersWithKeys() peer.IDSlice {
 	return args.Get(0).(peer.IDSlice)
 }
 
-func (m *MockPeerstore) Get(p peer.ID, key string) (interface{}, error) {
+func (m *MockPeerstore) Get(p peer.ID, key string) (any, error) {
 	args := m.Called(p, key)
 	return args.Get(0), args.Error(1)
 }
 
-func (m *MockPeerstore) Put(p peer.ID, key string, val interface{}) error {
+func (m *MockPeerstore) Put(p peer.ID, key string, val any) error {
 	args := m.Called(p, key, val)
 	return args.Error(0)
 }

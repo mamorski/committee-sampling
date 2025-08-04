@@ -35,10 +35,9 @@ type ExAnte struct {
 	sid           string
 	challenge     []byte
 
-	mu        sync.Mutex
-	messages  map[int][]receivedMessage
-	neighbors map[string]bool // set of allowed neighbor node IDs
-	state     [][][]byte
+	mu       sync.Mutex
+	messages map[int][]receivedMessage
+	state    [][][]byte
 }
 
 type receivedMessage struct {
@@ -70,7 +69,6 @@ func New(
 		D:             D,
 		gradeFunction: gradeFunction,
 		messages:      make(map[int][]receivedMessage),
-		neighbors:     make(map[string]bool),
 		sid:           sid,
 		isRunning:     true,
 	}
@@ -114,7 +112,6 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []by
 	}
 
 	e.challenge = challenge
-	e.initializeNeighbors()
 	e.logger.Info("ExAnte Generation phase completed")
 	return state, nil
 }
@@ -153,7 +150,7 @@ func (e *ExAnte) Verify(
 
 	e.logger.Info("Starting ExAnte Verification phase",
 		zap.String("session_id", session),
-		zap.String("node_id", e.network.GetNodeID()))
+	)
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 
 	// Check if P_i is also acts like a prover
@@ -212,11 +209,12 @@ func (e *ExAnte) Verify(
 			e.logger.Warn("No messages received for round", zap.Int("round", r))
 		}
 
+		loopStart := time.Now()
 		for _, msg := range msgs {
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
 				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
-				e.logger.Info("Processing valid message",
+				e.logger.Debug("Processing valid message",
 					zap.String("sender_id", msg.id),
 					zap.Int("round", r),
 					zap.Int("grade", g),
@@ -270,11 +268,16 @@ func (e *ExAnte) Verify(
 
 				e.network.SendProtocolMessage(protocolID, pMsgBytes)
 			} else {
-				e.logger.Info("Message validation failed",
+				e.logger.Debug("Ignoring invalid message",
 					zap.String("sender_id", msg.id),
 					zap.Int("round", r))
 			}
 		}
+		e.logger.Info("Finished processing messages for round",
+			zap.Int("round", r),
+			zap.Duration("elapsed", time.Since(loopStart)),
+			zap.Int("messages_processed", len(msgs)),
+		)
 	}
 
 	e.isRunning = false
@@ -308,9 +311,9 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	if !e.neighbors[from] {
+	if !e.network.IsNeighbor(from) {
 		err := errors.New("sender not in neighbors list")
-		e.logger.Error("Received message from non-neighbor sender",
+		e.logger.Warn("Received message from non-neighbor sender",
 			zap.String("sender", from))
 
 		return err
@@ -353,13 +356,13 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 
 	if len(merklePath) < round {
-		e.logger.Error("Invalid Merkle path length",
+		e.logger.Warn("Invalid Merkle path length",
 			zap.Int("expected", round),
 			zap.Int("actual", len(merklePath)))
 		return false
 	}
 	if len(e.state) < round+1 {
-		e.logger.Error("Invalid state length",
+		e.logger.Warn("Invalid state length",
 			zap.Int("expected", round),
 			zap.Int("actual", len(e.state)))
 		return false
@@ -383,47 +386,34 @@ func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 	}
 
 	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
-		e.logger.Debug("Message filtered out by filter function",
+		e.logger.Warn("Message filtered out by filter function",
 			zap.String("session_id", msg.sid),
 		)
 		return false
 	}
 
 	if !(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
-		e.logger.Debug("Message filtered out by grade function",
+		e.logger.Warn("Message filtered out by grade function",
 			zap.String("sender_id", msg.id),
 		)
 		return false
 	}
 
 	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.v, msg.aux.PiRP), msg.merklePath[0]) {
-		e.logger.Debug("Message filtered out by merkle path",
+		e.logger.Warn("Message filtered out by merkle path",
 			zap.String("sender_id", msg.id),
 		)
 		return false
 	}
 
 	if !e.validateMerklePath(msg.merklePath, r) {
-		e.logger.Debug("Message filtered out by merkle path",
+		e.logger.Warn("Message filtered out by merkle path",
 			zap.String("sender_id", msg.id),
 		)
 		return false
 	}
 
 	return true
-}
-
-func (e *ExAnte) initializeNeighbors() {
-	neighborsList := e.network.GetNeighbors()
-	e.neighbors = make(map[string]bool, len(neighborsList))
-	for _, neighbor := range neighborsList {
-		e.neighbors[neighbor] = true
-	}
-
-	e.logger.Info("Initialized neighbors",
-		zap.Int("num_neighbors", len(e.neighbors)),
-		zap.Strings("neighbors", neighborsList),
-	)
 }
 
 func isValueInState(value []byte, state [][]byte) bool {

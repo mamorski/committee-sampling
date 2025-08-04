@@ -44,8 +44,9 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) buildNetwork() {
-	m.Called()
+func (m *MockNetwork) IsNeighbor(peerID string) bool {
+	args := m.Called(peerID)
+	return args.Bool(0)
 }
 
 // MockMDAG is a mock implementation of the MDAG interface
@@ -134,14 +135,8 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
 		messages:      make(map[int][]receivedMessage),
-		neighbors:     make(map[string]bool),
 		sid:           suite.testSID,
 		isRunning:     true,
-	}
-
-	// Setup neighbors
-	for _, neighbor := range suite.testNeighbors {
-		suite.exante.neighbors[neighbor] = true
 	}
 }
 
@@ -188,8 +183,6 @@ func (suite *ExAnteTestSuite) TestNew() {
 	suite.Equal(testBigD, exante.D)
 	suite.True(exante.isRunning)
 	suite.NotNil(exante.messages)
-	suite.NotNil(exante.neighbors)
-	suite.Len(exante.neighbors, 0) // Neighbors should be empty initially (populated in Generate)
 
 	mockNetwork.AssertExpectations(suite.T())
 }
@@ -208,7 +201,6 @@ func (suite *ExAnteTestSuite) TestGenerate_Success() {
 			string(args[1]) == string(testPiRP)
 	})).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
-	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -271,7 +263,6 @@ func (suite *ExAnteTestSuite) TestGenerate_EmptySessionID() {
 			string(args[1]) == string(testPiRP)
 	})).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
-	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	result, err := suite.exante.Generate(newSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -294,6 +285,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 		},
 	}
 
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
 
@@ -308,6 +301,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	suite.Equal(suite.testVK, receivedMsg.vk)
 	suite.Equal(suite.testChallenge, receivedMsg.v)
 	suite.Equal(testAux.PiRP, receivedMsg.aux.PiRP)
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestHandleMessage_ProtocolNotRunning tests handling message when protocol is not running
@@ -362,6 +357,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 		},
 	}
 
+	suite.mockNetwork.On("IsNeighbor", "unknown-node").Return(false).Once()
+
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "unknown-node")
 	msgBytes := marshalMessage(suite.T(), msg)
 
@@ -369,6 +366,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "sender not in neighbors list")
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestHandleMessage_MultipleMessages tests handling multiple messages from same sender
@@ -382,6 +381,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
+
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Twice()
 
 	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
 	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")
@@ -398,6 +399,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 
 	// Verify both messages are stored
 	suite.Len(suite.exante.messages[0], 2)
+
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // TestValidateMerklePath_Success tests successful Merkle path validation
@@ -749,7 +752,7 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	}
 
 	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(3)
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -811,7 +814,6 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Twice()
 
 	// Mock network calls for forwarding messages
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -896,7 +898,6 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)

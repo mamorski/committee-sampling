@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	mathrand "math/rand"
 	"sync"
 	"time"
 
@@ -40,6 +39,7 @@ type Network interface {
 	GetNeighbors() []string
 	GetNodeID() string
 	Close() error
+	IsNeighbor(peerID string) bool
 }
 
 type Host interface {
@@ -175,6 +175,13 @@ func (n *P2PNode) GetNeighbors() []string {
 	return neighbors
 }
 
+func (n *P2PNode) IsNeighbor(peerID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, exists := n.neighbors[peer.ID(peerID)]
+	return exists
+}
+
 func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 	n.host.SetStreamHandler(protocol.ID(protocolID), func(s network.Stream) {
 		data := &pproto.ProtocolMessage{}
@@ -228,8 +235,10 @@ func (n *P2PNode) graphBuilder() {
 	<-ch
 	n.stopReceivingPeers = true
 	n.logger.Info("Network building phase completed")
-	n.logger.Info("Discovered and connected to peers", zap.Int("count", len(n.neighbors)))
-	n.logger.Info("List of neighbors", zap.Strings("neighbors", n.GetNeighbors()))
+	n.logger.Info("List of neighbors",
+		zap.Int("count", len(n.neighbors)),
+		zap.Strings("neighbors", n.GetNeighbors()),
+	)
 
 }
 
@@ -438,7 +447,10 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	}
 
 	delete(n.neighbors, peerID)
-	n.logger.Info("Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)))
+	n.logger.Info("Dropped neighbor",
+		zap.String("peer_id", peerID.String()),
+		zap.Int("remaining_neighbors", len(n.neighbors)),
+	)
 }
 
 // StartBuildingNetwork initiates the network building phase by randomly selecting
@@ -448,7 +460,7 @@ func (n *P2PNode) buildNetwork() {
 
 	// Get all potential neighbors
 	var potentialPeers []peer.AddrInfo
-	n.potentialNeighbors.Range(func(key, value interface{}) bool {
+	n.potentialNeighbors.Range(func(key, value any) bool {
 		potentialPeers = append(potentialPeers, value.(peer.AddrInfo))
 		return true
 	})
@@ -462,7 +474,11 @@ func (n *P2PNode) buildNetwork() {
 
 	// Randomly shuffle and select up to maxOutbound neighbors
 	for i := len(potentialPeers) - 1; i > 0; i-- {
-		j := mathrand.Intn(i + 1) // replace with cryptographically secure random number generator if needed
+		j, err := secureRandIntn(i + 1)
+		if err != nil {
+			n.logger.Error("Failed to generate secure random number", zap.Error(err))
+			continue
+		}
 		potentialPeers[i], potentialPeers[j] = potentialPeers[j], potentialPeers[i]
 	}
 
@@ -477,6 +493,37 @@ func (n *P2PNode) buildNetwork() {
 
 	for i := 0; i < connectCount; i++ {
 		go n.sendRequestToNeighbor(potentialPeers[i])
+	}
+}
+
+// secureRandIntn generates a cryptographically secure random integer in [0, n)
+func secureRandIntn(n int) (int, error) {
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid range: n must be positive")
+	}
+
+	// Calculate the number of bytes needed to represent n-1
+	m := int64(n)
+	bytes := make([]byte, 8) // Use 8 bytes for int64
+
+	for {
+		_, err := rand.Read(bytes)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read random bytes: %w", err)
+		}
+
+		// Convert bytes to int64
+		val := int64(0)
+		for _, b := range bytes {
+			val = (val << 8) | int64(b)
+		}
+
+		// Make it positive and check if it's in valid range
+		val = val & 0x7FFFFFFFFFFFFFFF // Remove sign bit
+		if val < m {
+			return int(val % m), nil
+		}
+		// If val >= m, try again to avoid bias
 	}
 }
 

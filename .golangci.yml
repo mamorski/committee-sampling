@@ -1,63 +1,17 @@
-#file: noinspection YAMLSchemaValidation
-linters-settings:
-  lll:
-    line-length: 140
-  govet:
-    shadow: true
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  gocyclo:
-    min-complexity: 18
-  maligned:
-    suggest-new: true
-  dupl:
-    threshold: 200
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  misspell:
-    locale: US
-  goimports:
-    local-prefixes: github.com/golangci/golangci-lint
-  gocritic:
-    settings:
-      hugeParam:
-        sizeThreshold: 200
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport # https://github.com/go-critic/go-critic/issues/845
-      - ptrToRefParam
-      - octalLiteral
-      - wrapperFunc
-      - whyNoLint
-  funlen:
-    lines: 200
-    statements: 100
+# file: noinspection YAMLSchemaValidation
+version: "2"
 
 linters:
-  # please, do not use `enable-all`: it's deprecated and will be removed soon.
-  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
+  default: none
+
   enable:
     - bodyclose
     - dogsled
     - errcheck
     - funlen
     - gocyclo
-    - gofmt
-    - goimports
     - unused
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - lll
@@ -65,14 +19,90 @@ linters:
     - nakedret
     - copyloopvar
     - staticcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
 
-  # don't enable:
-  # - gochecknoglobals
-  # - gocognit
-  # - godox
-  # - maligned
-  # - prealloc
+  settings:
+    depguard:
+      rules:
+        logger:
+          deny:
+            # logging is allowed only by logutils.Log,
+            - pkg: "github.com/sirupsen/logrus"
+              desc: logging is allowed only by logutils.Log.
+            - pkg: "github.com/pkg/errors"
+              desc: Should be replaced by standard lib errors package.
+            - pkg: "github.com/instana/testify"
+              desc: It's a fork of github.com/stretchr/testify.
+          files:
+            # logrus is allowed to use only in logutils package.
+            - "!**/pkg/logutils/**.go"
+    dupl:
+      threshold: 100
+    funlen:
+      lines: -1 # the number of lines (code and empty lines) is not a right metric and leads to code without an empty line or one-liner.
+      statements: 100
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport # https://github.com/go-critic/go-critic/issues/845
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+    gocyclo:
+      min-complexity: 18
+    godox:
+      keywords:
+        - FIXME
+    mnd:
+      # don't include the "operation" and "assign"
+      checks:
+        - argument
+        - case
+        - condition
+        - return
+      ignored-numbers:
+        - '0'
+        - '1'
+        - '2'
+        - '3'
+      ignored-functions:
+        - strings.SplitN
+    govet:
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/v2/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/v2/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/v2/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/v2/pkg/logutils.Log).Fatalf
+      enable:
+        - nilness
+        - shadow
+    errorlint:
+      asserts: false
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+      ignore-rules:
+        - "importas" # linter name
+    nolintlint:
+      allow-unused: false # report any unused nolint directives
+      require-explanation: true # require an explanation for nolint directives
+      require-specific: true # require nolint directives to be specific about which linter is being skipped
+    revive:
+      rules:
+        - name: indent-error-flow
+        - name: unexported-return
+          disabled: true
+        - name: unused-parameter
+        - name: unused-receiver
