@@ -50,10 +50,10 @@ jobs:
           pkg/proto/*.proto
 
     - name: Lint code
-      uses: golangci/golangci-lint-action@v3
+      uses: golangci/golangci-lint-action@v6
       with:
         version: v2.3.1
-        args: --fast --config=.golangci.yml --timeout=5m
+        args: --config=.golangci.yml --timeout=5m
 
     - name: Run tests
       run: go test -v ./...
