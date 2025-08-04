@@ -98,6 +98,15 @@ func (n *InMemoryNetwork) GetNeighbors() []string {
 	return n.neighbors
 }
 
+func (n *InMemoryNetwork) IsNeighbor(peerID string) bool {
+	for _, neighbor := range n.neighbors {
+		if neighbor == peerID {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *InMemoryNetwork) GetNodeID() string {
 	return n.nodeID
 }
@@ -105,10 +114,6 @@ func (n *InMemoryNetwork) GetNodeID() string {
 func (n *InMemoryNetwork) Close() error {
 	close(n.stopChan)
 	return nil
-}
-
-func (n *InMemoryNetwork) buildNetwork() {
-	// No network building needed in these tests
 }
 
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {

@@ -20,23 +20,6 @@ type MockNetwork struct {
 	closed    bool
 }
 
-func (m *MockNetwork) buildNetwork() {
-	// No-op implementation for testing
-}
-
-func NewMockNetwork() *MockNetwork {
-	mn := mocknet.New()
-	peer, _ := mn.GenPeer()
-
-	return &MockNetwork{
-		mocknet:   mn,
-		host:      peer,
-		nodeID:    peer.ID().String(),
-		neighbors: make([]string, 0),
-		handlers:  make(map[string]network.MessageHandler),
-	}
-}
-
 func (m *MockNetwork) RegisterHandler(protocolID string, handler network.MessageHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,27 +139,6 @@ func (m *MockNetwork) SimulateMessage(fromPeerID, protocolID string, data []byte
 type MockNetworkCluster struct {
 	networks []*MockNetwork
 	mocknet  mocknet.Mocknet
-}
-
-func NewMockNetworkCluster(size int) *MockNetworkCluster {
-	mn := mocknet.New()
-	networks := make([]*MockNetwork, size)
-
-	for i := 0; i < size; i++ {
-		peer, _ := mn.GenPeer()
-		networks[i] = &MockNetwork{
-			mocknet:   mn,
-			host:      peer,
-			nodeID:    peer.ID().String(),
-			neighbors: make([]string, 0),
-			handlers:  make(map[string]network.MessageHandler),
-		}
-	}
-
-	return &MockNetworkCluster{
-		networks: networks,
-		mocknet:  mn,
-	}
 }
 
 func (c *MockNetworkCluster) GetNetwork(index int) *MockNetwork {

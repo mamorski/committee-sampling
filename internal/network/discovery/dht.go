@@ -149,7 +149,7 @@ func (d *DHTDiscovery) retryAdvertisement(ctx context.Context, routingDiscovery 
 			continue
 		}
 
-		d.logger.Info("Successfully advertised on DHT",
+		d.logger.Debug("Successfully advertised on DHT",
 			zap.String("protocol_id", d.config.ProtocolID),
 			zap.Int("attempt", attempt))
 		return
@@ -191,10 +191,10 @@ func (d *DHTDiscovery) discoverPeers(ctx context.Context, routingDiscovery *rout
 					continue
 				}
 
-				// d.logger.Debug("Discovered peer",
-				// 	zap.String("peer_id", p.ID.String()),
-				// 	zap.Strings("addresses", addrsToStrings(p.Addrs)),
-				// )
+				d.logger.Debug("Discovered peer",
+					zap.String("peer_id", p.ID.String()),
+					zap.Strings("addresses", addrsToStrings(p.Addrs)),
+				)
 
 				select {
 				case d.discoveredPeers <- p:
@@ -205,7 +205,7 @@ func (d *DHTDiscovery) discoverPeers(ctx context.Context, routingDiscovery *rout
 			}
 
 			if peerCount > 0 {
-				d.logger.Info("Found peers in discovery round", zap.Int("peer_count", peerCount))
+				d.logger.Debug("Found peers in discovery round", zap.Int("peer_count", peerCount))
 			} else {
 				d.logger.Debug("No new peers found in this discovery round")
 			}

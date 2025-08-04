@@ -39,13 +39,14 @@ func (m *MockNetwork) GetNeighbors() []string {
 	return args.Get(0).([]string)
 }
 
+func (m *MockNetwork) IsNeighbor(peerID string) bool {
+	args := m.Called(peerID)
+	return args.Bool(0)
+}
+
 func (m *MockNetwork) Close() error {
 	args := m.Called()
 	return args.Error(0)
-}
-
-func (m *MockNetwork) buildNetwork() {
-	m.Called()
 }
 
 type MockMDAG struct {
@@ -94,12 +95,6 @@ func (suite *ExPostTestSuite) SetupTest() {
 	suite.vk = []byte("test-vk")
 	suite.startTime = time.Now()
 
-	neighbors := map[string]bool{
-		"node1": true,
-		"node2": true,
-		"node3": true,
-	}
-
 	syncer := newDelayedSync(50 * time.Millisecond)
 
 	suite.expost = &ExPost{
@@ -116,7 +111,6 @@ func (suite *ExPostTestSuite) SetupTest() {
 		vk:           suite.vk,
 		mu:           sync.Mutex{},
 		messages:     make(map[int][]receivedMessage),
-		neighbors:    neighbors,
 	}
 }
 
@@ -161,11 +155,7 @@ func (suite *ExPostTestSuite) TestNew() {
 
 	// Verify maps are initialized
 	suite.NotNil(expost.messages)
-	suite.NotNil(expost.neighbors)
 	suite.Len(expost.messages, 0) // Should be empty initially
-
-	// Verify neighbors are empty initially (populated in Generate)
-	suite.Len(expost.neighbors, 0)
 
 	// Verify initial state
 	suite.Nil(expost.state)
@@ -205,7 +195,6 @@ func (suite *ExPostTestSuite) TestGenerateHappyFlow() {
 
 	suite.mockMDAG.On("Generate", suite.sid, suite.vk, mock.Anything).Return(expectedState, nil).Once()
 	suite.mockMDAG.On("GetComputedLabel", 15).Return(expectedLabel).Once() // d*D = 3*5 = 15
-	suite.mockNetwork.On("GetNeighbors").Return([]string{"node1", "node2"}).Once()
 
 	state, label, err := suite.expost.Generate(suite.sid, suite.vk)
 
@@ -318,6 +307,9 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
+	// Set up mock expectations for IsNeighbor call
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+
 	err = suite.expost.handleMessage("node1", msgBytes)
 	suite.NoError(err)
 
@@ -330,6 +322,9 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 	suite.Equal(suite.sid, receivedMsg.sid)
 	suite.Equal([]byte("test-vk"), receivedMsg.vk)
 	suite.Equal([]byte("test-value"), receivedMsg.v)
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestHandleMessageNotRunning() {
@@ -374,9 +369,15 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
+	// Set up mock expectations for IsNeighbor call
+	suite.mockNetwork.On("IsNeighbor", "unknown-node").Return(false).Once()
+
 	err = suite.expost.handleMessage("unknown-node", msgBytes)
 	suite.Error(err)
 	suite.Contains(err.Error(), "sender not in neighbors list")
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
@@ -411,6 +412,9 @@ func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 	msgBytes2, err := proto.Marshal(msg2)
 	suite.NoError(err)
 
+	// Set up mock expectations for IsNeighbor calls
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Twice()
+
 	// First message should succeed
 	err = suite.expost.handleMessage("node1", msgBytes1)
 	suite.NoError(err)
@@ -424,6 +428,9 @@ func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 	suite.expost.mu.Unlock()
 
 	suite.Len(messages, 2) // Both messages stored
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathHappyFlow() {
@@ -683,10 +690,16 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAux() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
+	// Set up mock expectations for IsNeighbor call
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+
 	// This should panic due to nil aux
 	suite.Panics(func() {
 		_ = suite.expost.handleMessage("node1", msgBytes)
 	})
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
@@ -707,10 +720,16 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
+	// Set up mock expectations for IsNeighbor call
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+
 	// This should panic due to nil aux key
 	suite.Panics(func() {
 		_ = suite.expost.handleMessage("node1", msgBytes)
 	})
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyPath() {
@@ -836,6 +855,10 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 	msgBytes1, _ := proto.Marshal(msg1)
 	msgBytes2, _ := proto.Marshal(msg2)
 
+	// Set up mock expectations for IsNeighbor calls
+	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", "node2").Return(true).Once()
+
 	done := make(chan bool, 2)
 	go func() {
 		_ = suite.expost.handleMessage("node1", msgBytes1)
@@ -854,6 +877,9 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 	suite.expost.mu.Unlock()
 
 	suite.Len(messages, 2)
+
+	// Verify mock expectations
+	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
 // Additional helper functions for edge cases

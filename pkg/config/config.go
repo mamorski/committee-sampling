@@ -124,7 +124,7 @@ func Load(configPath string) (*Config, error) {
 }
 
 func stringToTimeHookFunc() mapstructure.DecodeHookFunc {
-	return func(f reflect.Type, t reflect.Type, data interface{}) (interface{}, error) {
+	return func(f reflect.Type, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {
 			return data, nil
 		}
@@ -137,7 +137,7 @@ func stringToTimeHookFunc() mapstructure.DecodeHookFunc {
 }
 
 func stringToDurationHookFunc() mapstructure.DecodeHookFunc {
-	return func(f reflect.Type, t reflect.Type, data interface{}) (interface{}, error) {
+	return func(f reflect.Type, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {
 			return data, nil
 		}
