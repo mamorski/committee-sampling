@@ -84,7 +84,7 @@ func (c *Committee) Add(vk, ch []byte, id string, grade int) bool {
 		c.committee[vkStr] = make(map[string]O)
 	} else if existing, exists := c.committee[vkStr][chStr]; exists {
 		// Update only if the existing member has a lower grade
-		if existing.Grade >= grade {
+		if existing.Grade > grade {
 			return false // Do not overwrite with a lower grade
 		}
 	}

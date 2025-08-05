@@ -99,11 +99,11 @@ func (v *Vrf) Eval(x []byte, secretKey []byte) ([]byte, []byte, error) {
 }
 
 func (v *Vrf) Verify(x, phi, pi, verificationKey []byte) (bool, error) {
-	v.logger.Info("Verify started")
+	v.logger.Debug("Verify started")
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		v.logger.Info("Verify completed",
+		v.logger.Debug("Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
 	}()

@@ -74,7 +74,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		)
 		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVDF, auxKey.PiVDF, vk)
 		if err != nil {
-			logger.Error("Failed to verify VDF", zap.Error(err))
+			logger.Warn("Failed to verify VDF", zap.Error(err))
 			return false
 		} else if !vdfRes {
 			logger.Warn("VDF verification failed", zap.String("node_id", id))
@@ -108,7 +108,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			return 0 // Return 0 if there's an error in grade calculation
 		}
 
-		logger.Info("Grading function calculated",
+		logger.Debug("Grading function calculated",
 			zap.String("sid", sid),
 			zap.Int("g", g),
 			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
@@ -200,7 +200,7 @@ func (b *Bootstrap) Run() error {
 		return fmt.Errorf("failed to perform committee election: %w", err)
 	}
 
-	b.Logger.Info("Committee elected", zap.Any("committee", committee))
+	b.Logger.Info("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
 	for _, member := range committee {
 		fmt.Printf("ID:    %s\n", member.ID)
 		fmt.Printf("VK:    %s\n", member.VK)

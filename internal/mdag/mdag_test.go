@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -14,6 +15,21 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
+
+// Helper function to create peer.ID from string for testing
+func createTestPeerID(id string) peer.ID {
+	// For testing, we can create a valid peer ID from the string
+	testID := "12D3KooW" + id + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	if len(testID) > 52 {
+		testID = testID[:52] // Truncate to valid length
+	}
+	peerID, err := peer.Decode(testID)
+	if err != nil {
+		// Fallback: create a simple peer ID for testing
+		return peer.ID(id)
+	}
+	return peerID
+}
 
 // MockNetwork is a mock implementation of the network.Network interface
 type MockNetwork struct {
@@ -43,7 +59,7 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) IsNeighbor(peerID string) bool {
+func (m *MockNetwork) IsNeighbor(peerID peer.ID) bool {
 	args := m.Called(peerID)
 	return args.Bool(0)
 }
@@ -208,7 +224,7 @@ func (suite *MDAGTestSuite) TestHandleMessageNotRunning() {
 	suite.Require().NoError(err)
 
 	// Test with protocol not running
-	err = handler("node1", validData)
+	err = handler(createTestPeerID("node1"), validData)
 	suite.Error(err)
 	suite.Contains(err.Error(), "protocol not running")
 	suite.mockNetwork.AssertExpectations(suite.T())

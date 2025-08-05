@@ -103,11 +103,11 @@ func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time,
 
 		select {
 		case <-timer.C:
-			s.logger.Info("Time for round, triggering.", zap.String("step", string(step)), zap.Int("round", i))
+			s.logger.Debug("Time for round, triggering.", zap.String("step", string(step)), zap.Int("round", i))
 			s.triggerRound(step, i)
 		case <-s.stopChan:
 			timer.Stop()
-			s.logger.Info("Stopping round scheduling for step", zap.String("step", string(step)))
+			s.logger.Debug("Stopping round scheduling for step", zap.String("step", string(step)))
 			return
 		}
 	}
@@ -134,7 +134,7 @@ func (s *Synchronizer) triggerRound(step common.Step, round int) {
 		// already closed
 	default:
 		close(ch)
-		s.logger.Info("Triggered round for step", zap.String("step", string(step)), zap.Int("round", round))
+		s.logger.Debug("Triggered round for step", zap.String("step", string(step)), zap.Int("round", round))
 	}
 }
 
@@ -167,10 +167,10 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	startTime := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
 
-	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + time.Minute)
-	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Minute)
+	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + 1*time.Minute)
+	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + 1*time.Minute)
 	exPostVerifyTime := exAnteMDAGTime.Add(
-		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.RunTime.Delay)*time.Second + time.Minute)
+		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.RunTime.Delay)*time.Second + 1*time.Minute)
 
 	return &StartTimes{
 		StartBuildingNetwork: startTime,

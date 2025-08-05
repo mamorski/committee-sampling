@@ -37,11 +37,11 @@ func (v *Vdf) Eval(x, vk []byte, delta int) ([]byte, []byte, error) {
 }
 
 func (v *Vdf) Verify(x, phi, pi, vk []byte) (bool, error) {
-	v.logger.Info("Verify started")
+	v.logger.Debug("Verify started")
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		v.logger.Info("Verify completed",
+		v.logger.Debug("Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
 	}()

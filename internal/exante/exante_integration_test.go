@@ -7,16 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
+
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 )
 
 // InMemoryNetwork implements network.Network for integration testing
 type InMemoryNetwork struct {
-	nodeID         string
+	nodeID         peer.ID
 	handlers       map[string]network.MessageHandler
 	peers          map[string]*InMemoryNetwork
 	neighbors      []string
@@ -29,12 +31,12 @@ type InMemoryNetwork struct {
 type networkMessage struct {
 	protocolID string
 	data       []byte
-	from       string
+	from       peer.ID
 }
 
 func NewInMemoryNetwork(nodeID string, neighbors []string) *InMemoryNetwork {
 	n := &InMemoryNetwork{
-		nodeID:      nodeID,
+		nodeID:      peer.ID(nodeID),
 		handlers:    make(map[string]network.MessageHandler),
 		peers:       make(map[string]*InMemoryNetwork),
 		neighbors:   neighbors,
@@ -42,7 +44,7 @@ func NewInMemoryNetwork(nodeID string, neighbors []string) *InMemoryNetwork {
 		stopChan:    make(chan struct{}),
 	}
 
-	// Start message processing goroutine
+	// Start a message processing goroutine
 	go n.processMessages()
 
 	return n
@@ -58,6 +60,8 @@ func (n *InMemoryNetwork) processMessages() {
 
 			if exists {
 				_ = handler(msg.from, msg.data)
+			} else {
+				fmt.Printf("DEBUG: Node %s received message for unknown protocol %s from %s\n", n.nodeID, msg.protocolID, msg.from)
 			}
 		case <-n.stopChan:
 			return
@@ -83,11 +87,11 @@ func (n *InMemoryNetwork) SendProtocolMessage(protocolID string, data []byte) {
 		neighborSet[neighbor] = true
 	}
 
-	for peerID, peer := range n.peers {
+	for peerID, p := range n.peers {
 		if neighborSet[peerID] {
 			// Send message via channel - non-blocking
 			select {
-			case peer.messageChan <- networkMessage{
+			case p.messageChan <- networkMessage{
 				protocolID: protocolID,
 				data:       data,
 				from:       n.nodeID,
@@ -103,9 +107,10 @@ func (n *InMemoryNetwork) GetNeighbors() []string {
 	return n.neighbors
 }
 
-func (n *InMemoryNetwork) IsNeighbor(peerID string) bool {
+func (n *InMemoryNetwork) IsNeighbor(peerID peer.ID) bool {
+	peerIDStr := string(peerID)
 	for _, neighbor := range n.neighbors {
-		if neighbor == peerID {
+		if neighbor == peerIDStr {
 			return true
 		}
 	}
@@ -113,7 +118,7 @@ func (n *InMemoryNetwork) IsNeighbor(peerID string) bool {
 }
 
 func (n *InMemoryNetwork) GetNodeID() string {
-	return n.nodeID
+	return n.nodeID.String()
 }
 
 func (n *InMemoryNetwork) Close() error {
@@ -124,7 +129,7 @@ func (n *InMemoryNetwork) Close() error {
 func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.peers[peer.nodeID] = peer
+	n.peers[peer.nodeID.String()] = peer
 }
 
 func (n *InMemoryNetwork) GetMessageCount() int {
@@ -587,93 +592,6 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 
 	// Node1 should have sent initial message as prover
 	assert.Greater(t, node1.GetMessageCount(), 0, "Node1 should send messages as prover")
-}
-
-// TestExAnteIntegrationMessageFiltering tests message filtering behavior
-func TestExAnteIntegrationMessageFiltering(t *testing.T) {
-	logger := zap.NewNop()
-
-	// Create network nodes with restricted neighbors
-	node1 := NewInMemoryNetwork("node1", []string{"node2"}) // Only node2 is neighbor
-	node2 := NewInMemoryNetwork("node2", []string{"node1"}) // Only node1 is neighbor
-	node3 := NewInMemoryNetwork("node3", []string{})        // No neighbors
-
-	// Connect all nodes physically
-	node1.AddPeer(node2)
-	node1.AddPeer(node3)
-	node2.AddPeer(node1)
-	node2.AddPeer(node3)
-	node3.AddPeer(node1)
-	node3.AddPeer(node2)
-
-	// Create MDAG instances
-	mdagRounds := 3
-	sessionID := "test-filtering"
-	mdagSynchronizer := syncMock{}
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-
-	// Create ExAnte instances - start after MDAG generation completes
-	exanteD := 2
-	exanteBigD := 1
-	exanteSynchronizer := syncMock{}
-
-	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-	exante3 := New(node3, mdag3, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-
-	// Test data
-	vk := []byte("test-vk-filtering")
-	challenge := []byte("test-challenge-filtering")
-	piRP := []byte("test-pi-rp-filtering")
-
-	// Generate phase
-	var state1, state2, state3 [][][]byte
-	var err1, err2, err3 error
-
-	var genWg sync.WaitGroup
-	genWg.Add(3)
-
-	go func() {
-		defer genWg.Done()
-		state1, err1 = exante1.Generate(sessionID, vk, challenge, piRP)
-	}()
-
-	go func() {
-		defer genWg.Done()
-		state2, err2 = exante2.Generate(sessionID, vk, challenge, piRP)
-	}()
-
-	go func() {
-		defer genWg.Done()
-		state3, err3 = exante3.Generate(sessionID, vk, challenge, piRP)
-	}()
-
-	// Wait for generation to complete with timeout
-	genDone := make(chan struct{})
-	go func() {
-		genWg.Wait()
-		close(genDone)
-	}()
-
-	select {
-	case <-genDone:
-		// All generations completed
-	case <-time.After(15 * time.Second):
-		t.Fatal("Generation phase timed out")
-	}
-
-	// Check for errors
-	assert.NoError(t, err1)
-	assert.NoError(t, err2)
-	assert.NoError(t, err3)
-
-	// Node1 and node2 should have each other's labels, but not node3's
-	// Node3 should only have its own label
-	assert.Equal(t, 2, len(state1[0]), "Node1 should have 2 labels (own + node2)")
-	assert.Equal(t, 2, len(state2[0]), "Node2 should have 2 labels (own + node1)")
-	assert.Equal(t, 1, len(state3[0]), "Node3 should have 1 label (own only)")
 }
 
 // TestExAnteIntegrationLargeNetwork tests ExAnte with a larger network

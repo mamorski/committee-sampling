@@ -8,15 +8,36 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
 const protocolID = "/mdag/1.0.0"
+
+var (
+	mdagMessagesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mdag_messages_received_total",
+			Help: "Total number of messages received by MDAG handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
+
+	mdagMessagesValid = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mdag_messages_valid_total",
+			Help: "Total number of valid messages processed by MDAG handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
+)
 
 // HashOracle defines the interface for the hashing function
 type HashOracle func([]byte) []byte
@@ -155,6 +176,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		}
 		<-waitChan
 
+		start := time.Now()
 		m.logger.Info("Starting round", zap.Int("round", r))
 
 		// Lock to safely access messages
@@ -194,6 +216,8 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		if r < m.rounds {
 			m.broadcast(r, m.currentLabel)
 		}
+		elapsed := time.Since(start)
+		m.logger.Info("Round completed", zap.Int("round", r), zap.Duration("elapsed", elapsed))
 	}
 
 	// Mark the protocol as completed
@@ -214,7 +238,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 //   - payload: Raw message bytes received from the network
 //
 // Returns an error if validation fails, nil otherwise.
-func (m *MDAG) handleMessage(from string, payload []byte) error {
+func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.mu.Lock()
 	running := m.isRunning
 	m.mu.Unlock()
@@ -229,10 +253,16 @@ func (m *MDAG) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
+	round := int(pbMsg.Round)
+	nodeID := m.network.GetNodeID()
+
+	// Increment total messages received metric
+	mdagMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType).Inc()
+
 	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
 		m.logger.Warn("Received message from unknown neighbor",
-			zap.String("from", from))
+			zap.String("from", from.String()))
 		return err
 	}
 
@@ -244,8 +274,6 @@ func (m *MDAG) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
-	round := int(pbMsg.Round)
-
 	m.mu.Lock()
 	if _, exists := m.messages[round]; !exists {
 		m.messages[round] = make([][]byte, 0, 16)
@@ -253,8 +281,11 @@ func (m *MDAG) handleMessage(from string, payload []byte) error {
 	m.messages[round] = append(m.messages[round], pbMsg.Label)
 	m.mu.Unlock()
 
+	// Increment valid messages metric - message passed all validation checks
+	mdagMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType).Inc()
+
 	m.logger.Debug("Received message",
-		zap.String("from", from),
+		zap.String("from", from.String()),
 		zap.Int("round", round),
 		zap.Binary("label", pbMsg.Label))
 	return nil
