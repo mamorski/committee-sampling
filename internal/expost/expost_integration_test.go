@@ -7,12 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
+
+// Helper function to create peer.ID from string for integration testing
+func createIntegrationTestPeerID(id string) peer.ID {
+	// For integration testing, we can just cast the string to peer.ID
+	// This is simpler than creating proper libp2p peer IDs
+	return peer.ID(id)
+}
 
 // InMemoryNetwork implements network.Network for integration testing
 type InMemoryNetwork struct {
@@ -55,7 +63,7 @@ func (n *InMemoryNetwork) processMessages() {
 			n.mu.RUnlock()
 
 			if exists {
-				_ = handler(msg.from, msg.data)
+				_ = handler(createIntegrationTestPeerID(msg.from), msg.data)
 			}
 		case <-n.stopChan:
 			return
@@ -80,10 +88,10 @@ func (n *InMemoryNetwork) SendProtocolMessage(protocolID string, data []byte) {
 		neighborSet[neighbor] = true
 	}
 
-	for peerID, peer := range n.peers {
+	for peerID, p := range n.peers {
 		if neighborSet[peerID] {
 			select {
-			case peer.messageChan <- networkMessage{
+			case p.messageChan <- networkMessage{
 				protocolID: protocolID,
 				data:       data,
 				from:       n.nodeID,
@@ -98,9 +106,9 @@ func (n *InMemoryNetwork) GetNeighbors() []string {
 	return n.neighbors
 }
 
-func (n *InMemoryNetwork) IsNeighbor(peerID string) bool {
+func (n *InMemoryNetwork) IsNeighbor(peerID peer.ID) bool {
 	for _, neighbor := range n.neighbors {
-		if neighbor == peerID {
+		if neighbor == string(peerID) {
 			return true
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -16,6 +17,22 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
+
+// Helper function to create a valid peer.ID from string for testing
+func createTestPeerID(id string) peer.ID {
+	// For testing, we can create a valid peer ID from the string
+	// by using a simple encoding that libp2p can handle
+	testID := "12D3KooW" + id + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	if len(testID) > 52 {
+		testID = testID[:52] // Truncate to valid length
+	}
+	peerID, err := peer.Decode(testID)
+	if err != nil {
+		// Fallback: create a simple peer ID for testing
+		return peer.ID(id)
+	}
+	return peerID
+}
 
 type MockNetwork struct {
 	mock.Mock
@@ -39,7 +56,7 @@ func (m *MockNetwork) GetNeighbors() []string {
 	return args.Get(0).([]string)
 }
 
-func (m *MockNetwork) IsNeighbor(peerID string) bool {
+func (m *MockNetwork) IsNeighbor(peerID peer.ID) bool {
 	args := m.Called(peerID)
 	return args.Bool(0)
 }
@@ -308,9 +325,12 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 	suite.NoError(err)
 
 	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
 
-	err = suite.expost.handleMessage("node1", msgBytes)
+	// Set up mock expectations for GetNodeID call (needed for metrics)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
+
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	suite.NoError(err)
 
 	suite.expost.mu.Lock()
@@ -330,7 +350,7 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 func (suite *ExPostTestSuite) TestHandleMessageNotRunning() {
 	suite.expost.isRunning = false
 
-	err := suite.expost.handleMessage("node1", []byte("test"))
+	err := suite.expost.handleMessage(createTestPeerID("node1"), []byte("test"))
 	suite.Error(err)
 	suite.Contains(err.Error(), "protocol not running")
 }
@@ -338,7 +358,7 @@ func (suite *ExPostTestSuite) TestHandleMessageNotRunning() {
 func (suite *ExPostTestSuite) TestHandleMessageInvalidPayload() {
 	suite.expost.isRunning = true
 
-	err := suite.expost.handleMessage("node1", []byte("invalid-proto"))
+	err := suite.expost.handleMessage(createTestPeerID("node1"), []byte("invalid-proto"))
 	suite.Error(err)
 }
 
@@ -352,8 +372,9 @@ func (suite *ExPostTestSuite) TestHandleMessageSessionMismatch() {
 
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
 
-	err = suite.expost.handleMessage("node1", msgBytes)
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	suite.Error(err)
 	suite.Contains(err.Error(), "session id mismatch")
 }
@@ -370,9 +391,10 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 	suite.NoError(err)
 
 	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", "unknown-node").Return(false).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("unknown-node")).Return(false).Once()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
-	err = suite.expost.handleMessage("unknown-node", msgBytes)
+	err = suite.expost.handleMessage(createTestPeerID("unknown-node"), msgBytes)
 	suite.Error(err)
 	suite.Contains(err.Error(), "sender not in neighbors list")
 
@@ -413,14 +435,17 @@ func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 	suite.NoError(err)
 
 	// Set up mock expectations for IsNeighbor calls
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Twice()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Twice()
+
+	// Set up mock expectations for GetNodeID calls (needed for metrics)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
 
 	// First message should succeed
-	err = suite.expost.handleMessage("node1", msgBytes1)
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes1)
 	suite.NoError(err)
 
 	// Second message from same sender should also be stored
-	err = suite.expost.handleMessage("node1", msgBytes2)
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes2)
 	suite.NoError(err)
 
 	suite.expost.mu.Lock()
@@ -691,11 +716,12 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAux() {
 	suite.NoError(err)
 
 	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
 	// This should panic due to nil aux
 	suite.Panics(func() {
-		_ = suite.expost.handleMessage("node1", msgBytes)
+		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	})
 
 	// Verify mock expectations
@@ -721,11 +747,12 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 	suite.NoError(err)
 
 	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
-	// This should panic due to nil aux key
+	// This should panic due to a nil aux key
 	suite.Panics(func() {
-		_ = suite.expost.handleMessage("node1", msgBytes)
+		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	})
 
 	// Verify mock expectations
@@ -856,16 +883,19 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 	msgBytes2, _ := proto.Marshal(msg2)
 
 	// Set up mock expectations for IsNeighbor calls
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
-	suite.mockNetwork.On("IsNeighbor", "node2").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node2")).Return(true).Once()
+
+	// Set up mock expectations for GetNodeID calls (each handleMessage call needs this for metrics)
+	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
 
 	done := make(chan bool, 2)
 	go func() {
-		_ = suite.expost.handleMessage("node1", msgBytes1)
+		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes1)
 		done <- true
 	}()
 	go func() {
-		_ = suite.expost.handleMessage("node2", msgBytes2)
+		_ = suite.expost.handleMessage(createTestPeerID("node2"), msgBytes2)
 		done <- true
 	}()
 

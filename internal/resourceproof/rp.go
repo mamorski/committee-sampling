@@ -40,11 +40,11 @@ func (r *ResourceProof) Prove(vk []byte, omega float64, ch []byte, _ []byte) ([]
 }
 
 func (r *ResourceProof) Ver(vk []byte, omega float64, ch []byte, pi []byte) bool {
-	r.logger.Info("Verify started")
+	r.logger.Debug("Verify started")
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		r.logger.Info("Verify completed",
+		r.logger.Debug("Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
 	}()

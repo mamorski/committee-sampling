@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-NUM_NODES=50
+NUM_NODES=20
 BASE_PORT=8000
 SESSION_ID="test-session-$(date +%s)"
 LOGS_DIR="./logs"
@@ -105,7 +105,7 @@ create_config() {
 {
   "network": {
     "listen_port": 0,
-    "max_outbound_degree": 5,
+    "max_outbound_degree": 4,
     "heartbeat_interval": "30s",
     "connect_timeout": "20s",
     "topic": "committee-sampling",
@@ -119,7 +119,7 @@ create_config() {
       }
   },
   "graph": {
-    "diameter": 5,
+    "diameter": 4,
     "grading_levels": 5
   },
   "run_time": {
@@ -132,8 +132,8 @@ create_config() {
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "10s",
-    "ex_post_round_timeout": "10s",
+    "ex_ante_round_timeout": "20s",
+    "ex_post_round_timeout": "20s",
     "mdag_round_timeout": "10s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
@@ -142,7 +142,7 @@ create_config() {
     "topic": "sync-topic"
   },
   "logger": {
-    "level": "debug"
+    "level": "info"
   }
 }
 EOF

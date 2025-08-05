@@ -6,15 +6,36 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
 const exanteProtocolID = "/exante/1.0.0"
+
+var (
+	exanteMessagesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "exante_messages_received_total",
+			Help: "Total number of messages received by ExAnte handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
+
+	exanteMessagesValid = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "exante_messages_valid_total",
+			Help: "Total number of valid messages processed by ExAnte handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
+)
 
 // MDAG defines the interface for the MDAG required by ExAnte
 type MDAG interface {
@@ -206,7 +227,7 @@ func (e *ExAnte) Verify(
 		e.mu.Unlock()
 
 		if len(msgs) == 0 {
-			e.logger.Warn("No messages received for round", zap.Int("round", r))
+			e.logger.Debug("No messages received for round", zap.Int("round", r))
 		}
 
 		loopStart := time.Now()
@@ -266,9 +287,9 @@ func (e *ExAnte) Verify(
 					continue
 				}
 
-				e.network.SendProtocolMessage(protocolID, pMsgBytes)
+				go e.network.SendProtocolMessage(protocolID, pMsgBytes)
 			} else {
-				e.logger.Debug("Ignoring invalid message",
+				e.logger.Info("Ignoring invalid message",
 					zap.String("sender_id", msg.id),
 					zap.Int("round", r))
 			}
@@ -287,7 +308,7 @@ func (e *ExAnte) Verify(
 }
 
 // handleMessage processes incoming messages from the network.
-func (e *ExAnte) handleMessage(from string, payload []byte) error {
+func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	e.mu.Lock()
 	running := e.isRunning
 	e.mu.Unlock()
@@ -303,6 +324,12 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 		return err
 	}
 
+	round := int(msg.Round)
+	nodeID := e.network.GetNodeID()
+
+	// Increment total messages received metric
+	exanteMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante").Inc()
+
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
 		e.logger.Warn("Received message with mismatched session id",
@@ -314,24 +341,30 @@ func (e *ExAnte) handleMessage(from string, payload []byte) error {
 	if !e.network.IsNeighbor(from) {
 		err := errors.New("sender not in neighbors list")
 		e.logger.Warn("Received message from non-neighbor sender",
-			zap.String("sender", from))
+			zap.String("sender", from.String()))
 
 		return err
 	}
 
-	round := int(msg.Round)
+	if msg.Id == nodeID {
+		e.logger.Debug("Received message from self", zap.String("sender", from.String()))
+		return nil
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.logger.Debug("ExAnte: Received message",
-		zap.String("from", from),
+		zap.String("from", from.String()),
 		zap.String("sender_id", msg.Id),
 		zap.Int("round", round),
 		zap.Binary("verification_key", msg.VerificationKey),
 		zap.Binary("value", msg.Value),
 		zap.Binary("proof", msg.Aux.PiRP),
 	)
+
+	// Increment valid messages metric - message passed all validation checks
+	exanteMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante").Inc()
 
 	e.messages[round] = append(e.messages[round], receivedMessage{
 		id:  msg.Id,

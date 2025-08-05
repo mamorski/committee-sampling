@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	rnd "math/rand/v2"
 	"sync"
 	"time"
 
@@ -31,7 +32,7 @@ const (
 	clientVersion        = "go-p2p-node/0.0.1"
 )
 
-type MessageHandler func(from string, payload []byte) error
+type MessageHandler func(from peer.ID, payload []byte) error
 
 type Network interface {
 	RegisterHandler(protocolID string, handler MessageHandler)
@@ -39,7 +40,7 @@ type Network interface {
 	GetNeighbors() []string
 	GetNodeID() string
 	Close() error
-	IsNeighbor(peerID string) bool
+	IsNeighbor(peerID peer.ID) bool
 }
 
 type Host interface {
@@ -175,10 +176,10 @@ func (n *P2PNode) GetNeighbors() []string {
 	return neighbors
 }
 
-func (n *P2PNode) IsNeighbor(peerID string) bool {
+func (n *P2PNode) IsNeighbor(peerID peer.ID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	_, exists := n.neighbors[peer.ID(peerID)]
+	_, exists := n.neighbors[peerID]
 	return exists
 }
 
@@ -203,7 +204,7 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 			return
 		}
 
-		err = handler(s.Conn().RemotePeer().String(), data.Payload)
+		err = handler(s.Conn().RemotePeer(), data.Payload)
 		if err != nil {
 			n.logger.Error("Failed to handle message", zap.Error(err))
 		}
@@ -472,15 +473,9 @@ func (n *P2PNode) buildNetwork() {
 
 	n.logger.Info("Found potential neighbors for network building", zap.Int("count", len(potentialPeers)))
 
-	// Randomly shuffle and select up to maxOutbound neighbors
-	for i := len(potentialPeers) - 1; i > 0; i-- {
-		j, err := secureRandIntn(i + 1)
-		if err != nil {
-			n.logger.Error("Failed to generate secure random number", zap.Error(err))
-			continue
-		}
+	rnd.Shuffle(len(potentialPeers), func(i, j int) {
 		potentialPeers[i], potentialPeers[j] = potentialPeers[j], potentialPeers[i]
-	}
+	})
 
 	connectCount := n.maxOutbound
 	if len(potentialPeers) < connectCount {
@@ -493,37 +488,6 @@ func (n *P2PNode) buildNetwork() {
 
 	for i := 0; i < connectCount; i++ {
 		go n.sendRequestToNeighbor(potentialPeers[i])
-	}
-}
-
-// secureRandIntn generates a cryptographically secure random integer in [0, n)
-func secureRandIntn(n int) (int, error) {
-	if n <= 0 {
-		return 0, fmt.Errorf("invalid range: n must be positive")
-	}
-
-	// Calculate the number of bytes needed to represent n-1
-	m := int64(n)
-	bytes := make([]byte, 8) // Use 8 bytes for int64
-
-	for {
-		_, err := rand.Read(bytes)
-		if err != nil {
-			return 0, fmt.Errorf("failed to read random bytes: %w", err)
-		}
-
-		// Convert bytes to int64
-		val := int64(0)
-		for _, b := range bytes {
-			val = (val << 8) | int64(b)
-		}
-
-		// Make it positive and check if it's in valid range
-		val = val & 0x7FFFFFFFFFFFFFFF // Remove sign bit
-		if val < m {
-			return int(val % m), nil
-		}
-		// If val >= m, try again to avoid bias
 	}
 }
 

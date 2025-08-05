@@ -1,24 +1,51 @@
 #!/bin/bash
 
-# Script to run committee-sampling simulation with configurable number of nodes
-# Usage: ./run_simulation.sh <number_of_nodes>
+# Script to run committee-sampling simulation with configurable parameters
+# Usage: ./run_simulation.sh <number_of_nodes> <max_outbound_degree> <diameter> [log_level]
 
 set -e
 
-# Check if number of nodes is provided
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <number_of_nodes>"
-    echo "Example: $0 20"
+# Check if required parameters are provided
+if [ $# -lt 3 ] || [ $# -gt 4 ]; then
+    echo "Usage: $0 <number_of_nodes> <max_outbound_degree> <diameter> [log_level]"
+    echo "Example: $0 20 4 6 debug"
+    echo "Example: $0 20 4 6        (defaults to info log level)"
+    echo "Log levels: debug, info, warn, error (default: info)"
     exit 1
 fi
 
 NUM_NODES=$1
+MAX_OUTBOUND_DEGREE=$2
+DIAMETER=$3
+LOG_LEVEL=${4:-info}
 
 # Validate number of nodes
 if ! [[ "$NUM_NODES" =~ ^[0-9]+$ ]] || [ "$NUM_NODES" -lt 2 ]; then
     echo "Error: Number of nodes must be a positive integer >= 2"
     exit 1
 fi
+
+# Validate max outbound degree
+if ! [[ "$MAX_OUTBOUND_DEGREE" =~ ^[0-9]+$ ]] || [ "$MAX_OUTBOUND_DEGREE" -lt 1 ]; then
+    echo "Error: Max outbound degree must be a positive integer >= 1"
+    exit 1
+fi
+
+# Validate diameter
+if ! [[ "$DIAMETER" =~ ^[0-9]+$ ]] || [ "$DIAMETER" -lt 2 ]; then
+    echo "Error: Diameter must be a positive integer >= 2"
+    exit 1
+fi
+
+# Validate log level
+case "$LOG_LEVEL" in
+    debug|info|warn|error)
+        ;;
+    *)
+        echo "Error: Log level must be one of: debug, info, warn, error"
+        exit 1
+        ;;
+esac
 
 # Configuration
 SESSION_ID="simulation-$(date +%s)"
@@ -126,62 +153,18 @@ cleanup() {
 # Trap signals to cleanup
 trap cleanup SIGINT SIGTERM
 
-# Function to calculate max_outbound_degree = log2(number of nodes)
-calculate_max_outbound_degree() {
-    local n=$1
-    # Calculate log2(n) using natural logarithm: log2(n) = ln(n) / ln(2)
-    # Use bc for floating point arithmetic and round to nearest integer
-    local result=$(echo "scale=10; l($n)/l(2)" | bc -l)
-    # Round to nearest integer
-    local rounded=$(echo "scale=0; ($result + 0.5)/1" | bc)
-    # Ensure minimum value of 1
-    if [ "$rounded" -lt 1 ]; then
-        echo 1
-    else
-        echo "$rounded"
-    fi
-}
+# Determine if log level was provided or defaulted
+if [ $# -eq 4 ]; then
+    LOG_LEVEL_STATUS="$LOG_LEVEL (provided)"
+else
+    LOG_LEVEL_STATUS="$LOG_LEVEL (default)"
+fi
 
-# Function to calculate diameter = ln(n) / ln(ln(n)-1)
-calculate_diameter() {
-    local n=$1
-    
-    # For small values, use default diameter
-    if [ "$n" -le 3 ]; then
-        echo 4
-        return
-    fi
-    
-    # Calculate ln(n) and ln(ln(n)-1)
-    local ln_n=$(echo "scale=10; l($n)" | bc -l)
-    local ln_n_minus_1=$(echo "scale=10; $ln_n - 1" | bc -l)
-    
-    # Check if ln(n)-1 > 0 to avoid ln of negative/zero
-    local gt_zero=$(echo "$ln_n_minus_1 > 0" | bc -l)
-    if [ "$gt_zero" -eq 0 ]; then
-        echo 4
-        return
-    fi
-    
-    local ln_ln_n_minus_1=$(echo "scale=10; l($ln_n_minus_1)" | bc -l)
-    local diameter=$(echo "scale=10; $ln_n / $ln_ln_n_minus_1" | bc -l)
-    
-    # Round to nearest integer and ensure minimum value of 2
-    local rounded=$(echo "scale=0; ($diameter + 0.5)/1" | bc)
-    if [ "$rounded" -lt 2 ]; then
-        echo 2
-    else
-        echo "$rounded"
-    fi
-}
-
-# Calculate network parameters
-MAX_OUTBOUND_DEGREE=$(calculate_max_outbound_degree $NUM_NODES)
-DIAMETER=$(calculate_diameter $NUM_NODES)
-
-echo "Calculated network parameters:"
-echo "- Max outbound degree: $MAX_OUTBOUND_DEGREE (log2($NUM_NODES))"
-echo "- Diameter: $DIAMETER (ln($NUM_NODES)/ln(ln($NUM_NODES)-1))"
+echo "Network parameters:"
+echo "- Number of nodes: $NUM_NODES"
+echo "- Max outbound degree: $MAX_OUTBOUND_DEGREE"
+echo "- Diameter: $DIAMETER"
+echo "- Log level: $LOG_LEVEL_STATUS"
 echo ""
 
 # Function to create committee-sampling config file
@@ -212,16 +195,16 @@ create_committee_config() {
   "run_time": {
     "session_id": "$SESSION_ID",
     "lambda": 384,
-    "weight": 10,
+    "weight": 150,
     "delta_w": 3.0,
     "committee_size": 4,
     "delay": 20
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "10s",
-    "ex_post_round_timeout": "10s",
-    "mdag_round_timeout": "10s",
+    "ex_ante_round_timeout": "30s",
+    "ex_post_round_timeout": "30s",
+    "mdag_round_timeout": "5s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
     "time_server": "time.google.com",
@@ -229,7 +212,7 @@ create_committee_config() {
     "topic": "sync-topic"
   },
   "logger": {
-    "level": "debug"
+    "level": "$LOG_LEVEL"
   }
 }
 EOF
@@ -295,8 +278,9 @@ echo "All $NUM_NODES nodes started successfully!"
 echo ""
 echo "Simulation Status:"
 echo "- Nodes: $NUM_NODES"
-echo "- Max outbound degree: $MAX_OUTBOUND_DEGREE"
-echo "- Diameter: $DIAMETER"
+echo "- Max outbound degree: $MAX_OUTBOUND_DEGREE (provided)"
+echo "- Diameter: $DIAMETER (provided)"
+echo "- Log level: $LOG_LEVEL_STATUS"
 echo "- Ports: Auto-assigned by system (port 0 configured)"
 echo "- Session ID: $SESSION_ID"
 echo "- Discovery: DHT with bootstrap server"
@@ -314,7 +298,11 @@ echo "- Stop all nodes: Press Ctrl+C"
 echo ""
 
 # Monitor nodes
-echo "Monitoring nodes (press Ctrl+C to stop all)..."
+echo "Monitoring nodes (press Ctrl+C to stop all, or wait for automatic completion)..."
+echo "Nodes will automatically stop when the committee-sampling simulation completes."
+echo ""
+
+consecutive_zero_counts=0
 while true; do
     running_count=0
     if [ -f "$PIDS_FILE" ]; then
@@ -326,5 +314,27 @@ while true; do
     fi
     
     echo "$(date '+%H:%M:%S') - Running nodes: $running_count/$NUM_NODES"
+    
+    # Check if all nodes have completed
+    if [ "$running_count" -eq 0 ]; then
+        consecutive_zero_counts=$((consecutive_zero_counts + 1))
+        echo "$(date '+%H:%M:%S') - All nodes have stopped. Waiting 30 seconds to confirm completion..."
+        
+        # Wait for 30 seconds (3 checks) to confirm all nodes are really done
+        if [ "$consecutive_zero_counts" -ge 3 ]; then
+            echo ""
+            echo "🎉 All committee-sampling nodes have completed successfully!"
+            echo "Simulation finished at: $(date)"
+            echo ""
+            break
+        fi
+    else
+        consecutive_zero_counts=0
+    fi
+    
     sleep 10
 done
+
+# Call cleanup to stop bootstrap server and create log backup
+echo "Cleaning up and creating log backup..."
+cleanup

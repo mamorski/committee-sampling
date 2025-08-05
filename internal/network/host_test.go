@@ -250,7 +250,7 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 
 func (suite *HostTestSuite) TestRegisterHandler() {
 	handlerCalled := false
-	handler := func(from string, payload []byte) error {
+	handler := func(from peer.ID, payload []byte) error {
 		handlerCalled = true
 		suite.Equal("test-data", string(payload))
 		return nil
@@ -261,7 +261,7 @@ func (suite *HostTestSuite) TestRegisterHandler() {
 	suite.node.RegisterHandler("test-protocol", handler)
 
 	// Verify handler was registered
-	suite.False(handlerCalled) // Handler not called yet, just registered
+	suite.False(handlerCalled) // Handler isn't called yet, just registered
 	suite.mockHost.AssertExpectations(suite.T())
 }
 

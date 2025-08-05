@@ -8,10 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -19,6 +22,24 @@ import (
 const (
 	expostProtocolID = "/expost/1.0.0"
 	charset          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+var (
+	expostMessagesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "expost_messages_received_total",
+			Help: "Total number of messages received by ExPost handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
+
+	expostMessagesValid = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "expost_messages_valid_total",
+			Help: "Total number of valid messages processed by ExPost handleMessage",
+		},
+		[]string{"node_id", "round", "protocol"},
+	)
 )
 
 // MDAG defines the interface for the MDAG required by ExPost
@@ -224,7 +245,7 @@ func (e *ExPost) Verify(
 		e.mu.Unlock()
 
 		if len(msgs) == 0 {
-			e.logger.Info("No messages received for round", zap.Int("round", r))
+			e.logger.Debug("No messages received for round", zap.Int("round", r))
 		}
 
 		loopStart := time.Now()
@@ -232,7 +253,6 @@ func (e *ExPost) Verify(
 			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
 
 				g := min(e.d-r/e.D, e.gradeFunc(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal))
-				// Debug logging
 				e.logger.Debug("Processing valid message", zap.Int("round", r),
 					zap.String("sender_id", msg.id),
 					zap.Int("round", r),
@@ -285,7 +305,7 @@ func (e *ExPost) Verify(
 
 				e.network.SendProtocolMessage(protocolID, pMsgBytes)
 			} else {
-				e.logger.Debug("Ignoring invalid message",
+				e.logger.Info("Ignoring invalid message",
 					zap.Int("round", r),
 					zap.String("sender_id", msg.id),
 				)
@@ -334,7 +354,6 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	// vj = H(sort(LR))
 	if msg.v == nil || string(msg.v) != string(e.mdag.Oracle(msg.merklePath[len(msg.merklePath)-1]...)) {
 		e.logger.Warn("Message does not pass value check",
 			zap.String("sender_id", msg.id),
@@ -356,8 +375,8 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 
 	R := e.d * e.D
-	// Validate that ℓi,R−r+1 ∈ LR−r+1
-	// The local label at round R-round should be in the first layer of merkle path
+	// Validate that ℓi, R−r+1 ∈ LR−r+1
+	// The local label at round R-round should be in the first layer of a merkle path
 	localLabel := e.mdag.GetComputedLabel(R - round)
 	if !isValueInState(localLabel, merklePath[0]) {
 		e.logger.Warn("Local label not found in merkle path", zap.Int("round", round), zap.Int("label_round", R-round))
@@ -379,18 +398,24 @@ func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 }
 
 // handleMessage processes incoming messages from the network.
-func (e *ExPost) handleMessage(from string, payload []byte) error {
+func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	if !e.isRunning {
 		return fmt.Errorf("protocol not running")
 	}
 
-	e.logger.Debug(fmt.Sprintf("Received message from %s", from))
+	e.logger.Debug(fmt.Sprintf("Received message from %s", from.String()))
 
 	var msg pb.TimestampMessage
 	if err := proto.Unmarshal(payload, &msg); err != nil {
 		e.logger.Warn("Failed to unmarshal ExPost message", zap.Error(err))
 		return err
 	}
+
+	round := int(msg.Round)
+	nodeID := e.network.GetNodeID()
+
+	// Increment total messages received metric
+	expostMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "expost").Inc()
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
@@ -404,23 +429,30 @@ func (e *ExPost) handleMessage(from string, payload []byte) error {
 	if !e.network.IsNeighbor(from) {
 		err := fmt.Errorf("sender not in neighbors list")
 
-		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from))
+		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from.String()))
 
 		return err
 	}
 
-	round := int(msg.Round)
+	if msg.Id == nodeID {
+		e.logger.Debug("Received message from self", zap.String("sender", from.String()))
+		return nil
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.logger.Debug("ExPost: Received message",
-		zap.String("from", from),
+		zap.String("from", from.String()),
 		zap.String("sender_id", msg.Id),
 		zap.Int("round", round),
 		zap.Binary("verification_key", msg.VerificationKey),
 		zap.Binary("value", msg.Value),
 		zap.Binary("proof", msg.Aux.PiRP),
 	)
+
+	// Increment valid messages metric - message passed all validation checks
+	expostMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "expost").Inc()
 
 	e.messages[round] = append(e.messages[round], receivedMessage{
 		id:  msg.Id,

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -44,7 +45,7 @@ func (m *MockNetwork) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockNetwork) IsNeighbor(peerID string) bool {
+func (m *MockNetwork) IsNeighbor(peerID peer.ID) bool {
 	args := m.Called(peerID)
 	return args.Bool(0)
 }
@@ -285,7 +286,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 		},
 	}
 
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Once()
+	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Once()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -339,6 +341,7 @@ func (suite *ExAnteTestSuite) TestHandleMessage_SessionIDMismatch() {
 	msg := createTestTimestampMessage("wrong-session", suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
 
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 	err := suite.exante.handleMessage("node1", msgBytes)
 
 	suite.Error(err)
@@ -357,7 +360,8 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 		},
 	}
 
-	suite.mockNetwork.On("IsNeighbor", "unknown-node").Return(false).Once()
+	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(false).Once()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "unknown-node")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -382,18 +386,19 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 		},
 	}
 
-	suite.mockNetwork.On("IsNeighbor", "node1").Return(true).Twice()
+	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Twice()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 
 	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
 	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")
 	msgBytes1 := marshalMessage(suite.T(), msg1)
 	msgBytes2 := marshalMessage(suite.T(), msg2)
 
-	// Send first message
+	// Send the first message
 	err1 := suite.exante.handleMessage("node1", msgBytes1)
 	suite.NoError(err1)
 
-	// Send second message from same sender
+	// Send the second message from the same sender
 	err2 := suite.exante.handleMessage("node1", msgBytes2)
 	suite.NoError(err2)
 
