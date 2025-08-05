@@ -202,8 +202,8 @@ create_committee_config() {
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "1m",
-    "ex_post_round_timeout": "1m",
+    "ex_ante_round_timeout": "30s",
+    "ex_post_round_timeout": "30s",
     "mdag_round_timeout": "5s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",

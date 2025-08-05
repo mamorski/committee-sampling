@@ -354,7 +354,6 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 		return false
 	}
 
-	// vj = H(sort(LR))
 	if msg.v == nil || string(msg.v) != string(e.mdag.Oracle(msg.merklePath[len(msg.merklePath)-1]...)) {
 		e.logger.Warn("Message does not pass value check",
 			zap.String("sender_id", msg.id),
@@ -376,8 +375,8 @@ func (e *ExPost) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn
 func (e *ExPost) validateMerklePath(merklePath [][][]byte, round int) bool {
 
 	R := e.d * e.D
-	// Validate that ℓi,R−r+1 ∈ LR−r+1
-	// The local label at round R-round should be in the first layer of merkle path
+	// Validate that ℓi, R−r+1 ∈ LR−r+1
+	// The local label at round R-round should be in the first layer of a merkle path
 	localLabel := e.mdag.GetComputedLabel(R - round)
 	if !isValueInState(localLabel, merklePath[0]) {
 		e.logger.Warn("Local label not found in merkle path", zap.Int("round", round), zap.Int("label_round", R-round))
