@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
 // Mocks
@@ -70,7 +71,7 @@ func (s *RbExpSuite) SetupTest() {
 	s.exp = new(MockExPost)
 	s.exa = new(MockExAnte)
 	s.weight = 1.0
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return true }, s.weight, zap.NewNop())
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return true }, s.weight, zap.NewNop())
 }
 
 func TestRbExpSuite(t *testing.T) {
@@ -305,7 +306,7 @@ func (s *RbExpSuite) TestVer_FilterFalse() {
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
 	// Use a filter that always returns false by changing the rbexp instance
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *common.AuxKey) bool { return false }, s.weight, zap.NewNop())
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return false }, s.weight, zap.NewNop())
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()

@@ -60,20 +60,25 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	// ffilter(sid, id||vk(vrf), ch,(ϕ(vdf), π(vdf), ϕ(vrf), π(vrf))) =
 	// VDF.Verify(H(id||vk(vrf) || ch), ϕ(vdf), π(vdf)) ∧ VRF.Verify(H(ϕ(vdf) || sid), ϕ(vrf), π(vrf), vk(vrf))
 	// returns true iff both the VRF and VDF verification succeed.
-	filterF := func(sid, id string, vk []byte, ch []byte, auxKey *common.AuxKey) bool {
+	filterF := func(sid, id string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage) bool {
+		if auxKey == nil {
+			logger.Warn("Filter function received nil auxKey")
+			return false
+		}
+
 		vdfInput := gce.HashData([]byte(id), vk, ch)
-		vrfInput := gce.HashData(auxKey.PhiVDF, []byte(sid))
+		vrfInput := gce.HashData(auxKey.PhiVdf, []byte(sid))
 
 		logger.Debug("Filter function called, verifying VDF and VRF",
 			zap.String("sender_id", id),
 			zap.String("sid", sid),
 			zap.Binary("vk", vk),
 			zap.Binary("challenge", ch),
-			zap.Binary("phi_vdf", auxKey.PhiVDF),
-			zap.Binary("pi_vdf", auxKey.PiVDF),
+			zap.Binary("phi_vdf", auxKey.PhiVdf),
+			zap.Binary("pi_vdf", auxKey.PiVdf),
 			zap.Binary("VDF Input", vdfInput),
 		)
-		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVDF, auxKey.PiVDF, vk)
+		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVdf, auxKey.PiVdf, vk)
 		if err != nil {
 			logger.Warn("Failed to verify VDF", zap.Error(err))
 			return false
@@ -82,7 +87,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			return false
 		}
 
-		vrfRes, err := vrFunc.Verify(vrfInput, auxKey.PhiVRF, auxKey.PiVRF, vk)
+		vrfRes, err := vrFunc.Verify(vrfInput, auxKey.PhiVrf, auxKey.PiVrf, vk)
 		if err != nil {
 			logger.Warn("Failed to verify VRF", zap.Error(err))
 			return false

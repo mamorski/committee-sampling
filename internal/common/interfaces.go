@@ -2,7 +2,7 @@ package common
 
 import pb "github.com/mamorski/committee-sampling/pkg/proto"
 
-type FilterF func(string, string, []byte, []byte, *AuxKey) bool
+type FilterF func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool
 
 type FilterTagF func(string, string, []byte, []byte, *pb.Aux) bool
 

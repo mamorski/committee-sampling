@@ -124,14 +124,8 @@ func (r *RbExp) Verify(
 			zap.String("sender_id", id),
 			zap.Binary("vk", vk),
 		)
-		// Convert protobuf back to common.AuxKey for ffilter which still uses old signature
-		auxKey := &common.AuxKey{
-			PhiVRF: aux.AuxKey.PhiVrf,
-			PiVRF:  aux.AuxKey.PiVrf,
-			PhiVDF: aux.AuxKey.PhiVdf,
-			PiVDF:  aux.AuxKey.PiVdf,
-		}
-		return r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, auxKey)
+
+		return r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
 	}
 	auxTag := &common.AuxTag{
 		PiRP:   proof.PiRP,
