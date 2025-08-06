@@ -450,7 +450,15 @@ func (e *ExPost) validateMerklePath(merklePath []*pb.State, round int) bool {
 }
 
 // processMessage processes a single message in parallel
-func (e *ExPost) processMessage(msg *pb.TimestampMessage, session string, sigma [][][]byte, auxLocal float64, filterFn common.FilterTagF, r int, results *common.Committee) {
+func (e *ExPost) processMessage(
+	msg *pb.TimestampMessage,
+	session string,
+	sigma [][][]byte,
+	auxLocal float64,
+	filterFn common.FilterTagF,
+	r int,
+	results *common.Committee) {
+
 	if e.isMessageValid(msg, auxLocal, filterFn, r) {
 
 		g := min(e.d-r/e.D, e.gradeFunc(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal))

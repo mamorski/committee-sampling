@@ -468,7 +468,16 @@ func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 }
 
 // processMessage processes a single message in parallel
-func (e *ExAnte) processMessage(msg *pb.TimestampMessage, session string, sigma [][][]byte, auxLocal float64, filterFn common.FilterTagF, r int, results *common.Committee, protocolID string) {
+func (e *ExAnte) processMessage(
+	msg *pb.TimestampMessage,
+	session string,
+	sigma [][][]byte,
+	auxLocal float64,
+	filterFn common.FilterTagF,
+	r int,
+	results *common.Committee,
+	protocolID string) {
+
 	if e.isMessageValid(msg, auxLocal, filterFn, r) {
 
 		g := min(e.gradeFunction(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal), e.d-r/e.D)
