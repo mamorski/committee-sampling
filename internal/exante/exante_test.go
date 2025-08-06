@@ -80,12 +80,12 @@ func (m *MockMDAG) Oracle(h ...[]byte) []byte {
 	return args.Get(0).([]byte)
 }
 
-func filterTrue(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func filterTrue(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	// Always return true for testing purposes
 	return true
 }
 
-func filterFalse(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func filterFalse(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	// Always return false for testing purposes
 	return false
 }
@@ -135,7 +135,7 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		d:             suite.testD,
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
-		messages:      make(map[int][]receivedMessage),
+		messages:      make(map[int][]*pb.TimestampMessage), // changed
 		sid:           suite.testSID,
 		isRunning:     true,
 	}
@@ -148,7 +148,7 @@ func (suite *ExAnteTestSuite) TearDownTest() {
 }
 
 // mockGradeFunction is a simple grade function for testing
-func (suite *ExAnteTestSuite) mockGradeFunction(_ string, _ []byte, _ []byte, _ *common.AuxKey, _ float64) int {
+func (suite *ExAnteTestSuite) mockGradeFunction(_ string, _ []byte, _ []byte, _ *pb.AuxKeyMessage, _ float64) int {
 	return 5 // Return a fixed grade for testing
 }
 
@@ -167,7 +167,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 	testD := 5
 	testBigD := 3
 
-	gradeFunc := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	gradeFunc := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		return 10
 	}
 
@@ -299,10 +299,10 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	suite.Require().Len(suite.exante.messages[0], 1)
 
 	receivedMsg := suite.exante.messages[0][0]
-	suite.Equal(suite.testSID, receivedMsg.sid)
-	suite.Equal(suite.testVK, receivedMsg.vk)
-	suite.Equal(suite.testChallenge, receivedMsg.v)
-	suite.Equal(testAux.PiRP, receivedMsg.aux.PiRP)
+	suite.Equal(suite.testSID, receivedMsg.SessionId)
+	suite.Equal(suite.testVK, receivedMsg.VerificationKey)
+	suite.Equal(suite.testChallenge, receivedMsg.Value)
+	suite.Equal(testAux.PiRP, receivedMsg.Aux.PiRP)
 
 	suite.mockNetwork.AssertExpectations(suite.T())
 }
@@ -529,14 +529,21 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_Success() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
-
-	msg := &receivedMessage{
-		sid: suite.testSID,
-		vk:  suite.testVK,
-		v:   suite.testChallenge,
-		aux: testAux,
-		merklePath: [][][]byte{
-			{[]byte("oracle-result")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.testSID,
+		VerificationKey: suite.testVK,
+		Value:           suite.testChallenge,
+		Aux: &pb.Aux{
+			PiRP: testAux.PiRP,
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: testAux.AuxKey.PhiVRF,
+				PiVrf:  testAux.AuxKey.PiVRF,
+				PhiVdf: testAux.AuxKey.PhiVDF,
+				PiVdf:  testAux.AuxKey.PiVDF,
+			},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("oracle-result")}},
 		},
 	}
 
@@ -574,14 +581,21 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_FilterFails() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
-
-	msg := &receivedMessage{
-		sid: suite.testSID,
-		vk:  suite.testVK,
-		v:   suite.testChallenge,
-		aux: testAux,
-		merklePath: [][][]byte{
-			{[]byte("path1")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.testSID,
+		VerificationKey: suite.testVK,
+		Value:           suite.testChallenge,
+		Aux: &pb.Aux{
+			PiRP: testAux.PiRP,
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: testAux.AuxKey.PhiVRF,
+				PiVrf:  testAux.AuxKey.PiVRF,
+				PhiVdf: testAux.AuxKey.PhiVDF,
+				PiVdf:  testAux.AuxKey.PiVDF,
+			},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("path1")}},
 		},
 	}
 
@@ -752,7 +766,7 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	}
 
 	// Setup grade function to return high grade (>= d+1 = 4)
-	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		return 5 // >= d+1 = 4, so node is a prover
 	}
 
@@ -791,19 +805,27 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	}
 
 	// Setup grade function to return low grade (< d+1 = 4)
-	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		return 2 // < d+1 = 4, so node is not a prover initially
 	}
 
 	// Pre-populate messages to simulate incoming messages
-	suite.exante.messages[0] = []receivedMessage{
+	suite.exante.messages[0] = []*pb.TimestampMessage{
 		{
-			sid: suite.testSID,
-			vk:  suite.testVK,
-			v:   suite.testChallenge,
-			aux: testAux,
-			merklePath: [][][]byte{
-				{[]byte("oracle-result")},
+			SessionId:       suite.testSID,
+			VerificationKey: suite.testVK,
+			Value:           suite.testChallenge,
+			Aux: &pb.Aux{
+				PiRP: testAux.PiRP,
+				AuxKey: &pb.AuxKeyMessage{
+					PhiVrf: testAux.AuxKey.PhiVRF,
+					PiVrf:  testAux.AuxKey.PiVRF,
+					PhiVdf: testAux.AuxKey.PhiVDF,
+					PiVdf:  testAux.AuxKey.PiVDF,
+				},
+			},
+			MerklePath: []*pb.State{
+				{Row: [][]byte{[]byte("oracle-result")}},
 			},
 		},
 	}
@@ -862,7 +884,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 
 	// Setup grade function to return different grades for different messages
 	gradeCallCount := 0
-	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		gradeCallCount++
 		if gradeCallCount == 1 {
 			return 1 // First call (prover check) - not a prover
@@ -871,23 +893,39 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	}
 
 	// Pre-populate messages with same key but different senders
-	suite.exante.messages[0] = []receivedMessage{
+	suite.exante.messages[0] = []*pb.TimestampMessage{
 		{
-			sid: suite.testSID,
-			vk:  suite.testVK,
-			v:   suite.testChallenge,
-			aux: testAux,
-			merklePath: [][][]byte{
-				{[]byte("oracle-result")},
+			SessionId:       suite.testSID,
+			VerificationKey: suite.testVK,
+			Value:           suite.testChallenge,
+			Aux: &pb.Aux{
+				PiRP: testAux.PiRP,
+				AuxKey: &pb.AuxKeyMessage{
+					PhiVrf: testAux.AuxKey.PhiVRF,
+					PiVrf:  testAux.AuxKey.PiVRF,
+					PhiVdf: testAux.AuxKey.PhiVDF,
+					PiVdf:  testAux.AuxKey.PiVDF,
+				},
+			},
+			MerklePath: []*pb.State{
+				{Row: [][]byte{[]byte("oracle-result")}},
 			},
 		},
 		{
-			sid: suite.testSID,
-			vk:  suite.testVK,
-			v:   suite.testChallenge, // Same key as first message
-			aux: testAux,
-			merklePath: [][][]byte{
-				{[]byte("oracle-result")},
+			SessionId:       suite.testSID,
+			VerificationKey: suite.testVK,
+			Value:           suite.testChallenge, // Same key as first message
+			Aux: &pb.Aux{
+				PiRP: testAux.PiRP,
+				AuxKey: &pb.AuxKeyMessage{
+					PhiVrf: testAux.AuxKey.PhiVRF,
+					PiVrf:  testAux.AuxKey.PiVRF,
+					PhiVdf: testAux.AuxKey.PhiVDF,
+					PiVdf:  testAux.AuxKey.PiVDF,
+				},
+			},
+			MerklePath: []*pb.State{
+				{Row: [][]byte{[]byte("oracle-result")}},
 			},
 		},
 	}
@@ -933,19 +971,26 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
-
-	msg := &receivedMessage{
-		sid: suite.testSID,
-		vk:  suite.testVK,
-		v:   suite.testChallenge,
-		aux: testAux,
-		merklePath: [][][]byte{
-			{[]byte("path1")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.testSID,
+		VerificationKey: suite.testVK,
+		Value:           suite.testChallenge,
+		Aux: &pb.Aux{
+			PiRP: testAux.PiRP,
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: testAux.AuxKey.PhiVRF,
+				PiVrf:  testAux.AuxKey.PiVRF,
+				PhiVdf: testAux.AuxKey.PhiVDF,
+				PiVdf:  testAux.AuxKey.PiVDF,
+			},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("path1")}},
 		},
 	}
 
 	// Override grade function to return 0
-	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	suite.exante.gradeFunction = func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		return 0 // Grade is not > 0
 	}
 
@@ -965,14 +1010,21 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_OracleNotInFirstLevel() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
-
-	msg := &receivedMessage{
-		sid: suite.testSID,
-		vk:  suite.testVK,
-		v:   suite.testChallenge,
-		aux: testAux,
-		merklePath: [][][]byte{
-			{[]byte("different-value")}, // Oracle result will NOT be found here
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.testSID,
+		VerificationKey: suite.testVK,
+		Value:           suite.testChallenge,
+		Aux: &pb.Aux{
+			PiRP: testAux.PiRP,
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: testAux.AuxKey.PhiVRF,
+				PiVrf:  testAux.AuxKey.PiVRF,
+				PhiVdf: testAux.AuxKey.PhiVDF,
+				PiVdf:  testAux.AuxKey.PiVDF,
+			},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("different-value")}}, // Oracle result will NOT be found here
 		},
 	}
 
@@ -997,14 +1049,21 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 			PiVDF:  []byte("test-pi-vdf"),
 		},
 	}
-
-	msg := &receivedMessage{
-		sid: suite.testSID,
-		vk:  suite.testVK,
-		v:   suite.testChallenge,
-		aux: testAux,
-		merklePath: [][][]byte{
-			{[]byte("oracle-result")}, // Oracle result found here
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.testSID,
+		VerificationKey: suite.testVK,
+		Value:           suite.testChallenge,
+		Aux: &pb.Aux{
+			PiRP: testAux.PiRP,
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: testAux.AuxKey.PhiVRF,
+				PiVrf:  testAux.AuxKey.PiVRF,
+				PhiVdf: testAux.AuxKey.PhiVDF,
+				PiVdf:  testAux.AuxKey.PiVDF,
+			},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("oracle-result")}}, // Oracle result found here
 		},
 	}
 

@@ -64,6 +64,7 @@ func createLogger(cfg *config.Config) *zap.Logger {
 		LevelKey:       "level",
 		MessageKey:     "msg",
 		CallerKey:      "caller",
+		NameKey:        "logger",
 		EncodeLevel:    zapcore.CapitalLevelEncoder,
 		EncodeTime:     zapcore.ISO8601TimeEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,

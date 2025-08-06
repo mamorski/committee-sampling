@@ -18,6 +18,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/vdf"
 	"github.com/mamorski/committee-sampling/internal/vrf"
 	"github.com/mamorski/committee-sampling/pkg/config"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
 	"go.uber.org/zap"
 )
@@ -96,10 +97,14 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf) , ϕ(vrf) , π(vrf) ), Wi),
 	// parameterized by a "weight disagreement" bound ∆W computes gi ← d + 1 − (Wi − n · 2^λ/ ϕ(vrf)+1) · 1 / ∆W
 	// and returns grade min {d + 1, ⌊g⌋}.
-	gradeF := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, weight float64) int {
+	gradeF := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, weight float64) int {
+		if auxKey == nil {
+			logger.Warn("Grade function received nil auxKey")
+			return 0
+		}
 
 		g, err := computeGrade(cfg.Graph.GradingLevels, cfg.RunTime.CommitteeSize, cfg.RunTime.Lambda, weight, cfg.RunTime.DeltaW,
-			auxKey.PhiVRF, logger.Named("GradeFunction"))
+			auxKey.PhiVrf, logger.Named("GradeFunction"))
 		if err != nil {
 			logger.Warn("Failed to compute grade",
 				zap.String("sid", sid),
@@ -112,7 +117,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			zap.String("sid", sid),
 			zap.Int("g", g),
 			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
-			zap.Binary("Phi^VRF", auxKey.PhiVRF),
+			zap.Binary("Phi^VRF", auxKey.PhiVrf),
 			zap.Binary("vk", vk),
 		)
 
@@ -257,7 +262,7 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 	//    ratioF ≈ 2^λ/(φ+1)
 
 	// 7) Compute the subterm: (Wᵢ − n·ratioF)
-	sub := Wi - float64(n)*ratioF
+	sub := Wi*100 - float64(n)*ratioF
 
 	// 8) Multiply by (1/ΔW)
 	term := sub / deltaW

@@ -34,5 +34,6 @@ go.work.sum
 .DS_Store
 
 logs-*/
+logs/*
 
 venv/

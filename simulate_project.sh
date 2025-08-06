@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-NUM_NODES=20
+NUM_NODES=100
 BASE_PORT=8000
 SESSION_ID="test-session-$(date +%s)"
 LOGS_DIR="./logs"

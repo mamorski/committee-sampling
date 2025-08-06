@@ -195,15 +195,15 @@ create_committee_config() {
   "run_time": {
     "session_id": "$SESSION_ID",
     "lambda": 384,
-    "weight": 150,
-    "delta_w": 3.0,
-    "committee_size": 4,
+    "weight": 10,
+    "delta_w": 5.0,
+    "committee_size": 6,
     "delay": 20
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "30s",
-    "ex_post_round_timeout": "30s",
+    "ex_ante_round_timeout": "2m",
+    "ex_post_round_timeout": "2m",
     "mdag_round_timeout": "5s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
@@ -332,7 +332,7 @@ while true; do
         consecutive_zero_counts=0
     fi
     
-    sleep 10
+    sleep 60
 done
 
 # Call cleanup to stop bootstrap server and create log backup

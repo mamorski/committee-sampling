@@ -2,7 +2,6 @@ package expost
 
 import (
 	"encoding/base64"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ func createTestPeerID(id string) peer.ID {
 	// by using a simple encoding that libp2p can handle
 	testID := "12D3KooW" + id + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 	if len(testID) > 52 {
-		testID = testID[:52] // Truncate to valid length
+		testID = testID[:52] // Truncate to a valid length
 	}
 	peerID, err := peer.Decode(testID)
 	if err != nil {
@@ -112,22 +111,22 @@ func (suite *ExPostTestSuite) SetupTest() {
 	suite.vk = []byte("test-vk")
 	suite.startTime = time.Now()
 
-	syncer := newDelayedSync(50 * time.Millisecond)
-
 	suite.expost = &ExPost{
 		network:      suite.mockNetwork,
 		logger:       suite.logger.Named("expost"),
 		mdag:         suite.mockMDAG,
-		synchronizer: syncer,
+		synchronizer: newDelayedSync(50 * time.Millisecond),
 		d:            3,
 		D:            5,
 		lambda:       32,
 		gradeFunc:    mockGradeFunc,
-		isRunning:    true,
+		messages:     make(map[int][]*pb.TimestampMessage, 3*5),
 		sid:          suite.sid,
 		vk:           suite.vk,
-		mu:           sync.Mutex{},
-		messages:     make(map[int][]receivedMessage),
+		isRunning:    true,
+		protocolID:   "/expost/1.0.0/" + suite.sid,
+		nodeID:       "test-node",
+		R:            3 * 5,
 	}
 }
 
@@ -146,6 +145,7 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockMDAG := new(MockMDAG)
 
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
+	mockNet.On("GetNodeID").Return("test-node").Once()
 
 	// Call the New function
 	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond),
@@ -193,6 +193,7 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	// Verify the protocol ID is generated correctly with special characters
 	expectedProtocolID := "/expost/1.0.0/special/chars@session#123"
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
+	mockNet.On("GetNodeID").Return("test-node").Once()
 
 	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
 
@@ -256,8 +257,6 @@ func (suite *ExPostTestSuite) TestVerifyHappyFlow() {
 		Challenge: []byte("test-challenge"),
 		Sigma:     sigma,
 	}
-
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 
 	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
@@ -327,9 +326,6 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 	// Set up mock expectations for IsNeighbor call
 	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
 
-	// Set up mock expectations for GetNodeID call (needed for metrics)
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
-
 	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	suite.NoError(err)
 
@@ -339,9 +335,9 @@ func (suite *ExPostTestSuite) TestHandleMessageHappyFlow() {
 
 	suite.Require().Len(messages, 1)
 	receivedMsg := messages[0]
-	suite.Equal(suite.sid, receivedMsg.sid)
-	suite.Equal([]byte("test-vk"), receivedMsg.vk)
-	suite.Equal([]byte("test-value"), receivedMsg.v)
+	suite.Equal(suite.sid, receivedMsg.SessionId)
+	suite.Equal([]byte("test-vk"), receivedMsg.VerificationKey)
+	suite.Equal([]byte("test-value"), receivedMsg.Value)
 
 	// Verify mock expectations
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -372,7 +368,6 @@ func (suite *ExPostTestSuite) TestHandleMessageSessionMismatch() {
 
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
 
 	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
 	suite.Error(err)
@@ -383,8 +378,21 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 	suite.expost.isRunning = true
 
 	msg := &pb.TimestampMessage{
-		SessionId: suite.sid,
-		Id:        "unknown-node",
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			PiRP: []byte("pi-rp"),
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: []byte("phi-vrf"),
+				PiVrf:  []byte("pi-vrf"),
+				PhiVdf: []byte("phi-vdf"),
+				PiVdf:  []byte("pi-vdf"),
+			},
+		},
+		MerklePath: []*pb.State{{Row: [][]byte{[]byte("path1")}}},
+		Round:      1,
+		Id:         "node1",
 	}
 
 	msgBytes, err := proto.Marshal(msg)
@@ -392,7 +400,6 @@ func (suite *ExPostTestSuite) TestHandleMessageUnknownNeighbor() {
 
 	// Set up mock expectations for IsNeighbor call
 	suite.mockNetwork.On("IsNeighbor", createTestPeerID("unknown-node")).Return(false).Once()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
 	err = suite.expost.handleMessage(createTestPeerID("unknown-node"), msgBytes)
 	suite.Error(err)
@@ -437,9 +444,6 @@ func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 	// Set up mock expectations for IsNeighbor calls
 	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Twice()
 
-	// Set up mock expectations for GetNodeID calls (needed for metrics)
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
-
 	// First message should succeed
 	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes1)
 	suite.NoError(err)
@@ -459,8 +463,8 @@ func (suite *ExPostTestSuite) TestHandleMessageMultiple() {
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathHappyFlow() {
-	merklePath := [][][]byte{
-		{[]byte("path1")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1")}},
 	}
 	suite.expost.state = [][][]byte{
 		{[]byte("state0")},
@@ -477,9 +481,9 @@ func (suite *ExPostTestSuite) TestValidateMerklePathHappyFlow() {
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathInvalidStateLength() {
-	merklePath := [][][]byte{
-		{[]byte("path1")},
-		{[]byte("path2")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1")}},
+		{Row: [][]byte{[]byte("path2")}},
 	}
 	suite.expost.state = [][][]byte{{[]byte("state0")}}
 
@@ -495,15 +499,15 @@ func (suite *ExPostTestSuite) TestValidateMerklePathInvalidStateLength() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidHappyFlow() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{
-			AuxKey: &common.AuxKey{},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
 		},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
 		},
 	}
 
@@ -529,34 +533,17 @@ func (suite *ExPostTestSuite) TestIsMessageValidNilMessage() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidGradeFunctionFails() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
 	}
 
 	isValid := suite.expost.isMessageValid(msg, 0.5, mockFilterTagFunc, 1)
 	suite.False(isValid) // mockGradeFunc returns 0 for this case
-}
-
-func (suite *ExPostTestSuite) TestConvertTimestampToBytes() {
-	msg := &pb.TimestampMessage{
-		MerklePath: []*pb.State{
-			{Row: [][]byte{[]byte("row1"), []byte("row2")}},
-			{Row: [][]byte{[]byte("row3")}},
-			nil,        // Test nil state
-			{Row: nil}, // Test nil row
-		},
-	}
-
-	result := convertTimestampToBytes(msg)
-
-	suite.Len(result, 4)
-	suite.Equal([][]byte{[]byte("row1"), []byte("row2")}, result[0])
-	suite.Equal([][]byte{[]byte("row3")}, result[1])
-	suite.Nil(result[2])
-	suite.Equal([][]byte{}, result[3])
 }
 
 func (suite *ExPostTestSuite) TestSecureRandomBytes() {
@@ -594,18 +581,18 @@ func createTestSigma(length int) [][][]byte {
 	return sigma
 }
 
-func mockGradeFunc(_ string, vk []byte, v []byte, _ *common.AuxKey, _ float64) int {
+func mockGradeFunc(_ string, vk []byte, v []byte, _ *pb.AuxKeyMessage, _ float64) int {
 	if string(vk) == "test-vk" && string(v) == "test-value" {
 		return 5 // High grade for test values
 	}
 	return 0
 }
 
-func mockFilterTagFunc(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func mockFilterTagFunc(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	return true
 }
 
-func mockFilterTagFuncFalse(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func mockFilterTagFuncFalse(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	return false
 }
 
@@ -623,10 +610,6 @@ func (suite *ExPostTestSuite) TestGenerateWithZeroLength() {
 }
 
 func (suite *ExPostTestSuite) TestVerifyWithExactSigmaLength() {
-	// Create a smaller ExPost instance for this test
-	suite.expost.d = 2
-	suite.expost.D = 3
-
 	auxTag := &common.AuxTag{AuxKey: &common.AuxKey{}}
 	suite.expost.state = createTestSigma(5)
 
@@ -635,9 +618,6 @@ func (suite *ExPostTestSuite) TestVerifyWithExactSigmaLength() {
 		Challenge: []byte("test-challenge"),
 		Sigma:     createTestSigma(5), // d*D = 2*3 = 6, so 5 < 6 should fail
 	}
-
-	// Mock GetNodeID for the verification phase
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
 
 	results, err := suite.expost.Verify(suite.sid, suite.vk, fSigmaExp, auxTag, 0.5, mockFilterTagFunc)
 
@@ -715,14 +695,9 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAux() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
-	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
-
-	// This should panic due to nil aux
-	suite.Panics(func() {
-		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
-	})
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
+	suite.Error(err)
+	suite.Contains(err.Error(), "message missing required Aux field")
 
 	// Verify mock expectations
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -746,14 +721,9 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 	msgBytes, err := proto.Marshal(msg)
 	suite.NoError(err)
 
-	// Set up mock expectations for IsNeighbor call
-	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Once()
-
-	// This should panic due to a nil aux key
-	suite.Panics(func() {
-		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
-	})
+	err = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes)
+	suite.Error(err)
+	suite.Contains(err.Error(), "message missing required AuxKey field")
 
 	// Verify mock expectations
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -761,12 +731,14 @@ func (suite *ExPostTestSuite) TestHandleMessageWithNilAuxKey() {
 
 func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyPath() {
 	// This test should test isMessageValid with empty path, not validateMerklePath directly
-	msg := &receivedMessage{
-		sid:        suite.sid,
-		vk:         []byte("test-vk"),
-		v:          []byte("test-value"),
-		aux:        &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{}, // Empty path
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{}, // Empty path
 	}
 
 	// Should fail at length check before validateMerklePath is called
@@ -775,7 +747,7 @@ func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyPath() {
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyState() {
-	merklePath := [][][]byte{{[]byte("path1")}}
+	merklePath := []*pb.State{{Row: [][]byte{[]byte("path1")}}}
 	suite.expost.state = [][][]byte{}
 
 	// Mock GetComputedLabel call
@@ -786,7 +758,7 @@ func (suite *ExPostTestSuite) TestValidateMerklePathWithEmptyState() {
 }
 
 func (suite *ExPostTestSuite) TestValidateMerklePathOracleFailure() {
-	merklePath := [][][]byte{{[]byte("path1")}}
+	merklePath := []*pb.State{{Row: [][]byte{[]byte("path1")}}}
 	suite.expost.state = [][][]byte{
 		{[]byte("state0")},
 		{[]byte("different-result")},
@@ -816,34 +788,15 @@ func (suite *ExPostTestSuite) TestIsValueInStateWithEmptyValue() {
 	suite.True(isValueInState([]byte(""), state))
 }
 
-func (suite *ExPostTestSuite) TestConvertTimestampToBytesWithEmptyMessage() {
-	msg := &pb.TimestampMessage{
-		MerklePath: []*pb.State{},
-	}
-
-	result := convertTimestampToBytes(msg)
-	suite.Len(result, 0)
-}
-
-func (suite *ExPostTestSuite) TestConvertTimestampToBytesWithAllNilStates() {
-	msg := &pb.TimestampMessage{
-		MerklePath: []*pb.State{nil, nil, nil},
-	}
-
-	result := convertTimestampToBytes(msg)
-	suite.Len(result, 3)
-	for _, state := range result {
-		suite.Nil(state)
-	}
-}
-
 func (suite *ExPostTestSuite) TestMessageValidationWithSimpleMerklePath() {
-	msg := &receivedMessage{
-		sid:        suite.sid,
-		vk:         suite.vk,
-		v:          []byte("test-value"),
-		aux:        &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: suite.vk,
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{},
 	}
 
 	suite.expost.state = [][][]byte{
@@ -886,9 +839,6 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node1")).Return(true).Once()
 	suite.mockNetwork.On("IsNeighbor", createTestPeerID("node2")).Return(true).Once()
 
-	// Set up mock expectations for GetNodeID calls (each handleMessage call needs this for metrics)
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Twice()
-
 	done := make(chan bool, 2)
 	go func() {
 		_ = suite.expost.handleMessage(createTestPeerID("node1"), msgBytes1)
@@ -913,7 +863,7 @@ func (suite *ExPostTestSuite) TestConcurrentMessageHandling() {
 }
 
 // Additional helper functions for edge cases
-func edgeCaseGradeFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey, _ float64) int {
+func edgeCaseGradeFunc(_ string, vk []byte, _ []byte, _ *pb.AuxKeyMessage, _ float64) int {
 	if string(vk) == "high-grade-vk" {
 		return 10
 	}
@@ -923,11 +873,11 @@ func edgeCaseGradeFunc(_ string, vk []byte, _ []byte, _ *common.AuxKey, _ float6
 	return 0
 }
 
-func highGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
+func highGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *pb.Aux) bool {
 	return string(vk) == "high-grade-vk"
 }
 
-func lowGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *common.AuxTag) bool {
+func lowGradeFilterTagFunc(_, _ string, vk []byte, _ []byte, _ *pb.Aux) bool {
 	return string(vk) == "low-grade-vk"
 }
 
@@ -965,36 +915,33 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	suite.expost.state = sigma
 
 	// Add a valid message to process with sufficient merkle path layers
-	validMsg := receivedMessage{
-		sid: suite.sid,
-		id:  "test-node",
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{
-			AuxKey: &common.AuxKey{
-				PhiVRF: []byte("phi-vrf"),
-				PiVRF:  []byte("pi-vrf"),
-				PhiVDF: []byte("phi-vdf"),
-				PiVDF:  []byte("pi-vdf"),
+	validMsg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		Id:              "test-node",
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{
+				PhiVrf: []byte("phi-vrf"),
+				PiVrf:  []byte("pi-vrf"),
+				PhiVdf: []byte("phi-vdf"),
+				PiVdf:  []byte("pi-vdf"),
 			},
 		},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
-			{[]byte("layer1")},
-			{[]byte("layer2")},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
+			{Row: [][]byte{[]byte("layer1")}},
+			{Row: [][]byte{[]byte("layer2")}},
 		},
 	}
 
 	suite.expost.mu.Lock()
-	suite.expost.messages[0] = []receivedMessage{validMsg}
+	suite.expost.messages[0] = []*pb.TimestampMessage{validMsg}
 	suite.expost.mu.Unlock()
 
 	// Mock expectations for message validation
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("test-value")).Once()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Once()
-
-	// Mock network calls
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp
@@ -1032,38 +979,41 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 	suite.expost.state = sigma
 
 	// Add two messages with different grades and sufficient merkle path layers
-	msg1 := receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
-			{[]byte("layer1")},
-			{[]byte("layer2")},
+	msg1 := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
+			{Row: [][]byte{[]byte("layer1")}},
+			{Row: [][]byte{[]byte("layer2")}},
 		},
 	}
 
-	msg2 := receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),    // Same VK
-		v:   []byte("test-value"), // Same value
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
-			{[]byte("layer1")},
-			{[]byte("layer2")},
+	msg2 := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),    // Same VK
+		Value:           []byte("test-value"), // Same value
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
+			{Row: [][]byte{[]byte("layer1")}},
+			{Row: [][]byte{[]byte("layer2")}},
 		},
 	}
 
 	suite.expost.mu.Lock()
-	suite.expost.messages[0] = []receivedMessage{msg1, msg2}
+	suite.expost.messages[0] = []*pb.TimestampMessage{msg1, msg2}
 	suite.expost.mu.Unlock()
 
 	// Mock expectations
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("test-value")).Twice()
 	suite.mockMDAG.On("GetComputedLabel", mock.Anything).Return([]byte("test-value")).Twice()
-	suite.mockNetwork.On("GetNodeID").Return("test-node").Times(15)
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	// Create FSigmaExp
@@ -1083,13 +1033,15 @@ func (suite *ExPostTestSuite) TestVerifyWithLowerGradeMessage() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidWithNilValue() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   nil,
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           nil,
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
 		},
 	}
 
@@ -1098,13 +1050,15 @@ func (suite *ExPostTestSuite) TestIsMessageValidWithNilValue() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidFilterFnFails() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
 		},
 	}
 
@@ -1115,13 +1069,15 @@ func (suite *ExPostTestSuite) TestIsMessageValidFilterFnFails() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidValueNotInMerklePath() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
 		},
 	}
 
@@ -1134,13 +1090,15 @@ func (suite *ExPostTestSuite) TestIsMessageValidValueNotInMerklePath() {
 }
 
 func (suite *ExPostTestSuite) TestIsMessageValidWithInvalidMerklePath() {
-	msg := &receivedMessage{
-		sid: suite.sid,
-		vk:  []byte("test-vk"),
-		v:   []byte("test-value"),
-		aux: &common.AuxTag{AuxKey: &common.AuxKey{}},
-		merklePath: [][][]byte{
-			{[]byte("test-value")},
+	msg := &pb.TimestampMessage{
+		SessionId:       suite.sid,
+		VerificationKey: []byte("test-vk"),
+		Value:           []byte("test-value"),
+		Aux: &pb.Aux{
+			AuxKey: &pb.AuxKeyMessage{},
+		},
+		MerklePath: []*pb.State{
+			{Row: [][]byte{[]byte("test-value")}},
 		},
 	}
 

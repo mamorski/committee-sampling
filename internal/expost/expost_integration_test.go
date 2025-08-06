@@ -11,6 +11,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -141,12 +142,12 @@ func testOracle(data []byte) []byte {
 	return hash[:]
 }
 
-func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float64) int {
+func testGradeFunction(_ string, vk []byte, ch []byte, _ *pb.AuxKeyMessage, _ float64) int {
 	hash := sha256.Sum256(append(vk, ch...))
 	return int(hash[0]) % 10
 }
 
-func testFilterTagFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func testFilterTagFunction(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	return true
 }
 
@@ -334,7 +335,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	}
 
 	// Create grade function that makes node0 a prover
-	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		nodeID := string(vk)
 		if nodeID == "node0-vk" {
 			return 8 // High grade, will be a prover (>= d+1 = 4)

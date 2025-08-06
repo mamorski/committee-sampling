@@ -3,12 +3,14 @@ package exante
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
+	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,6 +20,82 @@ import (
 )
 
 const exanteProtocolID = "/exante/1.0.0"
+
+// Object pools for protobuf message reuse
+var (
+	exanteTimestampMessagePool = sync.Pool{
+		New: func() interface{} {
+			return &pb.TimestampMessage{}
+		},
+	}
+
+	exanteAuxPool = sync.Pool{
+		New: func() interface{} {
+			return &pb.Aux{}
+		},
+	}
+
+	exanteAuxKeyMessagePool = sync.Pool{
+		New: func() interface{} {
+			return &pb.AuxKeyMessage{}
+		},
+	}
+
+	exanteStatePool = sync.Pool{
+		New: func() interface{} {
+			return &pb.State{}
+		},
+	}
+)
+
+// Helper functions for object pool management in ExAnte
+func getExAnteTimestampMessage() *pb.TimestampMessage {
+	msg := exanteTimestampMessagePool.Get().(*pb.TimestampMessage)
+	msg.Reset()
+	return msg
+}
+
+func putExAnteTimestampMessage(msg *pb.TimestampMessage) {
+	if msg != nil {
+		exanteTimestampMessagePool.Put(msg)
+	}
+}
+
+func getExAnteAux() *pb.Aux {
+	aux := exanteAuxPool.Get().(*pb.Aux)
+	aux.Reset()
+	return aux
+}
+
+func putExAnteAux(aux *pb.Aux) {
+	if aux != nil {
+		exanteAuxPool.Put(aux)
+	}
+}
+
+func getExAnteAuxKeyMessage() *pb.AuxKeyMessage {
+	auxKey := exanteAuxKeyMessagePool.Get().(*pb.AuxKeyMessage)
+	auxKey.Reset()
+	return auxKey
+}
+
+func putExAnteAuxKeyMessage(auxKey *pb.AuxKeyMessage) {
+	if auxKey != nil {
+		exanteAuxKeyMessagePool.Put(auxKey)
+	}
+}
+
+func getExAnteState() *pb.State {
+	state := exanteStatePool.Get().(*pb.State)
+	state.Reset()
+	return state
+}
+
+func putExAnteState(state *pb.State) {
+	if state != nil {
+		exanteStatePool.Put(state)
+	}
+}
 
 var (
 	exanteMessagesTotal = promauto.NewCounterVec(
@@ -56,18 +134,10 @@ type ExAnte struct {
 	sid           string
 	challenge     []byte
 
-	mu       sync.Mutex
-	messages map[int][]receivedMessage
-	state    [][][]byte
-}
-
-type receivedMessage struct {
-	id         string
-	sid        string
-	vk         []byte
-	v          []byte
-	aux        *common.AuxTag
-	merklePath [][][]byte
+	mu         sync.Mutex
+	messages   map[int][]*pb.TimestampMessage
+	state      [][][]byte
+	threadPool *threadpool.ThreadPool
 }
 
 // New creates a new ExAnte instance with the specified parameters
@@ -89,7 +159,7 @@ func New(
 		d:             d,
 		D:             D,
 		gradeFunction: gradeFunction,
-		messages:      make(map[int][]receivedMessage),
+		messages:      make(map[int][]*pb.TimestampMessage),
 		sid:           sid,
 		isRunning:     true,
 	}
@@ -148,11 +218,16 @@ func (e *ExAnte) Verify(
 
 	e.logger.Info("Verify started")
 	start := time.Now()
+
+	// Initialize threadpool for parallel message processing
+	e.threadPool = threadpool.New(min(runtime.NumCPU()*2, 4))
+
 	defer func() {
 		elapsed := time.Since(start)
 		e.logger.Info("Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
+		e.threadPool.Close()
 	}()
 
 	if e.sid != session {
@@ -175,31 +250,54 @@ func (e *ExAnte) Verify(
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
 
 	// Check if P_i is also acts like a prover
-	grade := e.gradeFunction(session, vk, auxTag.AuxKey.PhiVRF, auxTag.AuxKey, auxLocal)
-	if grade >= e.d+1 && filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxTag) {
+	auxPb := &pb.Aux{
+		PiRP: auxTag.PiRP,
+		AuxKey: &pb.AuxKeyMessage{
+			PhiVrf: auxTag.AuxKey.PhiVRF,
+			PiVrf:  auxTag.AuxKey.PiVRF,
+			PhiVdf: auxTag.AuxKey.PhiVDF,
+			PiVdf:  auxTag.AuxKey.PiVDF,
+		},
+	}
+	grade := e.gradeFunction(session, vk, auxPb.AuxKey.PhiVrf, auxPb.AuxKey, auxLocal)
+	if grade >= e.d+1 && filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxPb) {
 
 		e.logger.Info("Node is a prover, sending initial message",
 			zap.Int("grade", grade),
 			zap.Int("d", e.d),
 		)
 
-		msg := &pb.TimestampMessage{
-			SessionId:       session,
-			VerificationKey: vk,
-			Value:           e.challenge,
-			Aux: &pb.Aux{
-				PiRP: auxTag.PiRP,
-				AuxKey: &pb.AuxKeyMessage{
-					PhiVrf: auxTag.AuxKey.PhiVRF,
-					PiVrf:  auxTag.AuxKey.PiVRF,
-					PhiVdf: auxTag.AuxKey.PhiVDF,
-					PiVdf:  auxTag.AuxKey.PiVDF,
-				},
-			},
-			MerklePath: []*pb.State{{Row: sigma[0][0:]}},
-			Round:      0,
-			Id:         e.network.GetNodeID(),
-		}
+		// Use pooled objects
+		msg := getExAnteTimestampMessage()
+		defer putExAnteTimestampMessage(msg)
+
+		auxKey := getExAnteAuxKeyMessage()
+		defer putExAnteAuxKeyMessage(auxKey)
+
+		aux := getExAnteAux()
+		defer putExAnteAux(aux)
+
+		state := getExAnteState()
+		defer putExAnteState(state)
+
+		// Configure the pooled objects
+		msg.SessionId = session
+		msg.VerificationKey = vk
+		msg.Value = e.challenge
+		msg.Round = 0
+		msg.Id = e.network.GetNodeID()
+
+		auxKey.PhiVrf = auxTag.AuxKey.PhiVRF
+		auxKey.PiVrf = auxTag.AuxKey.PiVRF
+		auxKey.PhiVdf = auxTag.AuxKey.PhiVDF
+		auxKey.PiVdf = auxTag.AuxKey.PiVDF
+
+		aux.PiRP = auxTag.PiRP
+		aux.AuxKey = auxKey
+		msg.Aux = aux
+
+		state.Row = sigma[0][0:]
+		msg.MerklePath = []*pb.State{state}
 
 		msgBytes, err := proto.Marshal(msg)
 		if err != nil {
@@ -231,69 +329,15 @@ func (e *ExAnte) Verify(
 		}
 
 		loopStart := time.Now()
+		// Process messages in parallel using a threadpool
 		for _, msg := range msgs {
-			if e.isMessageValid(&msg, auxLocal, filterFn, r) {
-
-				g := min(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal), e.d-r/e.D)
-				e.logger.Debug("Processing valid message",
-					zap.String("sender_id", msg.id),
-					zap.Int("round", r),
-					zap.Int("grade", g),
-				)
-				if results.Add(msg.vk, msg.v, msg.id, g) {
-					e.logger.Info("Added to results",
-						zap.String("sender_id", msg.id),
-						zap.Binary("vk", msg.vk),
-						zap.Binary("value", msg.v),
-						zap.Int("grade", g))
-				} else {
-					e.logger.Info("Skipping message with lower grade",
-						zap.String("sender_id", msg.id),
-						zap.Binary("vk", msg.vk),
-						zap.Binary("value", msg.v),
-						zap.Int("grade", g))
-					continue
-				}
-
-				pMsg := &pb.TimestampMessage{
-					SessionId:       session,
-					VerificationKey: msg.vk,
-					Value:           msg.v,
-					Aux: &pb.Aux{
-						PiRP: msg.aux.PiRP,
-						AuxKey: &pb.AuxKeyMessage{
-							PhiVrf: msg.aux.AuxKey.PhiVRF,
-							PiVrf:  msg.aux.AuxKey.PiVRF,
-							PhiVdf: msg.aux.AuxKey.PhiVDF,
-							PiVdf:  msg.aux.AuxKey.PiVDF,
-						},
-					},
-					MerklePath: make([]*pb.State, r+1),
-					Round:      uint32(r), //nolint:gosec
-					Id:         msg.id,
-				}
-
-				for i := 0; i < r; i++ {
-					pMsg.MerklePath[i] = &pb.State{
-						Row: msg.merklePath[i],
-					}
-				}
-				pMsg.MerklePath[r] = &pb.State{
-					Row: sigma[r],
-				}
-				pMsgBytes, err := proto.Marshal(pMsg)
-				if err != nil {
-					e.logger.Error("Failed to marshal message", zap.Error(err))
-					continue
-				}
-
-				go e.network.SendProtocolMessage(protocolID, pMsgBytes)
-			} else {
-				e.logger.Info("Ignoring invalid message",
-					zap.String("sender_id", msg.id),
-					zap.Int("round", r))
-			}
+			e.threadPool.Submit(func() {
+				e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results, protocolID)
+			})
 		}
+
+		// Wait for all tasks in this round to complete
+		e.threadPool.Wait()
 		e.logger.Info("Finished processing messages for round",
 			zap.Int("round", r),
 			zap.Duration("elapsed", time.Since(loopStart)),
@@ -342,15 +386,8 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		err := errors.New("sender not in neighbors list")
 		e.logger.Warn("Received message from non-neighbor sender",
 			zap.String("sender", from.String()))
-
 		return err
 	}
-
-	if msg.Id == nodeID {
-		e.logger.Debug("Received message from self", zap.String("sender", from.String()))
-		return nil
-	}
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -366,22 +403,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	// Increment valid messages metric - message passed all validation checks
 	exanteMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante").Inc()
 
-	e.messages[round] = append(e.messages[round], receivedMessage{
-		id:  msg.Id,
-		sid: msg.SessionId,
-		vk:  msg.VerificationKey,
-		v:   msg.Value,
-		aux: &common.AuxTag{
-			PiRP: msg.Aux.PiRP,
-			AuxKey: &common.AuxKey{
-				PhiVRF: msg.Aux.AuxKey.PhiVrf,
-				PiVRF:  msg.Aux.AuxKey.PiVrf,
-				PhiVDF: msg.Aux.AuxKey.PhiVdf,
-				PiVDF:  msg.Aux.AuxKey.PiVdf,
-			},
-		},
-		merklePath: convertTimestampToBytes(&msg),
-	})
+	e.messages[round] = append(e.messages[round], &msg)
 
 	return nil
 }
@@ -413,40 +435,104 @@ func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 	return true
 }
 
-func (e *ExAnte) isMessageValid(msg *receivedMessage, auxLocal float64, filterFn common.FilterTagF, r int) bool {
+func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filterFn common.FilterTagF, r int) bool {
 	if msg == nil {
 		return false
 	}
 
-	if !filterFn(msg.sid, msg.id, msg.vk, msg.v, msg.aux) {
+	if !filterFn(msg.SessionId, msg.Id, msg.VerificationKey, msg.Value, msg.Aux) {
 		e.logger.Warn("Message filtered out by filter function",
-			zap.String("session_id", msg.sid),
+			zap.String("session_id", msg.SessionId),
 		)
 		return false
 	}
-
-	if !(e.gradeFunction(msg.sid, msg.vk, msg.v, msg.aux.AuxKey, auxLocal) > 0) {
+	if !(e.gradeFunction(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal) > 0) {
 		e.logger.Warn("Message filtered out by grade function",
-			zap.String("sender_id", msg.id),
+			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-
-	if !isValueInState(e.mdag.Oracle([]byte(msg.sid), msg.vk, msg.v, msg.aux.PiRP), msg.merklePath[0]) {
+	if !isValueInState(e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), convertTimestampToBytes(msg)[0]) {
 		e.logger.Warn("Message filtered out by merkle path",
-			zap.String("sender_id", msg.id),
+			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-
-	if !e.validateMerklePath(msg.merklePath, r) {
+	if !e.validateMerklePath(convertTimestampToBytes(msg), r) {
 		e.logger.Warn("Message filtered out by merkle path",
-			zap.String("sender_id", msg.id),
+			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-
 	return true
+}
+
+// processMessage processes a single message in parallel
+func (e *ExAnte) processMessage(msg *pb.TimestampMessage, session string, sigma [][][]byte, auxLocal float64, filterFn common.FilterTagF, r int, results *common.Committee, protocolID string) {
+	if e.isMessageValid(msg, auxLocal, filterFn, r) {
+
+		g := min(e.gradeFunction(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal), e.d-r/e.D)
+		e.logger.Debug("Processing valid message",
+			zap.String("sender_id", msg.Id),
+			zap.Int("round", r),
+			zap.Int("grade", g),
+		)
+		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
+			e.logger.Info("Added to results",
+				zap.String("sender_id", msg.Id),
+				zap.Binary("vk", msg.VerificationKey),
+				zap.Binary("value", msg.Value),
+				zap.Int("grade", g))
+		} else {
+			e.logger.Debug("Skipping message with lower grade",
+				zap.String("sender_id", msg.Id),
+				zap.Binary("vk", msg.VerificationKey),
+				zap.Binary("value", msg.Value),
+				zap.Int("grade", g))
+			return
+		}
+		// Use pooled objects for message propagation
+		pMsg := getExAnteTimestampMessage()
+		defer putExAnteTimestampMessage(pMsg)
+		auxKey := getExAnteAuxKeyMessage()
+		defer putExAnteAuxKeyMessage(auxKey)
+		aux := getExAnteAux()
+		defer putExAnteAux(aux)
+		pMsg.SessionId = session
+		pMsg.VerificationKey = msg.VerificationKey
+		pMsg.Value = msg.Value
+		pMsg.Round = uint32(r) //nolint:gosec
+		pMsg.Id = msg.Id
+		auxKey.PhiVrf = msg.Aux.AuxKey.PhiVrf
+		auxKey.PiVrf = msg.Aux.AuxKey.PiVrf
+		auxKey.PhiVdf = msg.Aux.AuxKey.PhiVdf
+		auxKey.PiVdf = msg.Aux.AuxKey.PiVdf
+		aux.PiRP = msg.Aux.PiRP
+		aux.AuxKey = auxKey
+		pMsg.Aux = aux
+		pMsg.MerklePath = make([]*pb.State, r+1)
+		for i := 0; i < r; i++ {
+			state := getExAnteState()
+			state.Row = convertTimestampToBytes(msg)[i]
+			pMsg.MerklePath[i] = state
+		}
+		lastState := getExAnteState()
+		lastState.Row = sigma[r]
+		pMsg.MerklePath[r] = lastState
+		pMsgBytes, err := proto.Marshal(pMsg)
+		if err != nil {
+			e.logger.Error("Failed to marshal message", zap.Error(err))
+			return
+		}
+		e.network.SendProtocolMessage(protocolID, pMsgBytes)
+		for _, state := range pMsg.MerklePath {
+			putExAnteState(state)
+		}
+	} else {
+		e.logger.Info("Ignoring invalid message",
+			zap.String("sender_id", msg.Id),
+			zap.Int("round", r))
+	}
 }
 
 func isValueInState(value []byte, state [][]byte) bool {
