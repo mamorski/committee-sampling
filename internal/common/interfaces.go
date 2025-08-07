@@ -1,10 +1,12 @@
 package common
 
-type FilterF func(string, string, []byte, []byte, *AuxKey) bool
+import pb "github.com/mamorski/committee-sampling/pkg/proto"
 
-type FilterTagF func(string, string, []byte, []byte, *AuxTag) bool
+type FilterF func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool
 
-type GradeFunc func(string, []byte, []byte, *AuxKey, float64) int
+type FilterTagF func(string, string, []byte, []byte, *pb.Aux) bool
+
+type GradeFunc func(string, []byte, []byte, *pb.AuxKeyMessage, float64) int
 
 // Step represents a synchronization step in the protocol
 type Step string

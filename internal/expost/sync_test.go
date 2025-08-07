@@ -9,9 +9,6 @@ import (
 type delayedSync struct{ delay time.Duration }
 
 func newDelayedSync(d time.Duration) delayedSync {
-	if d == 0 {
-		d = 50 * time.Millisecond
-	}
 	return delayedSync{delay: d}
 }
 

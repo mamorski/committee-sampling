@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 	"go.uber.org/zap"
 )
 
@@ -118,12 +119,13 @@ func (r *RbExp) Verify(
 		)
 	}()
 
-	fTag := func(sid, id string, vk []byte, ch []byte, tag *common.AuxTag) bool {
+	fTag := func(sid, id string, vk []byte, ch []byte, aux *pb.Aux) bool {
 		r.logger.Debug("Filter tag function called",
 			zap.String("sender_id", id),
 			zap.Binary("vk", vk),
 		)
-		return r.rp.Ver(vk, r.weight, ch, tag.PiRP) && r.ffilter(sid, id, vk, ch, tag.AuxKey)
+
+		return r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
 	}
 	auxTag := &common.AuxTag{
 		PiRP:   proof.PiRP,

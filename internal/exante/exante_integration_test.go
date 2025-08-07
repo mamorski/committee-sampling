@@ -14,6 +14,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
 // InMemoryNetwork implements network.Network for integration testing
@@ -145,14 +146,14 @@ func testOracle(data []byte) []byte {
 }
 
 // testGradeFunction provides a grade function for testing
-func testGradeFunction(_ string, vk []byte, ch []byte, _ *common.AuxKey, _ float64) int {
+func testGradeFunction(_ string, vk []byte, ch []byte, _ *pb.AuxKeyMessage, _ float64) int {
 	// Simple grade function that returns different grades based on node ID
 	hash := sha256.Sum256(append(vk, ch...))
 	return int(hash[0]) % 10 // Return grade 0-9
 }
 
 // testFilterFunction provides a filter function for testing
-func testFilterFunction(_, _ string, _ []byte, _ []byte, _ *common.AuxTag) bool {
+func testFilterFunction(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 	return true // Accept all messages for testing
 }
 
@@ -469,7 +470,7 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
 
 	// Create grade function that makes node1 a prover
-	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *common.AuxKey, auxLocal float64) int {
+	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
 		nodeID := string(vk) // Use VK to identify node
 		if nodeID == "node1-vk" {
 			return 5 // High grade, will be a prover (>= d+1 = 4)
