@@ -267,7 +267,7 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 	//    ratioF ≈ 2^λ/(φ+1)
 
 	// 7) Compute the subterm: (Wᵢ − n·ratioF)
-	sub := Wi*100 - float64(n)*ratioF
+	sub := Wi*70 - float64(n)*ratioF
 
 	// 8) Multiply by (1/ΔW)
 	term := sub / deltaW

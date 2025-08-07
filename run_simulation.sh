@@ -194,10 +194,10 @@ create_committee_config() {
   },
   "run_time": {
     "session_id": "$SESSION_ID",
-    "lambda": 384,
+    "lambda": 256,
     "weight": 10,
-    "delta_w": 5.0,
-    "committee_size": 6,
+    "delta_w": 2.0,
+    "committee_size": 30,
     "delay": 20
   },
   "synchronization": {
