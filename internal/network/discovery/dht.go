@@ -5,6 +5,7 @@ import (
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/mamorski/committee-sampling/pkg/config"
@@ -13,7 +14,7 @@ import (
 )
 
 type DHTDiscovery struct {
-	host            Host
+	host            host.Host
 	dht             *dht.IpfsDHT
 	config          config.Discovery
 	discoveredPeers chan peer.AddrInfo
@@ -22,10 +23,10 @@ type DHTDiscovery struct {
 	logger          *zap.Logger
 }
 
-func NewDHTDiscovery(host Host, config config.Discovery, logger *zap.Logger) *DHTDiscovery {
+func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger) *DHTDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DHTDiscovery{
-		host:            host,
+		host:            h,
 		config:          config,
 		discoveredPeers: make(chan peer.AddrInfo),
 		ctx:             ctx,

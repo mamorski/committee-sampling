@@ -103,7 +103,7 @@ var (
 			Name: "exante_messages_received_total",
 			Help: "Total number of messages received by ExAnte handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 
 	exanteMessagesValid = promauto.NewCounterVec(
@@ -111,7 +111,7 @@ var (
 			Name: "exante_messages_valid_total",
 			Help: "Total number of valid messages processed by ExAnte handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 )
 
@@ -372,7 +372,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	nodeID := e.network.GetNodeID()
 
 	// Increment total messages received metric
-	exanteMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante").Inc()
+	exanteMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante", e.sid).Inc()
 
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
@@ -401,7 +401,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	)
 
 	// Increment valid messages metric - message passed all validation checks
-	exanteMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante").Inc()
+	exanteMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), "exante", e.sid).Inc()
 
 	e.messages[round] = append(e.messages[round], &msg)
 

@@ -106,3 +106,8 @@ linters:
           disabled: true
         - name: unused-parameter
         - name: unused-receiver
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

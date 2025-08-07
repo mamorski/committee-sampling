@@ -28,32 +28,56 @@ func (s SyncType) String() string {
 type Config struct {
 	Network         Network         `mapstructure:"network"`
 	Graph           Graph           `mapstructure:"graph"`
-	RunTime         RunTimeConfig   `mapstructure:"run_time"`        // Runtime configuration for the protocol
+	Committee       Committee       `mapstructure:"committee"`       // Committee configuration for the protocol
 	Synchronization Synchronization `mapstructure:"synchronization"` // Configuration for the synchronization protocol
 	Logger          Logger          `mapstructure:"logger"`          // Configuration for the logger
+	Metrics         Metrics         `mapstructure:"metrics"`         // Configuration for metrics collection
 }
 
 type Logger struct {
 	Level string `mapstructure:"level"`
 }
 
+type Metrics struct {
+	Enabled      bool          `mapstructure:"enabled"`       // Enable metrics collection
+	PushGateway  PushGateway   `mapstructure:"push_gateway"`  // Push gateway configuration
+	HTTPServer   HTTPServer    `mapstructure:"http_server"`   // HTTP server for /metrics endpoint
+	FileExport   FileExport    `mapstructure:"file_export"`   // File export configuration
+	PushInterval time.Duration `mapstructure:"push_interval"` // Interval for pushing metrics
+	JobName      string        `mapstructure:"job_name"`      // Job name for metrics
+	InstanceName string        `mapstructure:"instance_name"` // Instance name for metrics
+}
+
+type PushGateway struct {
+	Enabled  bool   `mapstructure:"enabled"`  // Enable push gateway
+	URL      string `mapstructure:"url"`      // Push gateway URL
+	Username string `mapstructure:"username"` // Basic auth username (optional)
+	Password string `mapstructure:"password"` // Basic auth password (optional)
+}
+
+type HTTPServer struct {
+	Enabled bool   `mapstructure:"enabled"` // Enable HTTP metrics server
+	Port    int    `mapstructure:"port"`    // Port for HTTP metrics server
+	Path    string `mapstructure:"path"`    // Path for metrics endpoint (default: /metrics)
+}
+
+type FileExport struct {
+	Enabled   bool   `mapstructure:"enabled"`   // Enable file export
+	Directory string `mapstructure:"directory"` // Directory to save metrics files
+	Format    string `mapstructure:"format"`    // Export format (prometheus, json, csv)
+}
+
 type Network struct {
-	ListenPort        int           `mapstructure:"listen_port"`         // Port to listen for incoming connections
-	MaxOutboundDegree int           `mapstructure:"max_outbound_degree"` // Maximum number of outbound connections
-	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`  // Interval for heartbeat messages
-	ConnectTimeout    time.Duration `mapstructure:"connect_timeout"`     // Timeout for establishing connections
-	DiscoveryConfig   Discovery     `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
-	Topic             string        `mapstructure:"topic"`               // Topic for the synchronization protocol
-	FindPeersTimeout  time.Duration `mapstructure:"find_peers_timeout"`  // Timeout for finding peers
+	ListenPort        int       `mapstructure:"listen_port"`         // Port to listen for incoming connections
+	MaxOutboundDegree int       `mapstructure:"max_outbound_degree"` // Maximum number of outbound connections
+	DiscoveryConfig   Discovery `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
 
 }
 
 type Discovery struct {
-	DiscoveryType  string        `mapstructure:"discovery_type"`  // "dht" or "mdns"
 	ProtocolID     string        `mapstructure:"protocol_id"`     // Protocol ID for the discovery service
 	Interval       time.Duration `mapstructure:"interval"`        // Interval for discovery messages
 	BootstrapPeers []string      `mapstructure:"bootstrap_peers"` // DHT specific config
-	ServiceTag     string        `mapstructure:"service_tag"`     // mDNS specific config
 }
 
 type Graph struct {
@@ -61,10 +85,11 @@ type Graph struct {
 	GradingLevels int `mapstructure:"grading_levels"` // Grading levels for the graph
 }
 
-type RunTimeConfig struct {
+type Committee struct {
 	SessionID     string  `mapstructure:"session_id"`     // Unique identifier for the protocol session
 	Lambda        int     `mapstructure:"lambda"`         // Security parameter for VRF and VDF
-	Weight        float64 `mapstructure:"weight"`         // Threshold for weight in the protocol
+	Weight        float64 `mapstructure:"weight"`         // Resource weight per party
+	TotalW        float64 `mapstructure:"total_w"`        // Total weight of the committee
 	DeltaW        float64 `mapstructure:"delta_w"`        // Acceptable weight deviation
 	CommitteeSize int     `mapstructure:"committee_size"` // Size of the committee to be formed
 	Delay         int     `mapstructure:"delay"`          // Delay for the VDF in seconds
@@ -78,8 +103,6 @@ type Synchronization struct {
 	BuildingGraphTimeout time.Duration `mapstructure:"building_graph_timeout"` // Timeout for building the network graph
 	StartTime            int64         `mapstructure:"start_time"`             // Start time as Unix timestamp UTC
 	TimeServer           string        `mapstructure:"time_server"`            // NTP server for time synchronization
-	CertificatePath      string        `mapstructure:"certificate_path"`       // Path to certificate file containing public key
-	Topic                string        `mapstructure:"topic"`                  // Topic for sync messages
 }
 
 func Load(configPath string) (*Config, error) {

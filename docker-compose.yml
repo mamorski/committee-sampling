@@ -34,6 +34,16 @@ services:
       - '--storage.tsdb.path=/prometheus'
     profiles:
       - monitoring
+    depends_on:
+      - pushgateway
+
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    ports:
+      - "9091:9091"
+    profiles:
+      - monitoring
 
   grafana:
     image: grafana/grafana:latest
@@ -46,6 +56,8 @@ services:
       - grafana-storage:/var/lib/grafana
     profiles:
       - monitoring
+    depends_on:
+      - prometheus
 
 volumes:
   grafana-storage: 

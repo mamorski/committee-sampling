@@ -12,7 +12,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -20,7 +19,6 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
@@ -98,15 +96,6 @@ func (m *MockConn) ConnState() network.ConnectionState {
 	return args.Get(0).(network.ConnectionState)
 }
 
-type MockSync struct {
-	mock.Mock
-}
-
-func (m *MockSync) WaitForRound(step common.Step, round int) (<-chan struct{}, error) {
-	args := m.Called(step, round)
-	return args.Get(0).(chan struct{}), args.Error(1)
-}
-
 type HostTestSuite struct {
 	suite.Suite
 	mockHost      *MockHost
@@ -142,16 +131,14 @@ func (suite *HostTestSuite) SetupTest() {
 	}
 
 	suite.node = &P2PNode{
-		host:              suite.mockHost,
-		ctx:               suite.ctx,
-		cancel:            suite.cancel,
-		logger:            suite.logger,
-		discovery:         suite.mockDiscovery,
-		maxOutbound:       5,
-		heartbeatInterval: time.Second,
-		key:               suite.testPrivKey,
-		findPeersTimeout:  10 * time.Second,
-		neighbors:         make(map[peer.ID]peer.AddrInfo),
+		host:        suite.mockHost,
+		ctx:         suite.ctx,
+		cancel:      suite.cancel,
+		logger:      suite.logger,
+		discovery:   suite.mockDiscovery,
+		maxOutbound: 5,
+		key:         suite.testPrivKey,
+		neighbors:   make(map[peer.ID]peer.AddrInfo),
 	}
 }
 
@@ -746,62 +733,6 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
 
-}
-
-func (suite *HostTestSuite) TestNewWithMDNS() {
-	ctx := context.Background()
-	logger := zap.NewNop()
-
-	cfg := config.Network{
-		ListenPort:        8080,
-		MaxOutboundDegree: 10,
-		HeartbeatInterval: 30 * time.Second,
-		ConnectTimeout:    5 * time.Second,
-		FindPeersTimeout:  15 * time.Second,
-		DiscoveryConfig: config.Discovery{
-			DiscoveryType: "mdns",
-			ProtocolID:    "committee-sampling",
-			Interval:      10 * time.Second,
-			ServiceTag:    "committee-sampling-mdns",
-		},
-	}
-
-	sync := &MockSync{}
-	ch0 := make(chan struct{})
-	ch1 := make(chan struct{})
-	sync.On("WaitForRound", mock.Anything, 0).Return(ch0, nil)
-	sync.On("WaitForRound", mock.Anything, 1).Return(ch1, nil)
-
-	node, err := New(ctx, cfg, logger, sync)
-
-	ch0 <- struct{}{}
-	ch1 <- struct{}{}
-
-	suite.NoError(err)
-	suite.NotNil(node)
-
-	// Verify node properties
-	suite.NotNil(node.host)
-	suite.NotNil(node.ctx)
-	suite.NotNil(node.cancel)
-	suite.NotNil(node.logger)
-	suite.NotNil(node.discovery)
-	suite.NotNil(node.key)
-	suite.Equal(cfg.MaxOutboundDegree, node.maxOutbound)
-	suite.Equal(cfg.HeartbeatInterval, node.heartbeatInterval)
-	suite.Equal(0, len(node.neighbors)) // No neighbors initially
-
-	// Verify node ID is valid
-	nodeID := node.GetNodeID()
-	suite.NotEmpty(nodeID)
-
-	// Verify discovery is working by checking the channel exists
-	discoveredPeers := node.discovery.DiscoveredPeers()
-	suite.NotNil(discoveredPeers)
-
-	// Clean up
-	err = node.Close()
-	suite.NoError(err)
 }
 
 func TestHostSuite(t *testing.T) {

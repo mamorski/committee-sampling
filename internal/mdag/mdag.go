@@ -27,7 +27,7 @@ var (
 			Name: "mdag_messages_received_total",
 			Help: "Total number of messages received by MDAG handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 
 	mdagMessagesValid = promauto.NewCounterVec(
@@ -35,7 +35,7 @@ var (
 			Name: "mdag_messages_valid_total",
 			Help: "Total number of valid messages processed by MDAG handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 )
 
@@ -257,7 +257,7 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	nodeID := m.network.GetNodeID()
 
 	// Increment total messages received metric
-	mdagMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType).Inc()
+	mdagMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType, m.sessionID).Inc()
 
 	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
@@ -282,7 +282,7 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.mu.Unlock()
 
 	// Increment valid messages metric - message passed all validation checks
-	mdagMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType).Inc()
+	mdagMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType, m.sessionID).Inc()
 
 	m.logger.Debug("Received message",
 		zap.String("from", from.String()),

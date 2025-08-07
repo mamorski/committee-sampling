@@ -2,25 +2,21 @@
   "network": {
     "listen_port": 8080,
     "max_outbound_degree": 10,
-    "heartbeat_interval": "30s",
-    "connect_timeout": "10s",
-    "topic": "committee-sampling",
     "discovery_config": {
-      "discovery_type": "mdns",
       "protocol_id": "/committee-sampling/1.0.0",
       "interval": "5s",
-      "bootstrap_peers": [],
-      "service_tag": "committee-sampling-stg"
+      "bootstrap_peers": []
     }
   },
   "graph": {
     "diameter": 3,
     "grading_levels": 5
   },
-  "run_time": {
+  "committee": {
     "session_id": "aef07cc6-b08c-48b0-9dbf-6043f593c1d6",
     "lambda": 256,
     "weight": 10,
+    "total_wight": 1000,
     "delta_w": 2.0,
     "committee_size": 5,
     "delay": 20
@@ -32,8 +28,6 @@
     "mdag_round_timeout": "5s",
     "building_graph_timeout": "30s",
     "start_time": 1748359139,
-    "time_server": "time.google.com",
-    "certificate_path": "",
-    "topic": "sync-topic"
+    "time_server": "time.google.com"
   }
 }
