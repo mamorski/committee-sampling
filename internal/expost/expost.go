@@ -110,7 +110,7 @@ var (
 			Name: "expost_messages_received_total",
 			Help: "Total number of messages received by ExPost handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 
 	expostMessagesValid = promauto.NewCounterVec(
@@ -118,7 +118,7 @@ var (
 			Name: "expost_messages_valid_total",
 			Help: "Total number of valid messages processed by ExPost handleMessage",
 		},
-		[]string{"node_id", "round", "protocol"},
+		[]string{"node_id", "round", "protocol", "sid"},
 	)
 )
 
@@ -542,7 +542,7 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	round := int(msg.Round)
 
 	// Increment total messages received metric
-	expostMessagesTotal.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost").Inc()
+	expostMessagesTotal.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost", e.sid).Inc()
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
@@ -586,7 +586,7 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	)
 
 	// Increment valid messages metric - message passed all validation checks
-	expostMessagesValid.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost").Inc()
+	expostMessagesValid.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost", e.sid).Inc()
 
 	e.messages[round] = append(e.messages[round], &msg)
 	return nil

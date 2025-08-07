@@ -99,7 +99,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		return true
 	}
 
-	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf) , ϕ(vrf) , π(vrf) ), Wi),
+	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf), ϕ(vrf), π(vrf) ), Wi),
 	// parameterized by a "weight disagreement" bound ∆W computes gi ← d + 1 − (Wi − n · 2^λ/ ϕ(vrf)+1) · 1 / ∆W
 	// and returns grade min {d + 1, ⌊g⌋}.
 	gradeF := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, weight float64) int {
@@ -108,8 +108,15 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			return 0
 		}
 
-		g, err := computeGrade(cfg.Graph.GradingLevels, cfg.RunTime.CommitteeSize, cfg.RunTime.Lambda, weight, cfg.RunTime.DeltaW,
-			auxKey.PhiVrf, logger.Named("GradeFunction"))
+		g, err := computeGrade(
+			cfg.Graph.GradingLevels,
+			cfg.Committee.CommitteeSize,
+			cfg.Committee.Lambda,
+			weight,
+			cfg.Committee.DeltaW,
+			auxKey.PhiVrf,
+			logger.Named("GradeFunction"),
+		)
 		if err != nil {
 			logger.Warn("Failed to compute grade",
 				zap.String("sid", sid),
@@ -131,7 +138,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 
 	mdagExAnte := mdag.New(
 		cfg.Graph.Diameter*cfg.Graph.GradingLevels,
-		cfg.RunTime.SessionID,
+		cfg.Committee.SessionID,
 		Oracle,
 		node,
 		sync,
@@ -142,7 +149,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 
 	mdagExPost := mdag.New(
 		cfg.Graph.Diameter*cfg.Graph.GradingLevels,
-		cfg.RunTime.SessionID,
+		cfg.Committee.SessionID,
 		Oracle,
 		node,
 		sync,
@@ -154,7 +161,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	exAnte := exante.New(
 		node,
 		mdagExAnte,
-		cfg.RunTime.SessionID,
+		cfg.Committee.SessionID,
 		sync,
 		cfg.Graph.GradingLevels,
 		cfg.Graph.Diameter,
@@ -165,18 +172,18 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	exPost := expost.New(
 		node,
 		mdagExPost,
-		cfg.RunTime.SessionID,
+		cfg.Committee.SessionID,
 		nil,
 		sync,
 		cfg.Graph.GradingLevels,
 		cfg.Graph.Diameter,
-		cfg.RunTime.Lambda,
+		cfg.Committee.Lambda,
 		gradeF,
 		logger,
 	)
 
 	rp := resourceproof.New(logger)
-	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.RunTime.Weight, logger)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, logger)
 
 	election := gce.New(logger)
 
@@ -200,12 +207,13 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 }
 
 func (b *Bootstrap) Run() error {
-	state, err := b.GCE.Initialize(b.id, b.Config.RunTime.SessionID, b.VRF, b.RbExp, b.VDF, b.Config.RunTime.Delay, b.Config.RunTime.Lambda)
+	state, err :=
+		b.GCE.Initialize(b.id, b.Config.Committee.SessionID, b.VRF, b.RbExp, b.VDF, b.Config.Committee.Delay, b.Config.Committee.Lambda)
 	if err != nil {
 		return fmt.Errorf("failed to initialize GCE: %w", err)
 	}
 
-	committee, err := b.GCE.CommitteeElection(b.Config.RunTime.SessionID, state, b.Config.RunTime.Weight, b.VRF, b.RbExp)
+	committee, err := b.GCE.CommitteeElection(b.Config.Committee.SessionID, state, b.Config.Committee.TotalW, b.VRF, b.RbExp)
 	if err != nil {
 		return fmt.Errorf("failed to perform committee election: %w", err)
 	}
@@ -227,12 +235,12 @@ func (b *Bootstrap) Run() error {
 //	return min{ d+1, floor(gᵢ) }.
 //
 // Inputs:
-//   - d         : integer "d".
-//   - Wi        : float64 (Wᵢ).
-//   - n         : integer n.
-//   - beta      : []byte (VRF output, interpreted as a big‐endian integer φ).
-//   - deltaW    : float64 (ΔW, must be ≠ 0).
-//   - lambda    : integer λ (bit‐length for 2^λ).
+//   - d: integer "d".
+//   - Wi: float64 (Wᵢ).
+//   - n: integer n.
+//   - beta: []byte (VRF output, interpreted as a big‐endian integer φ).
+//   - deltaW: float64 (ΔW, must be ≠ 0).
+//   - lambda: integer λ (bit‐length for 2^λ).
 //
 // Returns:
 //   - int: ⌊gᵢ⌋ clamped to ≤ (d+1).
@@ -262,12 +270,12 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 	numerator := new(big.Float).SetInt(twoToLambdaInt)
 	denominator := new(big.Float).SetInt(phiPlusOne)
 
-	// 6) Compute ratio = 2^λ / (φ + 1) as big.Float, then to float64
+	// 6) Compute a ratio = 2^λ / (φ + 1) as big.Float, then to float64
 	ratioF, _ := new(big.Float).Quo(numerator, denominator).Float64()
 	//    ratioF ≈ 2^λ/(φ+1)
 
 	// 7) Compute the subterm: (Wᵢ − n·ratioF)
-	sub := Wi*70 - float64(n)*ratioF
+	sub := Wi - float64(n)*ratioF
 
 	// 8) Multiply by (1/ΔW)
 	term := sub / deltaW

@@ -176,29 +176,24 @@ create_committee_config() {
   "network": {
     "listen_port": 0,
     "max_outbound_degree": $MAX_OUTBOUND_DEGREE,
-    "heartbeat_interval": "30s",
-    "connect_timeout": "20s",
-    "topic": "committee-sampling",
-    "find_peers_timeout": "2m",
     "discovery_config": {
-      "discovery_type": "dht",
       "protocol_id": "/committee-sampling/1.0.0",
       "interval": "5s",
-      "bootstrap_peers": ["$BOOTSTRAP_ADDRESS"],
-      "service_tag": ""
+      "bootstrap_peers": ["$BOOTSTRAP_ADDRESS"]
     }
   },
   "graph": {
     "diameter": $DIAMETER,
     "grading_levels": 5
   },
-  "run_time": {
+  "committee": {
     "session_id": "$SESSION_ID",
     "lambda": 256,
     "weight": 10,
     "delta_w": 2.0,
     "committee_size": 30,
-    "delay": 20
+    "delay": 20,
+    "factor": 70
   },
   "synchronization": {
     "type": 1,
@@ -207,12 +202,26 @@ create_committee_config() {
     "mdag_round_timeout": "5s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
-    "time_server": "time.google.com",
-    "certificate_path": "/home/igor/repos/committee-sampling-server/certs/sync-sender.crt",
-    "topic": "sync-topic"
+    "time_server": "time.google.com"
   },
   "logger": {
     "level": "$LOG_LEVEL"
+  },
+  "metrics": {
+    "enabled": true,
+    "push_gateway": {
+      "enabled": false,
+      "url": "http://localhost:9091"
+    },
+    "http_server": {
+      "enabled": false,
+      "port": 0,
+      "path": "/metrics"
+    },
+
+    "push_interval": "30s",
+    "job_name": "committee-sampling-simulation",
+    "instance_name": ""
   }
 }
 EOF

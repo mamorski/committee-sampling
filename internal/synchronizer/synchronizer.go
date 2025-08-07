@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/beevik/ntp"
+	"go.uber.org/zap"
+
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/pkg/config"
-	"go.uber.org/zap"
 )
 
 var AllSteps = []common.Step{common.Network, common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
@@ -170,7 +171,7 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + 1*time.Minute)
 	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + 1*time.Minute)
 	exPostVerifyTime := exAnteMDAGTime.Add(
-		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.RunTime.Delay)*time.Second + 1*time.Minute)
+		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.Committee.Delay)*time.Second + 1*time.Minute)
 
 	return &StartTimes{
 		StartBuildingNetwork: startTime,

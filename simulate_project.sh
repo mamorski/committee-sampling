@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-NUM_NODES=100
+NUM_NODES=30
 BASE_PORT=8000
 SESSION_ID="test-session-$(date +%s)"
 LOGS_DIR="./logs"
@@ -80,6 +80,7 @@ cleanup() {
         echo "  - Check node logs: ls $BACKUP_DIR/"
         echo "  - Monitor peer discovery: grep 'Attempting to connect' $BACKUP_DIR/node-*-log.log"
         echo "  - Check neighbor connections: grep 'Successfully added neighbor' $BACKUP_DIR/node-*-log.log"
+
     fi
     
     # Clean up temporary configs and logs
@@ -106,29 +107,24 @@ create_config() {
   "network": {
     "listen_port": 0,
     "max_outbound_degree": 4,
-    "heartbeat_interval": "30s",
-    "connect_timeout": "20s",
-    "topic": "committee-sampling",
-    "find_peers_timeout": "2m",
           "discovery_config": {
-        "discovery_type": "dht",
         "protocol_id": "/committee-sampling/1.0.0",
         "interval": "5s",
-        "bootstrap_peers": ["$BOOTSTRAP_ADDRESS"],
-        "service_tag": ""
+        "bootstrap_peers": ["$BOOTSTRAP_ADDRESS"]
       }
   },
   "graph": {
     "diameter": 4,
     "grading_levels": 5
   },
-  "run_time": {
+  "committee": {
     "session_id": "$SESSION_ID",
     "lambda": 384,
     "weight": 10,
     "delta_w": 3.0,
     "committee_size": 4,
-    "delay": 20
+    "delay": 20,
+    "factor": 70
   },
   "synchronization": {
     "type": 1,
@@ -137,12 +133,26 @@ create_config() {
     "mdag_round_timeout": "10s",
     "start_time": $(($(date +%s) + 60)),
     "building_graph_timeout": "1m",
-    "time_server": "time.google.com",
-    "certificate_path": "/home/igor/repos/committee-sampling-server/certs/sync-sender.crt",
-    "topic": "sync-topic"
+    "time_server": "time.google.com"
   },
   "logger": {
     "level": "info"
+  },
+  "metrics": {
+    "enabled": true,
+    "push_gateway": {
+      "enabled": false,
+      "url": "http://localhost:9091"
+    },
+    "http_server": {
+      "enabled": false,
+      "port": 0,
+      "path": "/metrics"
+    },
+
+    "push_interval": "30s",
+    "job_name": "committee-sampling-simulation",
+    "instance_name": ""
   }
 }
 EOF
@@ -230,6 +240,7 @@ echo "Useful commands:"
 echo "- Monitor node logs: tail -f $LOGS_DIR/node-1-log.log"
 echo "- Monitor all node logs: tail -f $LOGS_DIR/*.log"
 echo "- Monitor bootstrap server: tail -f bootstrap.log"
+
 echo "- Check running processes: ps aux | grep committee-sampling"
 echo "- Stop all nodes: Press Ctrl+C"
 echo ""

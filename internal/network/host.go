@@ -7,7 +7,6 @@ import (
 	"io"
 	rnd "math/rand/v2"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -61,9 +60,7 @@ type P2PNode struct {
 	potentialNeighbors sync.Map                  // Stores discovered peers before network building
 	discovery          discovery.PeerDiscovery
 	maxOutbound        int
-	heartbeatInterval  time.Duration
 	key                crypto.PrivKey
-	findPeersTimeout   time.Duration
 	stopReceivingPeers bool
 	sync               common.Synchronizer
 	mu                 sync.Mutex
@@ -99,12 +96,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	}
 
 	// Create d service
-	d, err := discovery.NewDiscovery(h, cfg.DiscoveryConfig, logger)
-	if err != nil {
-		_ = h.Close()
-		cancel()
-		return nil, fmt.Errorf("failed to create d service: %w", err)
-	}
+	d := discovery.NewDHTDiscovery(h, cfg.DiscoveryConfig, logger)
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
 	node := &P2PNode{
@@ -112,12 +104,10 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		ctx:                c,
 		cancel:             cancel,
 		maxOutbound:        cfg.MaxOutboundDegree,
-		heartbeatInterval:  cfg.HeartbeatInterval,
 		discovery:          d,
 		logger:             logger.Named("network"),
 		neighbors:          make(map[peer.ID]peer.AddrInfo),
 		key:                priv,
-		findPeersTimeout:   cfg.FindPeersTimeout,
 		stopReceivingPeers: false,
 		sync:               synchronizer,
 	}
@@ -246,9 +236,7 @@ func (n *P2PNode) graphBuilder() {
 func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
 	ch := n.discovery.DiscoveredPeers()
 
-	n.logger.Info("Starting peer discovery handler - collecting potential neighbors",
-		zap.Duration("timeout", n.findPeersTimeout),
-	)
+	n.logger.Info("Starting peer discovery handler - collecting potential neighbors")
 
 	for {
 		select {

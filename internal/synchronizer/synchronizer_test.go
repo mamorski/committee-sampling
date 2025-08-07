@@ -34,7 +34,6 @@ func (suite *SynchronizerTestSuite) SetupTest() {
 			Type:                 config.TimeSync,
 			StartTime:            time.Now().Add(100 * time.Millisecond).Unix(),
 			TimeServer:           "pool.ntp.org",
-			Topic:                "sync-topic",
 			BuildingGraphTimeout: time.Second,
 			MDAGRoundTimeout:     time.Second,
 			ExPostRoundTimeout:   time.Second,
