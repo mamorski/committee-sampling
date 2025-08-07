@@ -42,7 +42,6 @@ type Metrics struct {
 	Enabled      bool          `mapstructure:"enabled"`       // Enable metrics collection
 	PushGateway  PushGateway   `mapstructure:"push_gateway"`  // Push gateway configuration
 	HTTPServer   HTTPServer    `mapstructure:"http_server"`   // HTTP server for /metrics endpoint
-	FileExport   FileExport    `mapstructure:"file_export"`   // File export configuration
 	PushInterval time.Duration `mapstructure:"push_interval"` // Interval for pushing metrics
 	JobName      string        `mapstructure:"job_name"`      // Job name for metrics
 	InstanceName string        `mapstructure:"instance_name"` // Instance name for metrics
@@ -59,12 +58,6 @@ type HTTPServer struct {
 	Enabled bool   `mapstructure:"enabled"` // Enable HTTP metrics server
 	Port    int    `mapstructure:"port"`    // Port for HTTP metrics server
 	Path    string `mapstructure:"path"`    // Path for metrics endpoint (default: /metrics)
-}
-
-type FileExport struct {
-	Enabled   bool   `mapstructure:"enabled"`   // Enable file export
-	Directory string `mapstructure:"directory"` // Directory to save metrics files
-	Format    string `mapstructure:"format"`    // Export format (prometheus, json, csv)
 }
 
 type Network struct {

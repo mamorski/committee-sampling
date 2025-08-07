@@ -52,8 +52,9 @@ func main() {
 		panic(err)
 	}
 
-	// Start metrics collection
-	if err := metricsCollector.Start(); err != nil {
+	// Start a metrics collection
+	err = metricsCollector.Start()
+	if err != nil {
 		panic(err)
 	}
 

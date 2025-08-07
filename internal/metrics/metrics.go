@@ -4,18 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/push"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
 	"go.uber.org/zap"
 )
 
@@ -67,14 +62,6 @@ func New(ctx context.Context, cfg *config.Metrics, logger *zap.Logger, nodeID, s
 		if err := mc.setupHTTPServer(); err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to setup HTTP server: %w", err)
-		}
-	}
-
-	// Set up file export if enabled
-	if cfg.FileExport.Enabled {
-		if err := mc.setupFileExport(); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to setup file export: %w", err)
 		}
 	}
 
@@ -144,30 +131,6 @@ func (mc *Collector) setupHTTPServer() error {
 	return nil
 }
 
-// setupFileExport configures file export for metrics
-func (mc *Collector) setupFileExport() error {
-	if mc.cfg.FileExport.Directory == "" {
-		return fmt.Errorf("file export directory is required when file export is enabled")
-	}
-
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(mc.cfg.FileExport.Directory, 0755); err != nil {
-		return fmt.Errorf("failed to create metrics directory: %w", err)
-	}
-
-	format := mc.cfg.FileExport.Format
-	if format == "" {
-		format = "prometheus" // Default format
-	}
-
-	mc.logger.Info("File export configured",
-		zap.String("directory", mc.cfg.FileExport.Directory),
-		zap.String("format", format),
-	)
-
-	return nil
-}
-
 // Start begins the metrics collection
 func (mc *Collector) Start() error {
 	if !mc.cfg.Enabled {
@@ -189,11 +152,6 @@ func (mc *Collector) Start() error {
 	// Start the push gateway goroutine if enabled
 	if mc.cfg.PushGateway.Enabled && mc.pusher != nil {
 		go mc.pushMetricsLoop()
-	}
-
-	// Start file export loop if enabled
-	if mc.cfg.FileExport.Enabled {
-		go mc.exportMetricsLoop()
 	}
 
 	return nil
@@ -248,164 +206,6 @@ func (mc *Collector) pushMetrics() error {
 	}
 
 	mc.logger.Debug("Successfully pushed metrics")
-	return nil
-}
-
-// exportMetricsLoop exports metrics to files at regular intervals
-func (mc *Collector) exportMetricsLoop() {
-	interval := mc.cfg.PushInterval
-	if interval == 0 {
-		interval = 30 * time.Second // Default to 30 seconds
-	}
-
-	mc.logger.Info("Starting metrics file export loop",
-		zap.Duration("interval", interval),
-	)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Export initial metrics
-	if err := mc.exportMetricsToFile(); err != nil {
-		mc.logger.Error("Failed to export initial metrics", zap.Error(err))
-	}
-
-	for {
-		select {
-		case <-ticker.C:
-			if err := mc.exportMetricsToFile(); err != nil {
-				mc.logger.Error("Failed to export metrics to file", zap.Error(err))
-			}
-		case <-mc.ctx.Done():
-			mc.logger.Info("Stopping metrics file export loop")
-			// Export final metrics before shutting down
-			if err := mc.exportMetricsToFile(); err != nil {
-				mc.logger.Error("Failed to export final metrics", zap.Error(err))
-			}
-			return
-		}
-	}
-}
-
-// exportMetricsToFile exports current metrics to a file
-func (mc *Collector) exportMetricsToFile() error {
-	if mc.cfg.FileExport.Directory == "" {
-		return fmt.Errorf("file export directory not configured")
-	}
-
-	// Gather metrics from registry
-	metricFamilies, err := mc.registry.Gather()
-	if err != nil {
-		return fmt.Errorf("failed to gather metrics: %w", err)
-	}
-
-	format := mc.cfg.FileExport.Format
-	if format == "" {
-		format = "prometheus"
-	}
-
-	var filename string
-	var extension string
-	switch format {
-	case "prometheus":
-		extension = "prom"
-	case "json":
-		extension = "json"
-	case "csv":
-		extension = "csv"
-	default:
-		extension = "prom"
-		format = "prometheus"
-	}
-
-	// Include instance name in filename if available
-	instanceName := mc.cfg.InstanceName
-	if instanceName == "" {
-		instanceName = "node"
-	}
-
-	filename = fmt.Sprintf("metrics_%s_%s.%s", mc.nodeID, mc.sid, extension)
-	filePath := filepath.Join(mc.cfg.FileExport.Directory, filename)
-
-	// Create and write to file
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to create metrics file: %w", err)
-	}
-	defer file.Close()
-
-	switch format {
-	case "prometheus":
-		return mc.writePrometheusFormat(file, metricFamilies)
-	case "json":
-		return mc.writeJSONFormat(file, metricFamilies)
-	case "csv":
-		return mc.writeCSVFormat(file, metricFamilies)
-	default:
-		return mc.writePrometheusFormat(file, metricFamilies)
-	}
-}
-
-// writePrometheusFormat writes metrics in Prometheus exposition format
-func (mc *Collector) writePrometheusFormat(writer io.Writer, metricFamilies []*dto.MetricFamily) error {
-	encoder := expfmt.NewEncoder(writer, expfmt.FmtText)
-	for _, mf := range metricFamilies {
-		if err := encoder.Encode(mf); err != nil {
-			return fmt.Errorf("failed to encode metric family: %w", err)
-		}
-	}
-	mc.logger.Debug("Successfully exported metrics in Prometheus format")
-	return nil
-}
-
-// writeJSONFormat writes metrics in JSON format (simplified)
-func (mc *Collector) writeJSONFormat(writer io.Writer, metricFamilies []*dto.MetricFamily) error {
-	// This is a simple JSON export - you might want to customize this based on your needs
-	_, err := fmt.Fprintf(writer, "{\n  \"timestamp\": \"%s\",\n  \"metrics\": [\n", time.Now().Format(time.RFC3339))
-	if err != nil {
-		return err
-	}
-
-	for i, mf := range metricFamilies {
-		if i > 0 {
-			_, err = fmt.Fprintf(writer, ",\n")
-			if err != nil {
-				return err
-			}
-		}
-		_, err = fmt.Fprintf(writer, "    {\n      \"name\": \"%s\",\n      \"help\": \"%s\",\n      \"type\": \"%s\"\n    }",
-			mf.GetName(), mf.GetHelp(), mf.GetType())
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = fmt.Fprintf(writer, "\n  ]\n}")
-	if err != nil {
-		return err
-	}
-
-	mc.logger.Debug("Successfully exported metrics in JSON format")
-	return nil
-}
-
-// writeCSVFormat writes metrics in CSV format (simplified)
-func (mc *Collector) writeCSVFormat(writer io.Writer, metricFamilies []*dto.MetricFamily) error {
-	_, err := fmt.Fprintf(writer, "timestamp,metric_name,metric_type,help\n")
-	if err != nil {
-		return err
-	}
-
-	timestamp := time.Now().Format(time.RFC3339)
-	for _, mf := range metricFamilies {
-		_, err = fmt.Fprintf(writer, "%s,%s,%s,\"%s\"\n",
-			timestamp, mf.GetName(), mf.GetType(), mf.GetHelp())
-		if err != nil {
-			return err
-		}
-	}
-
-	mc.logger.Debug("Successfully exported metrics in CSV format")
 	return nil
 }
 

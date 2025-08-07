@@ -218,11 +218,7 @@ create_committee_config() {
       "port": 0,
       "path": "/metrics"
     },
-    "file_export": {
-      "enabled": true,
-      "directory": "./metrics-export",
-      "format": "prometheus"
-    },
+
     "push_interval": "30s",
     "job_name": "committee-sampling-simulation",
     "instance_name": ""

@@ -80,7 +80,7 @@ cleanup() {
         echo "  - Check node logs: ls $BACKUP_DIR/"
         echo "  - Monitor peer discovery: grep 'Attempting to connect' $BACKUP_DIR/node-*-log.log"
         echo "  - Check neighbor connections: grep 'Successfully added neighbor' $BACKUP_DIR/node-*-log.log"
-        echo "  - View exported metrics: ls ./metrics-export/"
+
     fi
     
     # Clean up temporary configs and logs
@@ -149,11 +149,7 @@ create_config() {
       "port": 0,
       "path": "/metrics"
     },
-    "file_export": {
-      "enabled": true,
-      "directory": "./metrics-export",
-      "format": "prometheus"
-    },
+
     "push_interval": "30s",
     "job_name": "committee-sampling-simulation",
     "instance_name": ""
@@ -244,7 +240,7 @@ echo "Useful commands:"
 echo "- Monitor node logs: tail -f $LOGS_DIR/node-1-log.log"
 echo "- Monitor all node logs: tail -f $LOGS_DIR/*.log"
 echo "- Monitor bootstrap server: tail -f bootstrap.log"
-echo "- View exported metrics: ls -la ./metrics-export/"
+
 echo "- Check running processes: ps aux | grep committee-sampling"
 echo "- Stop all nodes: Press Ctrl+C"
 echo ""
