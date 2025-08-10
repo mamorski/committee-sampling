@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-    "math/big"
+	"math/big"
 	rnd "math/rand/v2"
 	"sync"
 
@@ -169,25 +169,25 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		snapshot = append(snapshot, ai)
 	}
 	n.mu.Unlock()
-    for _, addrInfo := range snapshot {
-        // simulation: optional probabilistic drop per recipient using crypto-secure RNG (avoid G404)
-        if n.dropOnSend {
-            // draw a uniform float in [0,1) using 53 random bits (float64 mantissa)
-            r, err := rand.Int(rand.Reader, big.NewInt(1<<53))
-            if err == nil {
-                if float64(r.Int64())/float64(1<<53) < n.dropOnSendProbability {
-                    n.logger.Info(
-                        "Simulation: dropped outgoing message",
-                        zap.String("peer_id", addrInfo.ID.String()),
-                        zap.Float64("probability", n.dropOnSendProbability),
-                        zap.String("protocol", protocolID),
-                    )
-                    continue
-                }
-            } else {
-                n.logger.Warn("Simulation: crypto RNG failed; skipping drop decision", zap.Error(err))
-            }
-        }
+	for _, addrInfo := range snapshot {
+		// simulation: optional probabilistic drop per recipient using crypto-secure RNG (avoid G404)
+		if n.dropOnSend {
+			// draw a uniform float in [0,1) using 53 random bits (float64 mantissa)
+			r, err := rand.Int(rand.Reader, big.NewInt(1<<53))
+			if err == nil {
+				if float64(r.Int64())/float64(1<<53) < n.dropOnSendProbability {
+					n.logger.Info(
+						"Simulation: dropped outgoing message",
+						zap.String("peer_id", addrInfo.ID.String()),
+						zap.Float64("probability", n.dropOnSendProbability),
+						zap.String("protocol", protocolID),
+					)
+					continue
+				}
+			} else {
+				n.logger.Warn("Simulation: crypto RNG failed; skipping drop decision", zap.Error(err))
+			}
+		}
 
 		m := &pproto.ProtocolMessage{
 			Payload:     data,
