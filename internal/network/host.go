@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+    "math/big"
 	rnd "math/rand/v2"
 	"sync"
 
@@ -65,9 +66,9 @@ type P2PNode struct {
 	sync                common.Synchronizer
 	mu                  sync.Mutex
 	connectivityRetries int
-    // simulation options
-    dropOnSend            bool
-    dropOnSendProbability float64
+	// simulation options
+	dropOnSend            bool
+	dropOnSendProbability float64
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer) (*P2PNode, error) {
@@ -91,8 +92,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 
 	// Create libp2p h
 	h, err := libp2p.New(
-		libp2p.ListenAddrs(listenAddr),
-		libp2p.Identity(priv),
+		libp2p.ListenAddrs(listenAddr), libp2p.Identity(priv),
 	)
 	if err != nil {
 		cancel()
@@ -120,23 +120,24 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 			}
 			return cfg.ConnectivityRetries
 		}(),
-        dropOnSend:            cfg.DropOnSend,
-        dropOnSendProbability: func() float64 {
-            p := cfg.DropOnSendProbability
-            if p < 0 {
-                p = 0
-            }
-            if p > 1 {
-                p = 1
-            }
-            return p
-        }(),
+		dropOnSend: cfg.DropOnSend,
+		dropOnSendProbability: func() float64 {
+			p := cfg.DropOnSendProbability
+			if p < 0 {
+				p = 0
+			}
+			if p > 1 {
+				p = 1
+			}
+			return p
+		}(),
 	}
 
-    if node.dropOnSend {
-        node.logger.Info("Simulation: drop-on-send enabled",
-            zap.Float64("probability", node.dropOnSendProbability))
-    }
+	if node.dropOnSend {
+		node.logger.Info(
+			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
+		)
+	}
 
 	// Set stream handler
 	h.SetStreamHandler(neighborhoodRequest, node.onNeighborRequest)
@@ -168,14 +169,24 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		snapshot = append(snapshot, ai)
 	}
 	n.mu.Unlock()
-	for _, addrInfo := range snapshot {
-        // simulation: optional probabilistic drop per recipient
-        if n.dropOnSend && rnd.Float64() < n.dropOnSendProbability {
-            n.logger.Info("Simulation: dropped outgoing message",
-                zap.String("peer_id", addrInfo.ID.String()),
-                zap.Float64("probability", n.dropOnSendProbability),
-                zap.String("protocol", protocolID))
-            continue
+    for _, addrInfo := range snapshot {
+        // simulation: optional probabilistic drop per recipient using crypto-secure RNG (avoid G404)
+        if n.dropOnSend {
+            // draw a uniform float in [0,1) using 53 random bits (float64 mantissa)
+            r, err := rand.Int(rand.Reader, big.NewInt(1<<53))
+            if err == nil {
+                if float64(r.Int64())/float64(1<<53) < n.dropOnSendProbability {
+                    n.logger.Info(
+                        "Simulation: dropped outgoing message",
+                        zap.String("peer_id", addrInfo.ID.String()),
+                        zap.Float64("probability", n.dropOnSendProbability),
+                        zap.String("protocol", protocolID),
+                    )
+                    continue
+                }
+            } else {
+                n.logger.Warn("Simulation: crypto RNG failed; skipping drop decision", zap.Error(err))
+            }
         }
 
 		m := &pproto.ProtocolMessage{
@@ -215,31 +226,33 @@ func (n *P2PNode) IsNeighbor(peerID peer.ID) bool {
 }
 
 func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
-	n.host.SetStreamHandler(protocol.ID(protocolID), func(s network.Stream) {
-		data := &pproto.ProtocolMessage{}
-		buf, err := io.ReadAll(s)
-		if err != nil {
-			n.logger.Error("Failed to read message", zap.Error(err))
-			return
-		}
-		_ = s.Close()
+	n.host.SetStreamHandler(
+		protocol.ID(protocolID), func(s network.Stream) {
+			data := &pproto.ProtocolMessage{}
+			buf, err := io.ReadAll(s)
+			if err != nil {
+				n.logger.Error("Failed to read message", zap.Error(err))
+				return
+			}
+			_ = s.Close()
 
-		err = proto.Unmarshal(buf, data)
-		if err != nil {
-			n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
-			return
-		}
+			err = proto.Unmarshal(buf, data)
+			if err != nil {
+				n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
+				return
+			}
 
-		if !n.authenticateMessage(data, data.MessageData) {
-			n.logger.Error("Failed to authenticate message")
-			return
-		}
+			if !n.authenticateMessage(data, data.MessageData) {
+				n.logger.Error("Failed to authenticate message")
+				return
+			}
 
-		err = handler(s.Conn().RemotePeer(), data.Payload)
-		if err != nil {
-			n.logger.Error("Failed to handle message", zap.Error(err))
-		}
-	})
+			err = handler(s.Conn().RemotePeer(), data.Payload)
+			if err != nil {
+				n.logger.Error("Failed to handle message", zap.Error(err))
+			}
+		},
+	)
 }
 
 func (n *P2PNode) GetNodeID() string {
@@ -267,9 +280,8 @@ func (n *P2PNode) graphBuilder() {
 	<-ch
 	n.stopReceivingPeers = true
 	n.logger.Info("Network building phase completed")
-	n.logger.Info("List of neighbors",
-		zap.Int("count", len(n.neighbors)),
-		zap.Strings("neighbors", n.GetNeighbors()),
+	n.logger.Info(
+		"List of neighbors", zap.Int("count", len(n.neighbors)), zap.Strings("neighbors", n.GetNeighbors()),
 	)
 
 }
@@ -294,9 +306,8 @@ func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
 				continue
 			}
 
-			n.logger.Debug("Adding potential neighbor",
-				zap.String("peer_id", pi.ID.String()),
-				zap.Strings("addresses", addrsToStrings(pi.Addrs)),
+			n.logger.Debug(
+				"Adding potential neighbor", zap.String("peer_id", pi.ID.String()), zap.Strings("addresses", addrsToStrings(pi.Addrs)),
 			)
 			n.potentialNeighbors.Store(pi.ID, pi)
 		}
@@ -318,7 +329,8 @@ func (n *P2PNode) onNeighborRequest(s network.Stream) {
 		return
 	}
 
-	n.logger.Debug("Received negotiation request",
+	n.logger.Debug(
+		"Received negotiation request",
 		zap.Any("Id", data.MessageData.Id),
 		zap.String("NodeId", data.MessageData.NodeId),
 		zap.String("peer_id", s.Conn().RemotePeer().String()),
@@ -334,10 +346,12 @@ func (n *P2PNode) onNeighborRequest(s network.Stream) {
 		Success:     true,
 	}
 
-	err = n.addNeighbor(peer.AddrInfo{
-		ID:    s.Conn().RemotePeer(),
-		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
-	})
+	err = n.addNeighbor(
+		peer.AddrInfo{
+			ID:    s.Conn().RemotePeer(),
+			Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+		},
+	)
 	if err != nil {
 		resp.Success = false
 	}
@@ -371,9 +385,8 @@ func (n *P2PNode) onNeighborResponse(s network.Stream) {
 		return
 	}
 
-	n.logger.Debug("Received negotiation response",
-		zap.String("NodeId", data.MessageData.NodeId),
-		zap.Binary("PK", data.MessageData.NodePubKey),
+	n.logger.Debug(
+		"Received negotiation response", zap.String("NodeId", data.MessageData.NodeId), zap.Binary("PK", data.MessageData.NodePubKey),
 	)
 
 	if !n.authenticateMessage(data, data.MessageData) {
@@ -386,10 +399,12 @@ func (n *P2PNode) onNeighborResponse(s network.Stream) {
 		return
 	}
 
-	err = n.addNeighbor(peer.AddrInfo{
-		ID:    s.Conn().RemotePeer(),
-		Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
-	})
+	err = n.addNeighbor(
+		peer.AddrInfo{
+			ID:    s.Conn().RemotePeer(),
+			Addrs: []multiaddr.Multiaddr{s.Conn().RemoteMultiaddr()},
+		},
+	)
 	if err != nil {
 		n.logger.Error("Failed to add neighbor", zap.Error(err))
 	}
@@ -401,7 +416,8 @@ func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
 		return
 	}
 
-	n.logger.Info("Attempting to connect to discovered peer",
+	n.logger.Info(
+		"Attempting to connect to discovered peer",
 		zap.String("peer_id", info.ID.String()),
 		zap.Strings("addresses", addrsToStrings(info.Addrs)),
 		zap.Int("current_neighbors", len(n.neighbors)),
@@ -441,7 +457,8 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		return fmt.Errorf("stopping receiving peers")
 	}
 
-	n.logger.Info("Attempting to add neighbor",
+	n.logger.Info(
+		"Attempting to add neighbor",
 		zap.String("peer_id", addrInfo.ID.String()),
 		zap.Strings("addresses", addrsToStrings(addrInfo.Addrs)),
 		zap.Int("current_neighbors", len(n.neighbors)),
@@ -450,18 +467,16 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 
 	err := n.host.Connect(context.Background(), addrInfo)
 	if err != nil {
-		n.logger.Error("Failed to add to neighbor",
-			zap.String("peer", addrInfo.ID.String()),
-			zap.Error(err),
+		n.logger.Error(
+			"Failed to add to neighbor", zap.String("peer", addrInfo.ID.String()), zap.Error(err),
 		)
 		return err
 	}
 
 	n.neighbors[addrInfo.ID] = addrInfo // Ensure the peer is stored in the map
 
-	n.logger.Info("Successfully added neighbor",
-		zap.String("peer_id", addrInfo.ID.String()),
-		zap.Int("total_neighbors", len(n.neighbors)),
+	n.logger.Info(
+		"Successfully added neighbor", zap.String("peer_id", addrInfo.ID.String()), zap.Int("total_neighbors", len(n.neighbors)),
 	)
 
 	return nil
@@ -477,9 +492,8 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	}
 
 	delete(n.neighbors, peerID)
-	n.logger.Info("Dropped neighbor",
-		zap.String("peer_id", peerID.String()),
-		zap.Int("remaining_neighbors", len(n.neighbors)),
+	n.logger.Info(
+		"Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)),
 	)
 }
 
@@ -490,10 +504,12 @@ func (n *P2PNode) buildNetwork() {
 
 	// Get all potential neighbors
 	var potentialPeers []peer.AddrInfo
-	n.potentialNeighbors.Range(func(key, value any) bool {
-		potentialPeers = append(potentialPeers, value.(peer.AddrInfo))
-		return true
-	})
+	n.potentialNeighbors.Range(
+		func(key, value any) bool {
+			potentialPeers = append(potentialPeers, value.(peer.AddrInfo))
+			return true
+		},
+	)
 
 	if len(potentialPeers) == 0 {
 		n.logger.Warn("No potential neighbors found for network building")
@@ -502,18 +518,20 @@ func (n *P2PNode) buildNetwork() {
 
 	n.logger.Info("Found potential neighbors for network building", zap.Int("count", len(potentialPeers)))
 
-	rnd.Shuffle(len(potentialPeers), func(i, j int) {
-		potentialPeers[i], potentialPeers[j] = potentialPeers[j], potentialPeers[i]
-	})
+	rnd.Shuffle(
+		len(potentialPeers), func(i, j int) {
+			potentialPeers[i], potentialPeers[j] = potentialPeers[j], potentialPeers[i]
+		},
+	)
 
 	connectCount := n.maxOutbound
 	if len(potentialPeers) < connectCount {
 		connectCount = len(potentialPeers)
 	}
 
-	n.logger.Info("Attempting to connect to selected neighbors",
-		zap.Int("selected", connectCount),
-		zap.Int("available", len(potentialPeers)))
+	n.logger.Info(
+		"Attempting to connect to selected neighbors", zap.Int("selected", connectCount), zap.Int("available", len(potentialPeers)),
+	)
 
 	for i := 0; i < connectCount; i++ {
 		go n.sendRequestToNeighbor(potentialPeers[i])
