@@ -58,7 +58,7 @@ func main() {
 		panic(err)
 	}
 
-	b, err := boot.New(ctx, cfg, node, logger, sync)
+	b, err := boot.New(ctx, cfg, node, logger, sync, metricsCollector)
 	if err != nil {
 		panic(err)
 	}

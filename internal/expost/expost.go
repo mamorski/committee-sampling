@@ -27,6 +27,11 @@ const (
 	charset          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
+type MetricCollector interface {
+	// AddCustomMetric registers a custom metric with the collector
+	AddCustomMetric(collector prometheus.Collector) error
+}
+
 // Object pools for protobuf message reuse
 var (
 	timestampMessagePool = sync.Pool{
@@ -164,7 +169,9 @@ func New(
 	diameterBound int,
 	lambda int,
 	gradeFunc common.GradeFunc,
-	logger *zap.Logger) *ExPost {
+	logger *zap.Logger,
+	collector MetricCollector,
+) *ExPost {
 
 	protocolID := expostProtocolID + "/" + sid
 
@@ -188,6 +195,12 @@ func New(
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
+	if err := collector.AddCustomMetric(expostMessagesTotal); err != nil {
+		logger.Warn("Failed to add custom metric", zap.Error(err))
+	}
+	if err := collector.AddCustomMetric(expostMessagesValid); err != nil {
+		logger.Warn("Failed to add custom metric", zap.Error(err))
+	}
 
 	logger.Info("ExPost instance created", zap.String("session_id", sid), zap.Int("d", gradeLevels))
 
@@ -200,7 +213,8 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Generate completed",
+		e.logger.Info(
+			"Generate completed",
 			zap.Duration("elapsed", elapsed),
 		)
 	}()
@@ -235,7 +249,8 @@ func (e *ExPost) Verify(
 	fSigmaExp *common.FSigmaExp,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterTagF) (*common.Committee, error) { //nolint:funlen
+	filterFn common.FilterTagF,
+) (*common.Committee, error) { //nolint:funlen
 
 	e.logger.Info("Verify started")
 	start := time.Now()
@@ -245,7 +260,8 @@ func (e *ExPost) Verify(
 
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Verify completed",
+		e.logger.Info(
+			"Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
 		e.threadPool.Close()
@@ -259,16 +275,20 @@ func (e *ExPost) Verify(
 	challenge := fSigmaExp.Challenge
 	if len(sigma) < e.R {
 		e.isRunning = false
-		e.logger.Warn("Sigma length is less than required rounds",
+		e.logger.Warn(
+			"Sigma length is less than required rounds",
 			zap.Int("expected_rounds", e.R),
-			zap.Int("actual_length", len(sigma)))
+			zap.Int("actual_length", len(sigma)),
+		)
 
 		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), e.R)
 	}
 
-	e.logger.Info("Starting ExPost Verification phase",
+	e.logger.Info(
+		"Starting ExPost Verification phase",
 		zap.String("session_id", session),
-		zap.String("node_id", e.nodeID))
+		zap.String("node_id", e.nodeID),
+	)
 
 	results := &common.Committee{}
 
@@ -286,7 +306,8 @@ func (e *ExPost) Verify(
 	if grade >= (e.d+1) &&
 		filterFn(session, e.nodeID, vk, challenge, auxPb) {
 
-		e.logger.Info("Node is a prover, sending initial message",
+		e.logger.Info(
+			"Node is a prover, sending initial message",
 			zap.Int("grade", grade),
 			zap.Int("d", e.d),
 			zap.Binary("vk", vk),
@@ -343,7 +364,8 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
-		e.logger.Info("ExPost verification round",
+		e.logger.Info(
+			"ExPost verification round",
 			zap.Int("round", r),
 			zap.String("node_id", e.nodeID),
 		)
@@ -358,14 +380,17 @@ func (e *ExPost) Verify(
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
 		for _, msg := range msgs {
-			e.threadPool.Submit(func() {
-				e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results)
-			})
+			e.threadPool.Submit(
+				func() {
+					e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results)
+				},
+			)
 		}
 
 		// Wait for all tasks in this round to complete
 		e.threadPool.Wait()
-		e.logger.Info("Finished processing messages for round",
+		e.logger.Info(
+			"Finished processing messages for round",
 			zap.Int("round", r),
 			zap.Duration("elapsed", time.Since(loopStart)),
 			zap.Int("messages_processed", len(msgs)),
@@ -386,7 +411,8 @@ func (e *ExPost) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 	// Check if we have enough layers in the merkle path
 	// We need layers from R-round+1 to R (inclusive)
 	if len(msg.MerklePath) < r {
-		e.logger.Warn("Invalid Merkle path length",
+		e.logger.Warn(
+			"Invalid Merkle path length",
 			zap.Int("expected", r),
 			zap.Int("actual", len(msg.MerklePath)),
 			zap.String("sender_id", msg.Id),
@@ -395,28 +421,32 @@ func (e *ExPost) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 	}
 
 	if !filterFn(msg.SessionId, msg.Id, msg.VerificationKey, msg.Value, msg.Aux) {
-		e.logger.Warn("Message does not pass filter function",
+		e.logger.Warn(
+			"Message does not pass filter function",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if !(e.gradeFunc(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal) > 0) {
-		e.logger.Warn("Message does not pass grade function",
+		e.logger.Warn(
+			"Message does not pass grade function",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if msg.Value == nil || string(msg.Value) != string(e.mdag.Oracle(msg.MerklePath[len(msg.MerklePath)-1].Row...)) {
-		e.logger.Warn("Message does not pass value check",
+		e.logger.Warn(
+			"Message does not pass value check",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if !e.validateMerklePath(msg.MerklePath, r) {
-		e.logger.Warn("Merkle path validation failed",
+		e.logger.Warn(
+			"Merkle path validation failed",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
@@ -457,28 +487,34 @@ func (e *ExPost) processMessage(
 	auxLocal float64,
 	filterFn common.FilterTagF,
 	r int,
-	results *common.Committee) {
+	results *common.Committee,
+) {
 
 	if e.isMessageValid(msg, auxLocal, filterFn, r) {
 
 		g := min(e.d-r/e.D, e.gradeFunc(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal))
-		e.logger.Debug("Processing valid message", zap.Int("round", r),
+		e.logger.Debug(
+			"Processing valid message", zap.Int("round", r),
 			zap.String("sender_id", msg.Id),
 			zap.Int("round", r),
 			zap.Int("grade", g),
 		)
 		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
-			e.logger.Info("Added to results",
+			e.logger.Info(
+				"Added to results",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
 				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+				zap.Int("grade", g),
+			)
 		} else {
-			e.logger.Debug("Skipping message with lower grade",
+			e.logger.Debug(
+				"Skipping message with lower grade",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
 				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+				zap.Int("grade", g),
+			)
 			return
 		}
 
@@ -518,7 +554,8 @@ func (e *ExPost) processMessage(
 			putState(state)
 		}
 	} else {
-		e.logger.Info("Ignoring invalid message",
+		e.logger.Info(
+			"Ignoring invalid message",
 			zap.Int("round", r),
 			zap.String("sender_id", msg.Id),
 		)
@@ -546,9 +583,11 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
-		e.logger.Warn("Received message with mismatched session id",
+		e.logger.Warn(
+			"Received message with mismatched session id",
 			zap.String("expected", e.sid),
-			zap.String("received", msg.SessionId))
+			zap.String("received", msg.SessionId),
+		)
 
 		return err
 	}
@@ -576,7 +615,8 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Debug("ExPost: Received message",
+	e.logger.Debug(
+		"ExPost: Received message",
 		zap.String("from", from.String()),
 		zap.String("sender_id", msg.Id),
 		zap.Int("round", round),
@@ -606,7 +646,9 @@ func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {
 }
 
 func isValueInState(value []byte, state [][]byte) bool {
-	return slices.ContainsFunc(state, func(s []byte) bool {
-		return slices.Equal(s, value)
-	})
+	return slices.ContainsFunc(
+		state, func(s []byte) bool {
+			return slices.Equal(s, value)
+		},
+	)
 }

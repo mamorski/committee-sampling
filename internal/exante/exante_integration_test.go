@@ -9,6 +9,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 
 	"github.com/mamorski/committee-sampling/internal/common"
@@ -173,16 +174,18 @@ func TestExAnteIntegrationTwoNodes(t *testing.T) {
 	mdagRounds := 5
 	sessionID := "test-integration"
 	mdagSynchronizer := syncMock{}
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 3
 	exanteBigD := 2
 	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
 
 	// Test data
 	vk := []byte("test-verification-key")
@@ -313,18 +316,20 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 	mdagRounds := 4
 	sessionID := "test-three-nodes"
 	mdagSynchronizer := syncMock{}
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
+	mdag3 := mdag.New(mdagRounds, sessionID, testOracle, node3, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
 
 	// Create ExAnte instances - start after MDAG generation completes
 	exanteD := 2
 	exanteBigD := 2
 	exanteSynchronizer := syncMock{}
 
-	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
-	exante3 := New(node3, mdag3, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
+	exante3 := New(node3, mdag3, sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
 
 	// Test data
 	vk := []byte("test-vk-three-nodes")
@@ -453,6 +458,7 @@ func TestExAnteIntegrationThreeNodes(t *testing.T) {
 // nolint:funlen
 func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	logger := zap.NewNop()
+	collector := &CollectorMock{}
 
 	// Create network nodes
 	node1 := NewInMemoryNetwork("node1", []string{"node2"})
@@ -466,8 +472,9 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	mdagRounds := 3
 	sessionID := "test-prover"
 	mdagSynchronizer := syncMock{}
-	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "")
-	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "")
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+	mdag1 := mdag.New(mdagRounds, sessionID, testOracle, node1, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
+	mdag2 := mdag.New(mdagRounds, sessionID, testOracle, node2, mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
 
 	// Create grade function that makes node1 a prover
 	proverGradeFunction := func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, auxLocal float64) int {
@@ -482,9 +489,10 @@ func TestExAnteIntegrationProverBehavior(t *testing.T) {
 	exanteD := 3
 	exanteBigD := 1
 	exanteSynchronizer := syncMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
-	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger)
-	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger)
+	exante1 := New(node1, mdag1, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger, collector)
+	exante2 := New(node2, mdag2, sessionID, exanteSynchronizer, exanteD, exanteBigD, proverGradeFunction, logger, collector)
 
 	// Test data
 	vk1 := []byte("node1-vk")
@@ -635,10 +643,12 @@ func TestExAnteIntegrationLargeNetwork(t *testing.T) {
 	exanteD := 2
 	exanteBigD := 1
 	exanteSynchronizer := syncMock{}
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagSynchronizer, logger, common.ExAnteMDAG, "")
-		exantes[i] = New(nodes[i], mdags[i], sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], mdagSynchronizer, logger, common.ExAnteMDAG, "", collector)
+		exantes[i] = New(nodes[i], mdags[i], sessionID, exanteSynchronizer, exanteD, exanteBigD, testGradeFunction, logger, collector)
 	}
 
 	// Test data

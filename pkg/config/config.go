@@ -48,10 +48,11 @@ type Metrics struct {
 }
 
 type PushGateway struct {
-	Enabled  bool   `mapstructure:"enabled"`  // Enable push gateway
-	URL      string `mapstructure:"url"`      // Push gateway URL
-	Username string `mapstructure:"username"` // Basic auth username (optional)
-	Password string `mapstructure:"password"` // Basic auth password (optional)
+	Enabled      bool   `mapstructure:"enabled"`        // Enable push gateway
+	URL          string `mapstructure:"url"`            // Push gateway URL
+	Username     string `mapstructure:"username"`       // Basic auth username (optional)
+	Password     string `mapstructure:"password"`       // Basic auth password (optional)
+	DeleteOnStop bool   `mapstructure:"delete_on_stop"` // Delete metrics on stop
 }
 
 type HTTPServer struct {
@@ -61,9 +62,11 @@ type HTTPServer struct {
 }
 
 type Network struct {
-	ListenPort        int       `mapstructure:"listen_port"`         // Port to listen for incoming connections
-	MaxOutboundDegree int       `mapstructure:"max_outbound_degree"` // Maximum number of outbound connections
-	DiscoveryConfig   Discovery `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
+	ListenPort          int       `mapstructure:"listen_port"`          // Port to listen for incoming connections
+	MaxOutboundDegree   int       `mapstructure:"max_outbound_degree"`  // Maximum number of outbound connections
+	DiscoveryConfig     Discovery `mapstructure:"discovery_config"`     // Configuration for peer discovery
+	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
+	// default: 3)
 
 }
 
@@ -121,13 +124,14 @@ func Load(configPath string) (*Config, error) {
 	_, _ = fmt.Println("Using config file:", viper.ConfigFileUsed())
 	cfg := &Config{}
 
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			stringToTimeHookFunc(),
-			stringToDurationHookFunc(),
-		),
-		Result: cfg,
-	})
+	decoder, err := mapstructure.NewDecoder(
+		&mapstructure.DecoderConfig{
+			DecodeHook: mapstructure.ComposeDecodeHookFunc(
+				stringToTimeHookFunc(), stringToDurationHookFunc(),
+			),
+			Result: cfg,
+		},
+	)
 	if err != nil {
 		panic(fmt.Sprintf("Error creating decoder: %s", err))
 	}

@@ -52,18 +52,19 @@ type Host interface {
 }
 
 type P2PNode struct {
-	host               Host
-	ctx                context.Context
-	cancel             context.CancelFunc
-	logger             *zap.Logger
-	neighbors          map[peer.ID]peer.AddrInfo // Stores connected peers
-	potentialNeighbors sync.Map                  // Stores discovered peers before network building
-	discovery          discovery.PeerDiscovery
-	maxOutbound        int
-	key                crypto.PrivKey
-	stopReceivingPeers bool
-	sync               common.Synchronizer
-	mu                 sync.Mutex
+	host                Host
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	logger              *zap.Logger
+	neighbors           map[peer.ID]peer.AddrInfo // Stores connected peers
+	potentialNeighbors  sync.Map                  // Stores discovered peers before network building
+	discovery           discovery.PeerDiscovery
+	maxOutbound         int
+	key                 crypto.PrivKey
+	stopReceivingPeers  bool
+	sync                common.Synchronizer
+	mu                  sync.Mutex
+	connectivityRetries int
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer) (*P2PNode, error) {
@@ -110,6 +111,12 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		key:                priv,
 		stopReceivingPeers: false,
 		sync:               synchronizer,
+		connectivityRetries: func() int {
+			if cfg.ConnectivityRetries <= 0 {
+				return 3
+			}
+			return cfg.ConnectivityRetries
+		}(),
 	}
 
 	// Set stream handler
@@ -135,7 +142,14 @@ func (n *P2PNode) Close() error {
 }
 
 func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
-	for _, addrInfo := range n.neighbors {
+	// snapshot neighbors to avoid concurrent map writes if send() drops neighbors
+	n.mu.Lock()
+	snapshot := make([]peer.AddrInfo, 0, len(n.neighbors))
+	for _, ai := range n.neighbors {
+		snapshot = append(snapshot, ai)
+	}
+	n.mu.Unlock()
+	for _, addrInfo := range snapshot {
 
 		m := &pproto.ProtocolMessage{
 			Payload:     data,

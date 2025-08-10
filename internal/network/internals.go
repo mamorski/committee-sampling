@@ -134,12 +134,15 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	err := n.host.Connect(context.Background(), addrInfo)
 	if err != nil {
 		n.logger.Error("Failed to connect to peer", zap.Error(err))
+		// verify connectivity and drop neighbor if unreachable asynchronously
+		go n.verifyNeighbor(addrInfo.ID)
 		return false
 	}
 
 	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
 		n.logger.Error("Failed to create stream", zap.Error(err))
+		go n.verifyNeighbor(addrInfo.ID)
 		return false
 	}
 
@@ -152,6 +155,7 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	if err != nil {
 		n.logger.Error("Failed to marshal proto message", zap.Error(err))
 		_ = s.Reset()
+		// no connectivity check for marshal failure
 		return false
 	}
 
@@ -159,7 +163,46 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	if err != nil {
 		n.logger.Error("Failed to write message to stream", zap.Error(err))
 		_ = s.Reset()
+		go n.verifyNeighbor(addrInfo.ID)
 		return false
 	}
 	return true
+}
+
+// verifyConnectivity tries to establish a new stream up to connectivityRetries times.
+// Returns true if any attempt succeeds, otherwise false.
+func (n *P2PNode) verifyConnectivity(peerID peer.ID) bool {
+	retries := n.connectivityRetries
+	if retries <= 0 {
+		retries = 3
+	}
+	n.mu.Lock()
+	addrInfo, ok := n.neighbors[peerID]
+	n.mu.Unlock()
+	if !ok {
+		return false
+	}
+	for attempt := 0; attempt < retries; attempt++ {
+		// try to connect and open a lightweight ping-like stream on a well-known protocol
+		// we will use a short context to avoid long blocking
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// attempt connect
+		_ = n.host.Connect(ctx, addrInfo)
+		// attempt stream creation on any protocol we control; using neighborhoodRequest as a cheap check
+		s, err := n.host.NewStream(ctx, peerID, protocol.ID(neighborhoodRequest))
+		if err == nil && s != nil {
+			_ = s.Close()
+			cancel()
+			return true
+		}
+		cancel()
+	}
+	n.logger.Warn("Connectivity verification failed; dropping neighbor", zap.String("peer_id", peerID.String()))
+	return false
+}
+
+func (n *P2PNode) verifyNeighbor(peerID peer.ID) {
+	if !n.verifyConnectivity(peerID) {
+		n.dropNeighbor(peerID)
+	}
 }

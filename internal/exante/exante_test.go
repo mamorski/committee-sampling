@@ -10,12 +10,23 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
+
+type CollectorMock struct {
+	mock.Mock
+}
+
+// AddCustomMetric registers a custom metric with the collector
+func (m *CollectorMock) AddCustomMetric(_ prometheus.Collector) error {
+	args := m.Called()
+	return args.Error(0)
+}
 
 // MockNetwork is a mock implementation of the network.Network interface
 type MockNetwork struct {
@@ -160,6 +171,7 @@ func TestExAnteTestSuite(t *testing.T) {
 func (suite *ExAnteTestSuite) TestNew() {
 	mockNetwork := new(MockNetwork)
 	mockMDAG := new(MockMDAG)
+	mockCollector := new(CollectorMock)
 	logger := zap.NewNop()
 
 	testSID := "test-session"
@@ -173,9 +185,10 @@ func (suite *ExAnteTestSuite) TestNew() {
 
 	// Setup mock expectations
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
+	mockCollector.On("AddCustomMetric", mock.Anything).Twice().Return(nil)
 
 	// Call New function
-	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
+	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger, mockCollector)
 
 	// Verify the instance is properly initialized
 	suite.NotNil(exante)
@@ -196,11 +209,15 @@ func (suite *ExAnteTestSuite) TestGenerate_Success() {
 		{[]byte("state3"), []byte("state4")},
 	}
 
-	suite.mockMDAG.On("Generate", suite.testSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return(expectedState, nil).Once()
+	suite.mockMDAG.On(
+		"Generate", suite.testSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
@@ -231,11 +248,15 @@ func (suite *ExAnteTestSuite) TestGenerate_MDAGGenerationFailure() {
 	testPiRP := []byte("test-pi-rp")
 	expectedError := errors.New("MDAG generation failed")
 
-	suite.mockMDAG.On("Generate", suite.testSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return([][][]byte(nil), expectedError).Once()
+	suite.mockMDAG.On(
+		"Generate", suite.testSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return([][][]byte(nil), expectedError).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
@@ -258,11 +279,15 @@ func (suite *ExAnteTestSuite) TestGenerate_EmptySessionID() {
 		{[]byte("state1")},
 	}
 
-	suite.mockMDAG.On("Generate", newSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return(expectedState, nil).Once()
+	suite.mockMDAG.On(
+		"Generate", newSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return(expectedState, nil).Once()
 	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(newSID, suite.testVK, suite.testChallenge, testPiRP)
@@ -658,7 +683,8 @@ func (suite *ExAnteTestSuite) TestConvertTimestampToBytes() {
 //
 //nolint:unparam
 func createTestTimestampMessage(
-	sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string) *pb.TimestampMessage {
+	sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string,
+) *pb.TimestampMessage {
 
 	return &pb.TimestampMessage{
 		SessionId:       sessionID,

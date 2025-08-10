@@ -21,6 +21,11 @@ import (
 
 const exanteProtocolID = "/exante/1.0.0"
 
+type MetricCollector interface {
+	// AddCustomMetric registers a custom metric with the collector
+	AddCustomMetric(collector prometheus.Collector) error
+}
+
 // Object pools for protobuf message reuse
 var (
 	exanteTimestampMessagePool = sync.Pool{
@@ -146,10 +151,11 @@ func New(
 	mdag MDAG,
 	sid string,
 	synchronizer common.Synchronizer,
-	d int,
-	D int,
+	d int, D int,
 	gradeFunction common.GradeFunc,
-	logger *zap.Logger) *ExAnte {
+	logger *zap.Logger,
+	collector MetricCollector,
+) *ExAnte {
 
 	e := &ExAnte{
 		network:       net,
@@ -168,9 +174,21 @@ func New(
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, sid)
 	net.RegisterHandler(protocolID, e.handleMessage)
 
-	e.logger.Info("ExAnte instance created",
+	err := collector.AddCustomMetric(exanteMessagesTotal)
+	if err != nil {
+		e.logger.Error("Failed to add custom metric", zap.Error(err))
+	}
+
+	err = collector.AddCustomMetric(exanteMessagesValid)
+	if err != nil {
+		e.logger.Error("Failed to add custom metric", zap.Error(err))
+	}
+
+	e.logger.Info(
+		"ExAnte instance created",
 		zap.String("session_id", sid),
-		zap.Int("d", d))
+		zap.Int("d", d),
+	)
 
 	return e
 }
@@ -181,7 +199,8 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []by
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Generate completed",
+		e.logger.Info(
+			"Generate completed",
 			zap.Duration("elapsed", elapsed),
 		)
 	}()
@@ -190,9 +209,11 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []by
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
 	}
 
-	e.logger.Info("Starting ExAnte Generation phase",
+	e.logger.Info(
+		"Starting ExAnte Generation phase",
 		zap.String("session_id", session),
-		zap.String("node_id", e.network.GetNodeID()))
+		zap.String("node_id", e.network.GetNodeID()),
+	)
 
 	state, err := e.mdag.Generate(session, vk, challenge, piRP)
 	e.state = make([][][]byte, len(state))
@@ -214,7 +235,8 @@ func (e *ExAnte) Verify(
 	sigma [][][]byte,
 	auxTag *common.AuxTag,
 	auxLocal float64,
-	filterFn common.FilterTagF) (*common.Committee, error) {
+	filterFn common.FilterTagF,
+) (*common.Committee, error) {
 
 	e.logger.Info("Verify started")
 	start := time.Now()
@@ -224,7 +246,8 @@ func (e *ExAnte) Verify(
 
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Verify completed",
+		e.logger.Info(
+			"Verify completed",
 			zap.Duration("elapsed", elapsed),
 		)
 		e.threadPool.Close()
@@ -237,14 +260,17 @@ func (e *ExAnte) Verify(
 	R := e.d * e.D
 	if len(sigma) < R {
 		e.isRunning = false
-		e.logger.Error("Sigma length is less than required rounds",
+		e.logger.Error(
+			"Sigma length is less than required rounds",
 			zap.Int("expected_rounds", R),
-			zap.Int("actual_length", len(sigma)))
+			zap.Int("actual_length", len(sigma)),
+		)
 
 		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), R)
 	}
 
-	e.logger.Info("Starting ExAnte Verification phase",
+	e.logger.Info(
+		"Starting ExAnte Verification phase",
 		zap.String("session_id", session),
 	)
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
@@ -262,7 +288,8 @@ func (e *ExAnte) Verify(
 	grade := e.gradeFunction(session, vk, auxPb.AuxKey.PhiVrf, auxPb.AuxKey, auxLocal)
 	if grade >= e.d+1 && filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxPb) {
 
-		e.logger.Info("Node is a prover, sending initial message",
+		e.logger.Info(
+			"Node is a prover, sending initial message",
 			zap.Int("grade", grade),
 			zap.Int("d", e.d),
 		)
@@ -331,14 +358,17 @@ func (e *ExAnte) Verify(
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
 		for _, msg := range msgs {
-			e.threadPool.Submit(func() {
-				e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results, protocolID)
-			})
+			e.threadPool.Submit(
+				func() {
+					e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results, protocolID)
+				},
+			)
 		}
 
 		// Wait for all tasks in this round to complete
 		e.threadPool.Wait()
-		e.logger.Info("Finished processing messages for round",
+		e.logger.Info(
+			"Finished processing messages for round",
 			zap.Int("round", r),
 			zap.Duration("elapsed", time.Since(loopStart)),
 			zap.Int("messages_processed", len(msgs)),
@@ -376,22 +406,27 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
-		e.logger.Warn("Received message with mismatched session id",
+		e.logger.Warn(
+			"Received message with mismatched session id",
 			zap.String("expected", e.sid),
-			zap.String("received", msg.SessionId))
+			zap.String("received", msg.SessionId),
+		)
 		return err
 	}
 
 	if !e.network.IsNeighbor(from) {
 		err := errors.New("sender not in neighbors list")
-		e.logger.Warn("Received message from non-neighbor sender",
-			zap.String("sender", from.String()))
+		e.logger.Warn(
+			"Received message from non-neighbor sender",
+			zap.String("sender", from.String()),
+		)
 		return err
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Debug("ExAnte: Received message",
+	e.logger.Debug(
+		"ExAnte: Received message",
 		zap.String("from", from.String()),
 		zap.String("sender_id", msg.Id),
 		zap.Int("round", round),
@@ -411,15 +446,19 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 
 	if len(merklePath) < round {
-		e.logger.Warn("Invalid Merkle path length",
+		e.logger.Warn(
+			"Invalid Merkle path length",
 			zap.Int("expected", round),
-			zap.Int("actual", len(merklePath)))
+			zap.Int("actual", len(merklePath)),
+		)
 		return false
 	}
 	if len(e.state) < round+1 {
-		e.logger.Warn("Invalid state length",
+		e.logger.Warn(
+			"Invalid state length",
 			zap.Int("expected", round),
-			zap.Int("actual", len(e.state)))
+			zap.Int("actual", len(e.state)),
+		)
 		return false
 	}
 
@@ -441,25 +480,32 @@ func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 	}
 
 	if !filterFn(msg.SessionId, msg.Id, msg.VerificationKey, msg.Value, msg.Aux) {
-		e.logger.Warn("Message filtered out by filter function",
+		e.logger.Warn(
+			"Message filtered out by filter function",
 			zap.String("session_id", msg.SessionId),
 		)
 		return false
 	}
 	if !(e.gradeFunction(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal) > 0) {
-		e.logger.Warn("Message filtered out by grade function",
+		e.logger.Warn(
+			"Message filtered out by grade function",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-	if !isValueInState(e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), convertTimestampToBytes(msg)[0]) {
-		e.logger.Warn("Message filtered out by merkle path",
+	if !isValueInState(
+		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP),
+		convertTimestampToBytes(msg)[0],
+	) {
+		e.logger.Warn(
+			"Message filtered out by merkle path",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 	if !e.validateMerklePath(convertTimestampToBytes(msg), r) {
-		e.logger.Warn("Message filtered out by merkle path",
+		e.logger.Warn(
+			"Message filtered out by merkle path",
 			zap.String("sender_id", msg.Id),
 		)
 		return false
@@ -476,28 +522,34 @@ func (e *ExAnte) processMessage(
 	filterFn common.FilterTagF,
 	r int,
 	results *common.Committee,
-	protocolID string) {
+	protocolID string,
+) {
 
 	if e.isMessageValid(msg, auxLocal, filterFn, r) {
 
 		g := min(e.gradeFunction(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal), e.d-r/e.D)
-		e.logger.Debug("Processing valid message",
+		e.logger.Debug(
+			"Processing valid message",
 			zap.String("sender_id", msg.Id),
 			zap.Int("round", r),
 			zap.Int("grade", g),
 		)
 		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
-			e.logger.Info("Added to results",
+			e.logger.Info(
+				"Added to results",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
 				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+				zap.Int("grade", g),
+			)
 		} else {
-			e.logger.Debug("Skipping message with lower grade",
+			e.logger.Debug(
+				"Skipping message with lower grade",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
 				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+				zap.Int("grade", g),
+			)
 			return
 		}
 		// Use pooled objects for message propagation
@@ -538,9 +590,11 @@ func (e *ExAnte) processMessage(
 			putExAnteState(state)
 		}
 	} else {
-		e.logger.Info("Ignoring invalid message",
+		e.logger.Info(
+			"Ignoring invalid message",
 			zap.String("sender_id", msg.Id),
-			zap.Int("round", r))
+			zap.Int("round", r),
+		)
 	}
 }
 

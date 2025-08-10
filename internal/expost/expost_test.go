@@ -147,9 +147,23 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
 	mockNet.On("GetNodeID").Return("test-node").Once()
 
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+
 	// Call the New function
-	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond),
-		testDiameter, testD, testLambda, testGradeFunc, testLogger)
+	expost := New(
+		mockNet,
+		mockMDAG,
+		testSid,
+		testVk,
+		newDelayedSync(50*time.Millisecond),
+		testDiameter,
+		testD,
+		testLambda,
+		testGradeFunc,
+		testLogger,
+		collector,
+	)
 
 	// Verify the instance is created correctly
 	suite.NotNil(expost)
@@ -195,7 +209,10 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
 	mockNet.On("GetNodeID").Return("test-node").Once()
 
-	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+
+	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger, collector)
 
 	suite.NotNil(expost)
 	suite.Equal(testSid, expost.sid)
@@ -598,9 +615,11 @@ func mockFilterTagFuncFalse(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 
 func (suite *ExPostTestSuite) TestGenerateWithEmptyCharset() {
 	// This should panic due to empty charset
-	suite.Panics(func() {
-		_, _ = secureRandomBytes(10, "")
-	})
+	suite.Panics(
+		func() {
+			_, _ = secureRandomBytes(10, "")
+		},
+	)
 }
 
 func (suite *ExPostTestSuite) TestGenerateWithZeroLength() {
@@ -958,8 +977,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 
 	// Verify the result contains the expected data
 	result, exists := results.Get(
-		base64.StdEncoding.EncodeToString([]byte("test-vk")),
-		base64.StdEncoding.EncodeToString([]byte("test-value")),
+		base64.StdEncoding.EncodeToString([]byte("test-vk")), base64.StdEncoding.EncodeToString([]byte("test-value")),
 	)
 	suite.True(exists)
 	suite.Equal("test-node", result.ID)

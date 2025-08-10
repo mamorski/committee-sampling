@@ -14,7 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// Collector handles prometheus metrics collection and pushing
+var (
+	collector *Collector
+)
+
+// Collector handles Prometheus metrics collection and pushing
 type Collector struct {
 	cfg      *config.Metrics
 	logger   *zap.Logger
@@ -29,6 +33,11 @@ type Collector struct {
 
 // New creates a new MetricsCollector instance
 func New(ctx context.Context, cfg *config.Metrics, logger *zap.Logger, nodeID, sid string) (*Collector, error) {
+	if collector != nil {
+		// Ensure only one collector instance is created
+		return nil, errors.New("metrics collector already initialized")
+	}
+
 	if !cfg.Enabled {
 		logger.Info("Metrics collection is disabled")
 		return &Collector{
@@ -38,38 +47,36 @@ func New(ctx context.Context, cfg *config.Metrics, logger *zap.Logger, nodeID, s
 	}
 
 	collectorCtx, cancel := context.WithCancel(ctx)
-
-	mc := &Collector{
+	collector = &Collector{
 		cfg:      cfg,
 		logger:   logger.Named("metrics"),
-		registry: prometheus.DefaultRegisterer.(*prometheus.Registry),
+		registry: prometheus.NewRegistry(),
 		ctx:      collectorCtx,
 		cancel:   cancel,
 		nodeID:   nodeID,
 		sid:      sid,
 	}
 
-	// Set up push gateway if enabled
+	// Pushgateway setup
 	if cfg.PushGateway.Enabled {
-		if err := mc.setupPushGateway(nodeID); err != nil {
+		if err := collector.setupPushGateway(); err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to setup push gateway: %w", err)
 		}
 	}
 
-	// Set up HTTP server if enabled
+	// HTTP server setup
 	if cfg.HTTPServer.Enabled {
-		if err := mc.setupHTTPServer(); err != nil {
+		if err := collector.setupHTTPServer(); err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to setup HTTP server: %w", err)
 		}
 	}
 
-	return mc, nil
+	return collector, nil
 }
 
-// setupPushGateway configures the push gateway
-func (mc *Collector) setupPushGateway(nodeID string) error {
+func (mc *Collector) setupPushGateway() error {
 	if mc.cfg.PushGateway.URL == "" {
 		return fmt.Errorf("push gateway URL is required when push gateway is enabled")
 	}
@@ -81,11 +88,13 @@ func (mc *Collector) setupPushGateway(nodeID string) error {
 
 	instanceName := mc.cfg.InstanceName
 	if instanceName == "" {
-		instanceName = nodeID
+		instanceName = mc.nodeID
 	}
 
+	// Always group by instance and simulation_run
 	mc.pusher = push.New(mc.cfg.PushGateway.URL, jobName).
 		Grouping("instance", instanceName).
+		Grouping("simulation_run", mc.sid).
 		Gatherer(mc.registry)
 
 	// Add basic auth if provided
@@ -93,16 +102,17 @@ func (mc *Collector) setupPushGateway(nodeID string) error {
 		mc.pusher = mc.pusher.BasicAuth(mc.cfg.PushGateway.Username, mc.cfg.PushGateway.Password)
 	}
 
-	mc.logger.Info("Push gateway configured",
+	mc.logger.Info(
+		"Push gateway configured",
 		zap.String("url", mc.cfg.PushGateway.URL),
 		zap.String("job", jobName),
 		zap.String("instance", instanceName),
+		zap.String("simulation_run", mc.sid),
 	)
 
 	return nil
 }
 
-// setupHTTPServer configures the HTTP metrics server
 func (mc *Collector) setupHTTPServer() error {
 	if mc.cfg.HTTPServer.Port == 0 {
 		return fmt.Errorf("HTTP server port is required when HTTP server is enabled")
@@ -123,7 +133,8 @@ func (mc *Collector) setupHTTPServer() error {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	mc.logger.Info("HTTP metrics server configured",
+	mc.logger.Info(
+		"HTTP metrics server configured",
 		zap.Int("port", mc.cfg.HTTPServer.Port),
 		zap.String("path", path),
 	)
@@ -140,41 +151,27 @@ func (mc *Collector) Start() error {
 	// Start HTTP server if enabled
 	if mc.cfg.HTTPServer.Enabled && mc.server != nil {
 		go func() {
-			mc.logger.Info("Starting HTTP metrics server",
-				zap.String("addr", mc.server.Addr),
-			)
+			mc.logger.Info("Starting HTTP metrics server", zap.String("addr", mc.server.Addr))
 			if err := mc.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				mc.logger.Error("HTTP metrics server error", zap.Error(err))
 			}
 		}()
 	}
 
-	// Start the push gateway goroutine if enabled
-	if mc.cfg.PushGateway.Enabled && mc.pusher != nil {
+	// Optionally push periodically (for monitoring mid-simulation)
+	if mc.cfg.PushGateway.Enabled && mc.pusher != nil && mc.cfg.PushInterval > 0 {
 		go mc.pushMetricsLoop()
 	}
 
 	return nil
 }
 
-// pushMetricsLoop pushes metrics to the push gateway at regular intervals
+// pushMetricsLoop pushes metrics at regular intervals
 func (mc *Collector) pushMetricsLoop() {
-	interval := mc.cfg.PushInterval
-	if interval == 0 {
-		interval = 30 * time.Second // Default to 30 seconds
-	}
-
-	mc.logger.Info("Starting metrics push loop",
-		zap.Duration("interval", interval),
-	)
-
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(mc.cfg.PushInterval)
 	defer ticker.Stop()
 
-	// Push initial metrics
-	if err := mc.pushMetrics(); err != nil {
-		mc.logger.Error("Failed to push initial metrics", zap.Error(err))
-	}
+	mc.logger.Info("Starting metrics push loop", zap.Duration("interval", mc.cfg.PushInterval))
 
 	for {
 		select {
@@ -183,33 +180,26 @@ func (mc *Collector) pushMetricsLoop() {
 				mc.logger.Error("Failed to push metrics", zap.Error(err))
 			}
 		case <-mc.ctx.Done():
-			mc.logger.Info("Stopping metrics push loop")
-			// Push final metrics before shutting down
-			if err := mc.pushMetrics(); err != nil {
-				mc.logger.Error("Failed to push final metrics", zap.Error(err))
-			}
 			return
 		}
 	}
 }
 
-// pushMetrics pushes current metrics to the push gateway
+// pushMetrics pushes metrics to the push gateway
 func (mc *Collector) pushMetrics() error {
 	if mc.pusher == nil {
 		return fmt.Errorf("pusher not configured")
 	}
 
 	mc.logger.Debug("Pushing metrics to gateway")
-
 	if err := mc.pusher.Push(); err != nil {
 		return fmt.Errorf("failed to push metrics: %w", err)
 	}
 
-	mc.logger.Debug("Successfully pushed metrics")
 	return nil
 }
 
-// Stop stops the metrics collection
+// Stop stops the metrics collection and pushes final metrics
 func (mc *Collector) Stop() error {
 	if !mc.cfg.Enabled {
 		return nil
@@ -217,9 +207,25 @@ func (mc *Collector) Stop() error {
 
 	mc.logger.Info("Stopping metrics collector")
 
-	// Cancel context to stop push loop
+	// Cancel push loop
 	if mc.cancel != nil {
 		mc.cancel()
+	}
+
+	// Push final metrics
+	if mc.cfg.PushGateway.Enabled && mc.pusher != nil {
+		if err := mc.pushMetrics(); err != nil {
+			mc.logger.Error("Failed to push final metrics", zap.Error(err))
+		}
+
+		// Optional: delete metrics after run to avoid stale series
+		if mc.cfg.PushGateway.DeleteOnStop {
+			if err := mc.pusher.Delete(); err != nil {
+				mc.logger.Error("Failed to delete metrics from push gateway", zap.Error(err))
+			} else {
+				mc.logger.Info("Deleted metrics from push gateway")
+			}
+		}
 	}
 
 	// Stop HTTP server
@@ -235,16 +241,15 @@ func (mc *Collector) Stop() error {
 	return nil
 }
 
-// AddCustomMetric allows adding custom metrics to the registry
+// AddCustomMetric registers a custom metric to this run's registry
 func (mc *Collector) AddCustomMetric(collector prometheus.Collector) error {
 	if !mc.cfg.Enabled {
 		return nil
 	}
-
 	return mc.registry.Register(collector)
 }
 
-// GetRegistry returns the prometheus registry for direct access
+// GetRegistry returns this run's Prometheus registry
 func (mc *Collector) GetRegistry() *prometheus.Registry {
 	return mc.registry
 }
