@@ -65,6 +65,9 @@ type P2PNode struct {
 	sync                common.Synchronizer
 	mu                  sync.Mutex
 	connectivityRetries int
+    // simulation options
+    dropOnSend            bool
+    dropOnSendProbability float64
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer) (*P2PNode, error) {
@@ -117,7 +120,23 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 			}
 			return cfg.ConnectivityRetries
 		}(),
+        dropOnSend:            cfg.DropOnSend,
+        dropOnSendProbability: func() float64 {
+            p := cfg.DropOnSendProbability
+            if p < 0 {
+                p = 0
+            }
+            if p > 1 {
+                p = 1
+            }
+            return p
+        }(),
 	}
+
+    if node.dropOnSend {
+        node.logger.Info("Simulation: drop-on-send enabled",
+            zap.Float64("probability", node.dropOnSendProbability))
+    }
 
 	// Set stream handler
 	h.SetStreamHandler(neighborhoodRequest, node.onNeighborRequest)
@@ -150,6 +169,14 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 	}
 	n.mu.Unlock()
 	for _, addrInfo := range snapshot {
+        // simulation: optional probabilistic drop per recipient
+        if n.dropOnSend && rnd.Float64() < n.dropOnSendProbability {
+            n.logger.Info("Simulation: dropped outgoing message",
+                zap.String("peer_id", addrInfo.ID.String()),
+                zap.Float64("probability", n.dropOnSendProbability),
+                zap.String("protocol", protocolID))
+            continue
+        }
 
 		m := &pproto.ProtocolMessage{
 			Payload:     data,

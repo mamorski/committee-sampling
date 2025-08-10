@@ -68,6 +68,9 @@ type Network struct {
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)
 
+    // Simulation-only options
+    DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
+    DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
 }
 
 type Discovery struct {
