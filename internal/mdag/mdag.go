@@ -12,8 +12,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+    "github.com/prometheus/client_golang/prometheus"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -22,21 +21,21 @@ import (
 const protocolID = "/mdag/1.0.0"
 
 var (
-	mdagMessagesTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "mdag_messages_received_total",
-			Help: "Total number of messages received by MDAG handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
+    mdagMessagesTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "mdag_messages_received_total",
+            Help: "Total number of messages received by MDAG handleMessage",
+        },
+        []string{"node_id", "round", "protocol", "sid"},
+    )
 
-	mdagMessagesValid = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "mdag_messages_valid_total",
-			Help: "Total number of valid messages processed by MDAG handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
+    mdagMessagesValid = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "mdag_messages_valid_total",
+            Help: "Total number of valid messages processed by MDAG handleMessage",
+        },
+        []string{"node_id", "round", "protocol", "sid"},
+    )
 )
 
 // HashOracle defines the interface for the hashing function

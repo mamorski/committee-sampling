@@ -16,8 +16,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+    "github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -110,21 +109,21 @@ func putState(state *pb.State) {
 }
 
 var (
-	expostMessagesTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "expost_messages_received_total",
-			Help: "Total number of messages received by ExPost handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
+    expostMessagesTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "expost_messages_received_total",
+            Help: "Total number of messages received by ExPost handleMessage",
+        },
+        []string{"node_id", "round", "protocol", "sid"},
+    )
 
-	expostMessagesValid = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "expost_messages_valid_total",
-			Help: "Total number of valid messages processed by ExPost handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
+    expostMessagesValid = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "expost_messages_valid_total",
+            Help: "Total number of valid messages processed by ExPost handleMessage",
+        },
+        []string{"node_id", "round", "protocol", "sid"},
+    )
 )
 
 // MDAG defines the interface for the MDAG required by ExPost

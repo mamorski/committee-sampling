@@ -246,7 +246,16 @@ func (mc *Collector) AddCustomMetric(collector prometheus.Collector) error {
 	if !mc.cfg.Enabled {
 		return nil
 	}
-	return mc.registry.Register(collector)
+    if err := mc.registry.Register(collector); err != nil {
+        // Ignore duplicate registrations of the same collector in this registry
+        var already prometheus.AlreadyRegisteredError
+        if errors.As(err, &already) {
+            mc.logger.Debug("Metric already registered; ignoring duplicate")
+            return nil
+        }
+        return err
+    }
+    return nil
 }
 
 // GetRegistry returns this run's Prometheus registry
