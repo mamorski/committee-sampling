@@ -82,7 +82,7 @@ type Committee struct {
 	SessionID     string  `mapstructure:"session_id"`     // Unique identifier for the protocol session
 	Lambda        int     `mapstructure:"lambda"`         // Security parameter for VRF and VDF
 	Weight        float64 `mapstructure:"weight"`         // Resource weight per party
-	TotalW        float64 `mapstructure:"total_w"`        // Total weight of the committee
+	TotalW        float64 `mapstructure:"total_weight"`   // Total weight of the committee
 	DeltaW        float64 `mapstructure:"delta_w"`        // Acceptable weight deviation
 	CommitteeSize int     `mapstructure:"committee_size"` // Size of the committee to be formed
 	Delay         int     `mapstructure:"delay"`          // Delay for the VDF in seconds

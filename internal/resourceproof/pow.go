@@ -1,9 +1,10 @@
 package resourceproof
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+
+	hash2 "github.com/mamorski/committee-sampling/internal/hash"
 )
 
 // ProofOfWork interface
@@ -14,16 +15,14 @@ type ProofOfWork interface {
 
 type pow struct{}
 
-// Prove performs a Proof of Work by finding a nonce such that
+// Prove performs a Proof of Work by finding nonce such that
 // the hash of (challenge || nonce) has `difficulty` leading zero bits.
 func (p *pow) Prove(challenge []byte, difficulty int) ([]byte, error) {
 	var nonce uint64 = 0
 	var proof []byte
 
 	for {
-		// nolint:gocritic
-		data := append(challenge, uint64ToBytes(nonce)...)
-		hash := sha256.Sum256(data)
+		hash := hash2.Sum(challenge, uint64ToBytes(nonce))
 
 		if hasLeadingZeros(hash[:], difficulty) {
 			proof = uint64ToBytes(nonce)
@@ -41,9 +40,7 @@ func (p *pow) Prove(challenge []byte, difficulty int) ([]byte, error) {
 
 // Verify checks if the given proof is valid for the given challenge and difficulty.
 func (p *pow) Verify(challenge []byte, difficulty int, proof []byte) bool {
-	// nolint:gocritic
-	data := append(challenge, proof...)
-	hash := sha256.Sum256(data)
+	hash := hash2.Sum(challenge, proof)
 
 	return hasLeadingZeros(hash[:], difficulty)
 }
