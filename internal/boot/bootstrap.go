@@ -165,7 +165,7 @@ func New(
 	)
 
 	exAnte := exante.New(
-		node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger, nil,
+		node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger, mc,
 	)
 
 	exPost := expost.New(
