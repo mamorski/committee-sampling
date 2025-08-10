@@ -189,26 +189,26 @@ create_committee_config() {
   "committee": {
     "session_id": "$SESSION_ID",
     "lambda": 256,
-    "weight": 10,
-    "delta_w": 2.0,
+    "weight": 1,
+    "delta_w": 10,
     "committee_size": 30,
     "delay": 20,
-    "factor": 70
+    "total_weight": $NUM_NODES
   },
   "synchronization": {
     "type": 1,
-    "ex_ante_round_timeout": "2m",
-    "ex_post_round_timeout": "2m",
+    "ex_ante_round_timeout": "30s",
+    "ex_post_round_timeout": "30s",
     "mdag_round_timeout": "5s",
     "start_time": $(($(date +%s) + 60)),
-    "building_graph_timeout": "1m",
+    "building_graph_timeout": "2m",
     "time_server": "time.google.com"
   },
   "logger": {
     "level": "$LOG_LEVEL"
   },
   "metrics": {
-    "enabled": true,
+    "enabled": false,
     "push_gateway": {
       "enabled": false,
       "url": "http://localhost:9091"

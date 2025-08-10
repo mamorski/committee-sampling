@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -86,7 +88,7 @@ func (s *GCETestSuite) TestInitialize_Success() {
 
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", sid, vk).Return(challenge, proof, nil).Once()
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	s.vdf.On("Eval", vdfInput, vk, delay).Return(phiVDF, piVDF, nil).Once()
 
 	e := &Election{
@@ -152,7 +154,7 @@ func (s *GCETestSuite) TestInitialize_ErrorVDFEval() {
 	proof := &common.RBExpProof{}
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", sid, vk).Return(challenge, proof, nil).Once()
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	s.vdf.On("Eval", vdfInput, vk, delay).Return([]byte(nil), []byte(nil), assert.AnError).Once()
 	e := &Election{
 		logger: zap.NewNop(),
@@ -189,14 +191,14 @@ func (s *GCETestSuite) TestCommitteeElection_Success() {
 
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", sid, vk).Return(challenge, proof, nil).Once()
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	s.vdf.On("Eval", vdfInput, vk, delay).Return(phiVDF, piVDF, nil).Once()
 	e := &Election{
 		logger: zap.NewNop(),
 	}
 	state, _ := e.Initialize(id, sid, s.vrf, s.rbexp, s.vdf, delay, lambda)
 
-	hashInput := HashData(phiVDF, []byte(sid))
+	hashInput := hash.Sum(phiVDF, []byte(sid))
 	s.vrf.On("Eval", hashInput, sk).Return(phiVrf, piVrf, nil).Once()
 	auxKey := &common.AuxKey{PhiVRF: phiVrf, PiVRF: piVrf, PhiVDF: phiVDF, PiVDF: piVDF}
 	s.rbexp.On("Verify", sid, vk, challenge, proof, auxKey, weight).Return(outputs, nil).Once()
@@ -234,14 +236,14 @@ func (s *GCETestSuite) TestCommitteeElection_ErrorVRFEval() {
 
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", sid, vk).Return(challenge, proof, nil).Once()
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	s.vdf.On("Eval", vdfInput, vk, delay).Return(phiVDF, piVDF, nil).Once()
 	e := &Election{
 		logger: zap.NewNop(),
 	}
 	state, _ := e.Initialize(id, sid, s.vrf, s.rbexp, s.vdf, delay, lambda)
 
-	hashInput := HashData(phiVDF, []byte(sid))
+	hashInput := hash.Sum(phiVDF, []byte(sid))
 	s.vrf.On("Eval", hashInput, sk).Return([]byte(nil), []byte(nil), assert.AnError).Once()
 
 	_, err := e.CommitteeElection(sid, state, weight, s.vrf, s.rbexp)
@@ -264,14 +266,14 @@ func (s *GCETestSuite) TestCommitteeElection_ErrorRBExpVer() {
 
 	s.vrf.On("Generate", lambda).Return(sk, vk, nil).Once()
 	s.rbexp.On("Generate", "test_session", vk).Return(challenge, proof, nil).Once()
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	s.vdf.On("Eval", vdfInput, vk, delay).Return(phiVDF, piVDF, nil).Once()
 	e := &Election{
 		logger: zap.NewNop(),
 	}
 	state, _ := e.Initialize(id, "test_session", s.vrf, s.rbexp, s.vdf, delay, lambda)
 
-	hashInput := HashData(phiVDF, []byte(sid))
+	hashInput := hash.Sum(phiVDF, []byte(sid))
 	phiVrf := []byte("phiVRF_hash")
 	piVrf := []byte("piVRF_hash")
 	s.vrf.On("Eval", hashInput, sk).Return(phiVrf, piVrf, nil).Once()

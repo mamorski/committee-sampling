@@ -2,7 +2,6 @@ package boot
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math"
 	"math/big"
@@ -11,6 +10,7 @@ import (
 	"github.com/mamorski/committee-sampling/internal/exante"
 	"github.com/mamorski/committee-sampling/internal/expost"
 	"github.com/mamorski/committee-sampling/internal/gce"
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/resourcebound"
@@ -45,11 +45,6 @@ type Bootstrap struct {
 	Context    context.Context
 }
 
-func Oracle(data []byte) []byte {
-	hash := sha256.Sum256(data)
-	return hash[:]
-}
-
 //nolint:funlen
 func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer) (*Bootstrap, error) {
 
@@ -66,8 +61,8 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			return false
 		}
 
-		vdfInput := gce.HashData([]byte(id), vk, ch)
-		vrfInput := gce.HashData(auxKey.PhiVdf, []byte(sid))
+		vdfInput := hash.Sum([]byte(id), vk, ch)
+		vrfInput := hash.Sum(auxKey.PhiVdf, []byte(sid))
 
 		logger.Debug("Filter function called, verifying VDF and VRF",
 			zap.String("sender_id", id),
@@ -139,7 +134,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	mdagExAnte := mdag.New(
 		cfg.Graph.Diameter*cfg.Graph.GradingLevels,
 		cfg.Committee.SessionID,
-		Oracle,
+		hash.Oracle,
 		node,
 		sync,
 		logger,
@@ -150,7 +145,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	mdagExPost := mdag.New(
 		cfg.Graph.Diameter*cfg.Graph.GradingLevels,
 		cfg.Committee.SessionID,
-		Oracle,
+		hash.Oracle,
 		node,
 		sync,
 		logger,

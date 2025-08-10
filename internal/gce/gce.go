@@ -1,11 +1,11 @@
 package gce
 
 import (
-	"crypto/sha256"
 	"errors"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"go.uber.org/zap"
 )
 
@@ -37,15 +37,6 @@ type LocalState struct {
 
 	PhiVDF []byte
 	PiVDF  []byte
-}
-
-// HashData concatenates all input byte slices and returns their SHA-256 hash.
-func HashData(data ...[]byte) []byte {
-	h := sha256.New()
-	for _, d := range data {
-		h.Write(d)
-	}
-	return h.Sum(nil)
 }
 
 // New creates a new instance of the Election struct with a logger.
@@ -90,7 +81,7 @@ func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf V
 		return nil, err
 	}
 
-	vdfInput := HashData([]byte(id), vk, challenge)
+	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	phiVDF, piVDF, err := vdf.Eval(vdfInput, vk, delay)
 	e.logger.Debug("VDF eval completed",
 		zap.String("node_id", id),
@@ -149,7 +140,7 @@ func (e *Election) CommitteeElection(
 	}
 
 	// Step 1: Compute the VRF evaluation.
-	hashInput := HashData(state.PhiVDF, []byte(sid))
+	hashInput := hash.Sum(state.PhiVDF, []byte(sid))
 	phiVrf, piVrf, err := vrf.Eval(hashInput, state.VRFSecret)
 	if err != nil {
 		return nil, err
