@@ -40,6 +40,9 @@ type MDAG struct {
 	currentLabel   []byte           // label computed in the most recent round
 	sessionID      string           // current protocol session id
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
+
+	validMessages []int
+	totalMessages []int
 }
 
 // New creates a new MDAG instance with the specified parameters.
@@ -78,6 +81,8 @@ func New(
 		sessionID:      sid,
 		step:           step,
 		protocolType:   protocolType,
+		validMessages:  make([]int, rounds+1),
+		totalMessages:  make([]int, rounds+1),
 	}
 
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
@@ -108,6 +113,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.logger.Info(
 			"Generate completed", zap.Duration("elapsed", elapsed),
 		)
+		m.logger.Info("Message counts", zap.Ints("valid_messages", m.validMessages), zap.Ints("total_messages", m.totalMessages))
 	}()
 
 	m.mu.Lock()
@@ -237,9 +243,16 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	round := int(pbMsg.Round)
+	if round < 0 || round > m.rounds {
+		m.logger.Warn(
+			"Received message with invalid round number", zap.Int("round", round), zap.Int("max_rounds", m.rounds),
+		)
+		return nil
+	}
 
 	// Increment total messages received metric
 	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
+	m.totalMessages[round]++
 
 	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
@@ -266,6 +279,7 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 
 	// Increment valid messages metric - message passed all validation checks
 	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
+	m.validMessages[round]++
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {
 		m.logger.Debug(

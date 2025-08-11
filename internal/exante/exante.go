@@ -126,6 +126,9 @@ type ExAnte struct {
 	protocolID string
 	nodeID     string
 	R          int
+
+	validMessages []int
+	totalMessages []int
 }
 
 // New creates a new ExAnte instance with the specified parameters
@@ -157,6 +160,8 @@ func New(
 		protocolID:    protocolID,
 		nodeID:        net.GetNodeID(),
 		R:             d * D,
+		validMessages: make([]int, d*D),
+		totalMessages: make([]int, d*D),
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -216,6 +221,7 @@ func (e *ExAnte) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
+		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -361,9 +367,16 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	round := int(msg.Round)
+	if round < 0 || round >= e.R {
+		e.logger.Warn(
+			"Received message with invalid round", zap.Int("round", round), zap.Int("expected_max_round", e.R-1),
+		)
+		return nil
+	}
 
 	// Increment total messages received metric
 	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
+	e.totalMessages[round]++
 
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
@@ -397,6 +410,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 
 	// Increment valid messages metric - message passed all validation checks
 	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
+	e.validMessages[round]++
 
 	e.messages[round] = append(e.messages[round], &msg)
 

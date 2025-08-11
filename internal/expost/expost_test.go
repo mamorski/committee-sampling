@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -127,6 +127,9 @@ func (suite *ExPostTestSuite) SetupTest() {
 		protocolID:   "/expost/1.0.0/" + suite.sid,
 		nodeID:       "test-node",
 		R:            3 * 5,
+
+		validMessages: make([]int, 15),
+		totalMessages: make([]int, 15),
 	}
 }
 
@@ -152,16 +155,7 @@ func (suite *ExPostTestSuite) TestNew() {
 
 	// Call the New function
 	expost := New(
-		mockNet,
-		mockMDAG,
-		testSid,
-		testVk,
-		newDelayedSync(50*time.Millisecond),
-		testDiameter,
-		testD,
-		testLambda,
-		testGradeFunc,
-		testLogger,
+		mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond), testDiameter, testD, testLambda, testGradeFunc, testLogger,
 	)
 
 	// Verify the instance is created correctly

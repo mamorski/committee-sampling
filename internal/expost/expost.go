@@ -132,6 +132,9 @@ type ExPost struct {
 	nodeID     string
 	R          int // d * D
 	threadPool *threadpool.ThreadPool
+
+	validMessages []int
+	totalMessages []int
 }
 
 // New creates a new ExPost instance
@@ -167,6 +170,9 @@ func New(
 		protocolID: protocolID,
 		nodeID:     net.GetNodeID(),
 		R:          gradeLevels * diameterBound,
+
+		validMessages: make([]int, gradeLevels*diameterBound),
+		totalMessages: make([]int, gradeLevels*diameterBound),
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -226,6 +232,7 @@ func (e *ExPost) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
+		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -527,9 +534,14 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	round := int(msg.Round)
+	if round < 0 || round >= e.R {
+		e.logger.Warn("Received message with invalid round", zap.Int("round", round), zap.Int("max", e.R))
+		return nil
+	}
 
 	// Increment total messages received metric
 	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
+	e.totalMessages[round]++
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
@@ -577,6 +589,7 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 
 	// Increment valid messages metric - message passed all validation checks
 	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
+	e.validMessages[round]++
 
 	e.messages[round] = append(e.messages[round], &msg)
 	return nil

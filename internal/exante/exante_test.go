@@ -140,6 +140,9 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		isRunning:     true,
 		R:             suite.testD * suite.testBigD, // R is the product of d and D
 		nodeID:        suite.testNodeID,
+
+		validMessages: make([]int, suite.testD*suite.testBigD),
+		totalMessages: make([]int, suite.testD*suite.testBigD),
 	}
 }
 
