@@ -162,7 +162,6 @@ func (suite *ExPostTestSuite) TestNew() {
 		testLambda,
 		testGradeFunc,
 		testLogger,
-		collector,
 	)
 
 	// Verify the instance is created correctly
@@ -212,7 +211,7 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	collector := &CollectorMock{}
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
-	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger, collector)
+	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
 
 	suite.NotNil(expost)
 	suite.Equal(testSid, expost.sid)

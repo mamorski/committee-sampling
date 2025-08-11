@@ -43,8 +43,6 @@ type Metrics struct {
 	PushGateway  PushGateway   `mapstructure:"push_gateway"`  // Push gateway configuration
 	HTTPServer   HTTPServer    `mapstructure:"http_server"`   // HTTP server for /metrics endpoint
 	PushInterval time.Duration `mapstructure:"push_interval"` // Interval for pushing metrics
-	JobName      string        `mapstructure:"job_name"`      // Job name for metrics
-	InstanceName string        `mapstructure:"instance_name"` // Instance name for metrics
 }
 
 type PushGateway struct {

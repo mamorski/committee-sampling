@@ -19,7 +19,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/vrf"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"go.uber.org/zap"
 )
@@ -27,11 +26,6 @@ import (
 type GCE interface {
 	Initialize(id string, sid string, vrf gce.VRF, rbexp gce.RBExp, vdf gce.VDF, delay int, lambda int) (*gce.LocalState, error)
 	CommitteeElection(sid string, state *gce.LocalState, weight float64, vrf gce.VRF, rbexp gce.RBExp) ([]*common.CommitteeOutput, error)
-}
-
-type MetricCollector interface {
-	// AddCustomMetric registers a custom metric with the collector
-	AddCustomMetric(collector prometheus.Collector) error
 }
 
 type Bootstrap struct {
@@ -52,9 +46,7 @@ type Bootstrap struct {
 }
 
 //nolint:funlen
-func New(
-	ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer, mc MetricCollector,
-) (*Bootstrap, error) {
+func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer) (*Bootstrap, error) {
 
 	vdFunc := vdf.New(logger)
 	vrFunc := vrf.New(logger)
@@ -72,16 +64,18 @@ func New(
 		vdfInput := hash.Sum([]byte(id), vk, ch)
 		vrfInput := hash.Sum(auxKey.PhiVdf, []byte(sid))
 
-		logger.Debug(
-			"Filter function called, verifying VDF and VRF",
-			zap.String("sender_id", id),
-			zap.String("sid", sid),
-			zap.Binary("vk", vk),
-			zap.Binary("challenge", ch),
-			zap.Binary("phi_vdf", auxKey.PhiVdf),
-			zap.Binary("pi_vdf", auxKey.PiVdf),
-			zap.Binary("VDF Input", vdfInput),
-		)
+		if logger.Core().Enabled(zap.DebugLevel) {
+			logger.Debug(
+				"Filter function called, verifying VDF and VRF",
+				zap.String("sender_id", id),
+				zap.String("sid", sid),
+				zap.Binary("vk", vk),
+				zap.Binary("challenge", ch),
+				zap.Binary("phi_vdf", auxKey.PhiVdf),
+				zap.Binary("pi_vdf", auxKey.PiVdf),
+				zap.Binary("VDF Input", vdfInput),
+			)
+		}
 		vdfRes, err := vdFunc.Verify(vdfInput, auxKey.PhiVdf, auxKey.PiVdf, vk)
 		if err != nil {
 			logger.Warn("Failed to verify VDF", zap.Error(err))
@@ -128,14 +122,16 @@ func New(
 			return 0 // Return 0 if there's an error in grade calculation
 		}
 
-		logger.Debug(
-			"Grading function calculated",
-			zap.String("sid", sid),
-			zap.Int("g", g),
-			zap.Int("gradingLevels", cfg.Graph.GradingLevels),
-			zap.Binary("Phi^VRF", auxKey.PhiVrf),
-			zap.Binary("vk", vk),
-		)
+		if logger.Core().Enabled(zap.DebugLevel) {
+			logger.Debug(
+				"Grading function calculated",
+				zap.String("sid", sid),
+				zap.Int("g", g),
+				zap.Int("gradingLevels", cfg.Graph.GradingLevels),
+				zap.Binary("Phi^VRF", auxKey.PhiVrf),
+				zap.Binary("vk", vk),
+			)
+		}
 
 		return g
 	}
@@ -148,8 +144,7 @@ func New(
 		sync,
 		logger,
 		common.ExAnteMDAG,
-		"exante",
-		mc,
+		"exanteMDAG",
 	)
 
 	mdagExPost := mdag.New(
@@ -160,13 +155,10 @@ func New(
 		sync,
 		logger,
 		common.ExPostMDAG,
-		"expost",
-		mc,
+		"expostMDAG",
 	)
 
-	exAnte := exante.New(
-		node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger, mc,
-	)
+	exAnte := exante.New(node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger)
 
 	exPost := expost.New(
 		node,
@@ -179,7 +171,6 @@ func New(
 		cfg.Committee.Lambda,
 		gradeF,
 		logger,
-		mc,
 	)
 
 	rp := resourceproof.New(logger)
@@ -208,13 +199,7 @@ func New(
 
 func (b *Bootstrap) Run() error {
 	state, err := b.GCE.Initialize(
-		b.id,
-		b.Config.Committee.SessionID,
-		b.VRF,
-		b.RbExp,
-		b.VDF,
-		b.Config.Committee.Delay,
-		b.Config.Committee.Lambda,
+		b.id, b.Config.Committee.SessionID, b.VRF, b.RbExp, b.VDF, b.Config.Committee.Delay, b.Config.Committee.Lambda,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize GCE: %w", err)
@@ -232,6 +217,7 @@ func (b *Bootstrap) Run() error {
 		fmt.Printf("Grade: %d\n", member.Grade)
 		fmt.Println("--------------------------------")
 	}
+	b.Logger.Info("Final Neighbors", zap.Strings("neighbors", b.Network.GetNeighbors()))
 
 	return nil
 }
@@ -291,20 +277,22 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 	g := float64(d+1) - term
 
 	// Log the computed values for debugging
-	logger.Debug(
-		"Computed grade components",
-		zap.Int("d", d),
-		zap.Int("n", n),
-		zap.Float64("Wi", Wi),
-		zap.Float64("ratioF", ratioF),
-		zap.Float64("sub", sub),
-		zap.Float64("term", term),
-		zap.Float64("g", g),
-		zap.String("phi", phiInt.String()),
-		zap.String("phi_plus_one", phiPlusOne.String()),
-		zap.String("twoToLambdaInt", twoToLambdaInt.String()),
-		zap.Int("lambda", lambda),
-	)
+	if logger.Core().Enabled(zap.DebugLevel) {
+		logger.Debug(
+			"Computed grade components",
+			zap.Int("d", d),
+			zap.Int("n", n),
+			zap.Float64("Wi", Wi),
+			zap.Float64("ratioF", ratioF),
+			zap.Float64("sub", sub),
+			zap.Float64("term", term),
+			zap.Float64("g", g),
+			zap.String("phi", phiInt.String()),
+			zap.String("phi_plus_one", phiPlusOne.String()),
+			zap.String("twoToLambdaInt", twoToLambdaInt.String()),
+			zap.Int("lambda", lambda),
+		)
+	}
 	// 10) Take floor(gᵢ)
 	floorG := math.Floor(g)
 

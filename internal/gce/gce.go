@@ -58,14 +58,14 @@ func New(logger *zap.Logger) *Election {
 //
 // Returns the party’s LocalState or an error.
 func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf VDF, delay int, lambda int) (*LocalState, error) {
-	e.logger.Info("Initializing started",
-		zap.String("sid", sid),
+	e.logger.Info(
+		"Initializing started", zap.String("sid", sid),
 	)
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Initialize completed",
-			zap.Duration("elapsed", elapsed),
+		e.logger.Info(
+			"Initialize completed", zap.Duration("elapsed", elapsed),
 		)
 	}()
 
@@ -83,15 +83,18 @@ func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf V
 
 	vdfInput := hash.Sum([]byte(id), vk, challenge)
 	phiVDF, piVDF, err := vdf.Eval(vdfInput, vk, delay)
-	e.logger.Debug("VDF eval completed",
-		zap.String("node_id", id),
-		zap.String("sid", sid),
-		zap.Binary("vk", vk),
-		zap.Binary("challenge", challenge),
-		zap.Binary("phi_vdf", phiVDF),
-		zap.Binary("pi_vdf", piVDF),
-		zap.Binary("VDF Input", vdfInput),
-	)
+	if e.logger.Core().Enabled(zap.DebugLevel) {
+		e.logger.Debug(
+			"VDF eval completed",
+			zap.String("node_id", id),
+			zap.String("sid", sid),
+			zap.Binary("vk", vk),
+			zap.Binary("challenge", challenge),
+			zap.Binary("phi_vdf", phiVDF),
+			zap.Binary("pi_vdf", piVDF),
+			zap.Binary("VDF Input", vdfInput),
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -118,20 +121,17 @@ func (e *Election) Initialize(id string, sid string, vrf VRF, rbexp RBExp, vdf V
 //
 // Returns a slice of CommitteeOutput representing elected committee members.
 func (e *Election) CommitteeElection(
-	sid string,
-	state *LocalState,
-	weight float64,
-	vrf VRF,
-	rbexp RBExp) ([]*common.CommitteeOutput, error) {
+	sid string, state *LocalState, weight float64, vrf VRF, rbexp RBExp,
+) ([]*common.CommitteeOutput, error) {
 
-	e.logger.Info("CommitteeElection started",
-		zap.String("sid", sid),
+	e.logger.Info(
+		"CommitteeElection started", zap.String("sid", sid),
 	)
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("CommitteeElection completed",
-			zap.Duration("elapsed", elapsed),
+		e.logger.Info(
+			"CommitteeElection completed", zap.Duration("elapsed", elapsed),
 		)
 	}()
 

@@ -47,8 +47,6 @@
       "port": 9090,
       "path": "/metrics"
     },
-    "push_interval": "30s",
-    "job_name": "committee-sampling-simulation",
-    "instance_name": ""
+    "push_interval": "30s"
   }
 }

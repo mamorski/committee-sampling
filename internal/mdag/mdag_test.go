@@ -9,8 +9,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -71,15 +69,6 @@ func testOracle(data []byte) []byte {
 	return hash[:]
 }
 
-type CollectorMock struct {
-	mock.Mock
-}
-
-func (m *CollectorMock) AddCustomMetric(_ prometheus.Collector) error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // MDAGTestSuite defines the test suite for MDAG
 type MDAGTestSuite struct {
 	suite.Suite
@@ -100,20 +89,8 @@ func (suite *MDAGTestSuite) SetupTest() {
 func (suite *MDAGTestSuite) setupMDAG() {
 	suite.mockNetwork.On("GetNodeID").Return("testNode").Maybe()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
-	collector := &CollectorMock{}
-	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
-	suite.mdag = New(
-		3,
-		"test-session",
-		testOracle,
-		suite.mockNetwork,
-		suite.mockSynchronizer,
-		suite.logger,
-		common.ExPostMDAG,
-		"test",
-		collector,
-	)
+	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 	suite.Require().NotNil(suite.mdag)
 }
 
@@ -121,20 +98,7 @@ func (suite *MDAGTestSuite) setupMDAG() {
 func (suite *MDAGTestSuite) TestNew() {
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
-	collector := &CollectorMock{}
-	collector.On("AddCustomMetric", mock.Anything).Return(nil)
-
-	mdagInstance := New(
-		3,
-		"test-session",
-		testOracle,
-		suite.mockNetwork,
-		suite.mockSynchronizer,
-		suite.logger,
-		common.ExPostMDAG,
-		"test",
-		collector,
-	)
+	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 
 	suite.NotNil(mdagInstance)
 	suite.mockNetwork.AssertExpectations(suite.T())
@@ -144,7 +108,7 @@ func (suite *MDAGTestSuite) TestNew() {
 func (suite *MDAGTestSuite) TestOracle() {
 	suite.setupMDAG()
 
-	// Test with single input
+	// Test with a single input
 	input1 := []byte("test-input")
 	result1 := suite.mdag.Oracle(input1)
 	suite.NotNil(result1)

@@ -10,23 +10,12 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
-
-type CollectorMock struct {
-	mock.Mock
-}
-
-// AddCustomMetric registers a custom metric with the collector
-func (m *CollectorMock) AddCustomMetric(_ prometheus.Collector) error {
-	args := m.Called()
-	return args.Error(0)
-}
 
 // MockNetwork is a mock implementation of the network.Network interface
 type MockNetwork struct {
@@ -171,7 +160,6 @@ func TestExAnteTestSuite(t *testing.T) {
 func (suite *ExAnteTestSuite) TestNew() {
 	mockNetwork := new(MockNetwork)
 	mockMDAG := new(MockMDAG)
-	mockCollector := new(CollectorMock)
 	logger := zap.NewNop()
 
 	testSID := "test-session"
@@ -185,10 +173,9 @@ func (suite *ExAnteTestSuite) TestNew() {
 
 	// Setup mock expectations
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
-	mockCollector.On("AddCustomMetric", mock.Anything).Twice().Return(nil)
 
 	// Call New function
-	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger, mockCollector)
+	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
 
 	// Verify the instance is properly initialized
 	suite.NotNil(exante)
@@ -312,7 +299,7 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -412,7 +399,7 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Twice()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
+	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(4)
 
 	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
 	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")

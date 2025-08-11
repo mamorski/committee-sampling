@@ -5,46 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
-    "github.com/prometheus/client_golang/prometheus"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
 const protocolID = "/mdag/1.0.0"
 
-var (
-    mdagMessagesTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "mdag_messages_received_total",
-            Help: "Total number of messages received by MDAG handleMessage",
-        },
-        []string{"node_id", "round", "protocol", "sid"},
-    )
-
-    mdagMessagesValid = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "mdag_messages_valid_total",
-            Help: "Total number of valid messages processed by MDAG handleMessage",
-        },
-        []string{"node_id", "round", "protocol", "sid"},
-    )
-)
-
 // HashOracle defines the interface for the hashing function
 type HashOracle func([]byte) []byte
-
-type MetricCollector interface {
-	// AddCustomMetric registers a custom metric with the collector
-	AddCustomMetric(collector prometheus.Collector) error
-}
 
 type MDAG struct {
 	rounds       int                 // total number of rounds
@@ -85,7 +63,6 @@ func New(
 	logger *zap.Logger,
 	step common.Step,
 	protocolType string,
-	collector MetricCollector,
 ) *MDAG {
 
 	m := &MDAG{
@@ -103,20 +80,9 @@ func New(
 		protocolType:   protocolType,
 	}
 
-	err := collector.AddCustomMetric(mdagMessagesTotal)
-	if err != nil {
-		m.logger.Error("Failed to register MDAG messages total metric", zap.Error(err))
-		return nil
-	}
-	err = collector.AddCustomMetric(mdagMessagesValid)
-	if err != nil {
-		m.logger.Error("Failed to register MDAG messages valid metric", zap.Error(err))
-		return nil
-	}
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
 	m.logger.Info(
-		"MDAG instance created",
-		zap.Int("rounds", rounds),
+		"MDAG instance created", zap.Int("rounds", rounds),
 	)
 	return m
 }
@@ -124,8 +90,8 @@ func New(
 // Generate runs the MDAG protocol and produces a sequence of labels.
 //
 // The protocol follows these steps:
-// 1. Compute initial label from session ID, verification key, and additional inputs
-// 2. For each round, collect messages from previous round and compute new label
+// 1. Compute the initial label from session ID, verification key, and additional inputs
+// 2. For each round, collect messages from the previous round and compute new label
 // 3. Broadcast the new label to all peers
 //
 // Parameters:
@@ -140,8 +106,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	defer func() {
 		elapsed := time.Since(start)
 		m.logger.Info(
-			"Generate completed",
-			zap.Duration("elapsed", elapsed),
+			"Generate completed", zap.Duration("elapsed", elapsed),
 		)
 	}()
 
@@ -228,10 +193,7 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.computedLabels[r] = newLabel
 
 		m.logger.Info(
-			"Completed round",
-			zap.Int("round", r),
-			zap.Binary("new_label", m.currentLabel),
-			zap.Int("num_messages", len(sortedLabels)),
+			"Completed round", zap.Int("round", r), zap.Binary("new_label", m.currentLabel), zap.Int("num_messages", len(sortedLabels)),
 		)
 
 		if r < m.rounds {
@@ -275,16 +237,14 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	round := int(pbMsg.Round)
-	nodeID := m.network.GetNodeID()
 
 	// Increment total messages received metric
-	mdagMessagesTotal.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType, m.sessionID).Inc()
+	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
 
 	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
 		m.logger.Warn(
-			"Received message from unknown neighbor",
-			zap.String("from", from.String()),
+			"Received message from unknown neighbor", zap.String("from", from.String()),
 		)
 		return err
 	}
@@ -292,9 +252,7 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	if m.sessionID != "" && pbMsg.SessionId != m.sessionID {
 		err := errors.New("session id mismatch")
 		m.logger.Warn(
-			"Received message with mismatched session id",
-			zap.String("expected", m.sessionID),
-			zap.String("received", pbMsg.SessionId),
+			"Received message with mismatched session id", zap.String("expected", m.sessionID), zap.String("received", pbMsg.SessionId),
 		)
 		return err
 	}
@@ -307,14 +265,13 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.mu.Unlock()
 
 	// Increment valid messages metric - message passed all validation checks
-	mdagMessagesValid.WithLabelValues(nodeID, fmt.Sprintf("%d", round), m.protocolType, m.sessionID).Inc()
+	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
 
-	m.logger.Debug(
-		"Received message",
-		zap.String("from", from.String()),
-		zap.Int("round", round),
-		zap.Binary("label", pbMsg.Label),
-	)
+	if m.logger.Core().Enabled(zap.DebugLevel) {
+		m.logger.Debug(
+			"Received message", zap.String("from", from.String()), zap.Int("round", round), zap.Binary("label", pbMsg.Label),
+		)
+	}
 	return nil
 }
 
@@ -338,9 +295,7 @@ func (m *MDAG) broadcast(round int, label []byte) {
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {
 		m.logger.Debug(
-			"Broadcast message",
-			zap.Int("round", round),
-			zap.Binary("label", label),
+			"Broadcast message", zap.Int("round", round), zap.Binary("label", label),
 		)
 	}
 }
@@ -357,9 +312,7 @@ func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
 
 	if roundIndex < 0 || roundIndex > m.rounds {
 		m.logger.Warn(
-			"Invalid round index for GetComputedLabel",
-			zap.Int("requested_index", roundIndex),
-			zap.Int("max_valid_index", m.rounds),
+			"Invalid round index for GetComputedLabel", zap.Int("requested_index", roundIndex), zap.Int("max_valid_index", m.rounds),
 		)
 		return nil
 	}

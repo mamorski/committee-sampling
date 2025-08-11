@@ -199,7 +199,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances
@@ -208,7 +208,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -347,7 +347,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create grade function that makes node0 a prover
@@ -365,7 +365,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, proverGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, proverGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -499,7 +499,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances
@@ -508,7 +508,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -641,7 +641,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances with different parameters
@@ -650,7 +650,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 16, testGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 16, testGradeFunction, logger)
 	}
 
 	// Run generation and verification concurrently
@@ -776,7 +776,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances where R = d * D > mdagRounds
@@ -786,7 +786,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should fail because R = 15 > mdagRounds = 3
@@ -867,7 +867,7 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
-		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "", collector)
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
 	}
 
 	// Create ExPost instances with parameters that will work for generation
@@ -877,7 +877,7 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger, collector)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should succeed

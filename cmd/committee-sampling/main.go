@@ -58,12 +58,12 @@ func main() {
 		panic(err)
 	}
 
-	b, err := boot.New(ctx, cfg, node, logger, sync, metricsCollector)
+	b, err := boot.New(ctx, cfg, node, logger, sync)
 	if err != nil {
 		panic(err)
 	}
 
-	// Set up graceful shutdown
+	// Set up a graceful shutdown
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
