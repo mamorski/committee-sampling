@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
-	"go.uber.org/zap/zapcore"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -121,6 +122,10 @@ type ExAnte struct {
 	messages   map[int][]*pb.TimestampMessage
 	state      [][][]byte
 	threadPool *threadpool.ThreadPool
+
+	protocolID string
+	nodeID     string
+	R          int
 }
 
 // New creates a new ExAnte instance with the specified parameters
@@ -135,6 +140,9 @@ func New(
 	logger *zap.Logger,
 ) *ExAnte {
 
+	// Register message handler
+	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, sid)
+
 	e := &ExAnte{
 		network:       net,
 		logger:        logger.Named("exante"),
@@ -146,10 +154,11 @@ func New(
 		messages:      make(map[int][]*pb.TimestampMessage),
 		sid:           sid,
 		isRunning:     true,
+		protocolID:    protocolID,
+		nodeID:        net.GetNodeID(),
+		R:             d * D,
 	}
 
-	// Register message handler
-	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, sid)
 	net.RegisterHandler(protocolID, e.handleMessage)
 
 	e.logger.Info(
@@ -175,7 +184,7 @@ func (e *ExAnte) Generate(session string, vk []byte, challenge []byte, piRP []by
 	}
 
 	e.logger.Info(
-		"Starting ExAnte Generation phase", zap.String("session_id", session), zap.String("node_id", e.network.GetNodeID()),
+		"Starting ExAnte Generation phase", zap.String("session_id", session), zap.String("node_id", e.nodeID),
 	)
 
 	state, err := e.mdag.Generate(session, vk, challenge, piRP)
@@ -214,20 +223,19 @@ func (e *ExAnte) Verify(
 		return nil, fmt.Errorf("session ID mismatch: expected %s, got %s", e.sid, session)
 	}
 
-	R := e.d * e.D
-	if len(sigma) < R {
+	if len(sigma) < e.R {
 		e.isRunning = false
 		e.logger.Error(
-			"Sigma length is less than required rounds", zap.Int("expected_rounds", R), zap.Int("actual_length", len(sigma)),
+			"Sigma length is less than required rounds", zap.Int("expected_rounds", e.R), zap.Int("actual_length", len(sigma)),
 		)
 
-		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), R)
+		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), e.R)
 	}
 
 	e.logger.Info(
 		"Starting ExAnte Verification phase", zap.String("session_id", session),
 	)
-	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, session)
+	results := &common.Committee{}
 
 	// Check if P_i is also acts like a prover
 	auxPb := &pb.Aux{
@@ -240,7 +248,7 @@ func (e *ExAnte) Verify(
 		},
 	}
 	grade := e.gradeFunction(session, vk, auxPb.AuxKey.PhiVrf, auxPb.AuxKey, auxLocal)
-	if grade >= e.d+1 && filterFn(session, e.network.GetNodeID(), vk, e.challenge, auxPb) {
+	if grade >= e.d+1 && filterFn(session, e.nodeID, vk, e.challenge, auxPb) {
 
 		e.logger.Info(
 			"Node is a prover, sending initial message", zap.Int("grade", grade), zap.Int("d", e.d),
@@ -264,7 +272,7 @@ func (e *ExAnte) Verify(
 		msg.VerificationKey = vk
 		msg.Value = e.challenge
 		msg.Round = 0
-		msg.Id = e.network.GetNodeID()
+		msg.Id = e.nodeID
 
 		auxKey.PhiVrf = auxTag.AuxKey.PhiVRF
 		auxKey.PiVrf = auxTag.AuxKey.PiVRF
@@ -285,11 +293,11 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
 		}
 
-		e.network.SendProtocolMessage(protocolID, msgBytes)
+		results.Add(vk, e.challenge, e.nodeID, grade)
+		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
-	results := &common.Committee{}
 
-	for r := 1; r < R; r++ {
+	for r := 1; r < e.R; r++ {
 		// Wait for round r synchronization
 		waitChan, err := e.synchronizer.WaitForRound(common.ExAnteVerify, r)
 		if err != nil {
@@ -312,7 +320,7 @@ func (e *ExAnte) Verify(
 		for _, msg := range msgs {
 			e.threadPool.Submit(
 				func() {
-					e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results, protocolID)
+					e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results, e.protocolID)
 				},
 			)
 		}
@@ -355,7 +363,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	round := int(msg.Round)
 
 	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "exante", e.network.GetNodeID(), e.sid).Inc()
+	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
 
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
@@ -388,7 +396,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "exante", e.network.GetNodeID(), e.sid).Inc()
+	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
 
 	e.messages[round] = append(e.messages[round], &msg)
 

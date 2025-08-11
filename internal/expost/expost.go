@@ -148,7 +148,7 @@ func New(
 	logger *zap.Logger,
 ) *ExPost {
 
-	protocolID := expostProtocolID + "/" + sid
+	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
 
 	e := &ExPost{
 		network:      net,

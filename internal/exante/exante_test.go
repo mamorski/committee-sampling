@@ -138,6 +138,8 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		messages:      make(map[int][]*pb.TimestampMessage), // changed
 		sid:           suite.testSID,
 		isRunning:     true,
+		R:             suite.testD * suite.testBigD, // R is the product of d and D
+		nodeID:        suite.testNodeID,
 	}
 }
 
@@ -173,6 +175,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 
 	// Setup mock expectations
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
+	mockNetwork.On("GetNodeID").Return("test-node-id").Once()
 
 	// Call New function
 	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
@@ -205,7 +208,6 @@ func (suite *ExAnteTestSuite) TestGenerate_Success() {
 			},
 		),
 	).Return(expectedState, nil).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -244,7 +246,6 @@ func (suite *ExAnteTestSuite) TestGenerate_MDAGGenerationFailure() {
 			},
 		),
 	).Return([][][]byte(nil), expectedError).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -275,7 +276,6 @@ func (suite *ExAnteTestSuite) TestGenerate_EmptySessionID() {
 			},
 		),
 	).Return(expectedState, nil).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	result, err := suite.exante.Generate(newSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -299,7 +299,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -373,7 +372,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(false).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "unknown-node")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -399,7 +397,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Twice()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Times(4)
 
 	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
 	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")
@@ -747,6 +744,7 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 		{[]byte("sigma0")},
 		{[]byte("sigma1")}, // Insufficient length: need d * D = 3 * 2 = 6, but only have 2
 	}
+	suite.exante.R = 6 // Set R to 3 for this test
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
@@ -756,7 +754,7 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 	suite.False(suite.exante.isRunning)
 }
 
-// TestVerify_AsProver tests Verify when node acts as a prover
+// TestVerify_AsProver tests Verify when the node acts as a prover
 func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	testAux := &common.AuxTag{
 		PiRP: []byte("test-pi-rp"),
@@ -782,8 +780,7 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 		return 5 // >= d+1 = 4, so node is a prover
 	}
 
-	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
+	// Mock network calls for sending an initial message
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -925,7 +922,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		{
 			SessionId:       suite.testSID,
 			VerificationKey: suite.testVK,
-			Value:           suite.testChallenge, // Same key as first message
+			Value:           suite.testChallenge, // Same key as the first message
 			Aux: &pb.Aux{
 				PiRP: testAux.PiRP,
 				AuxKey: &pb.AuxKeyMessage{
