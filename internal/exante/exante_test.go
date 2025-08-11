@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -745,8 +745,7 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 	}
 	sigma := [][][]byte{
 		{[]byte("sigma0")},
-		{[]byte("sigma1")},
-		// Insufficient length: need d * D = 3 * 2 = 6, but only have 2
+		{[]byte("sigma1")}, // Insufficient length: need d * D = 3 * 2 = 6, but only have 2
 	}
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -864,8 +863,7 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 
 	// Verify that the message was processed and included in results
 	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK),
-		base64.StdEncoding.EncodeToString(suite.testChallenge),
+		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
 	)
 	suite.True(exists)
 	suite.Equal(2, r.Grade)
@@ -905,7 +903,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		return 3 // Subsequent calls (message processing) - valid grade
 	}
 
-	// Pre-populate messages with same key but different senders
+	// Pre-populate messages with the same key but different senders
 	suite.exante.messages[0] = []*pb.TimestampMessage{
 		{
 			SessionId:       suite.testSID,
@@ -954,7 +952,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
+	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Twice()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 	suite.NoError(err)
@@ -962,8 +960,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 
 	// Should only have one entry for the key (higher grade wins)
 	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK),
-		base64.StdEncoding.EncodeToString(suite.testChallenge),
+		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
 	)
 	suite.True(exists)
 	suite.Equal(result.Len(), 1)
@@ -973,7 +970,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
-// TestIsMessageValid_GradeZero tests when grade function returns 0
+// TestIsMessageValid_GradeZero tests when a grade function returns 0
 func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 	testAux := &common.AuxTag{
 		PiRP: []byte("test-pi-rp"),
@@ -1082,8 +1079,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 
 	// Setup state that will cause validateMerklePath to fail (insufficient length)
 	suite.exante.state = [][][]byte{
-		{[]byte("state0")},
-		// Missing state[1] - will cause validateMerklePath to fail
+		{[]byte("state0")}, // Missing state[1] - will cause validateMerklePath to fail
 	}
 
 	// Mock Oracle calls
