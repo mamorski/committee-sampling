@@ -101,20 +101,22 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerID peer.ID, pubK
 // newMessageData helper method - generate message data shared between all node's p2p protocols
 // messageId: unique for requests, copied from request for responses
 func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageData {
-	// Add proto bin data for message author public key
-	// this is useful for authenticating  messages forwarded by a node authored by another node
+	// Add proto bin data for a message author public key
+	// this is useful for authenticating messages forwarded by a node authored by another node
 	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
 
 	if err != nil {
 		n.logger.Fatal("Failed to get public key for sender from local peer store", zap.Error(err))
 	}
 
-	return &pproto.MessageData{ClientVersion: clientVersion,
-		NodeId:     n.host.ID().String(),
-		NodePubKey: nodePubKey,
-		Timestamp:  time.Now().Unix(),
-		Id:         messageID,
-		Gossip:     gossip}
+	return &pproto.MessageData{
+		ClientVersion: clientVersion,
+		NodeId:        n.host.ID().String(),
+		NodePubKey:    nodePubKey,
+		Timestamp:     time.Now().Unix(),
+		Id:            messageID,
+		Gossip:        gossip,
+	}
 }
 
 // sendProtoMessage helper method - writes a proto go data object to a network stream
@@ -176,25 +178,26 @@ func (n *P2PNode) verifyConnectivity(peerID peer.ID) bool {
 	if retries <= 0 {
 		retries = 3
 	}
+
 	n.mu.Lock()
 	addrInfo, ok := n.neighbors[peerID]
 	n.mu.Unlock()
 	if !ok {
-		return false
+		// If not found, no need to drop
+		return true
 	}
+
 	for attempt := 0; attempt < retries; attempt++ {
-		// try to connect and open a lightweight ping-like stream on a well-known protocol
-		// we will use a short context to avoid long blocking
+		// try to connect
+		// use a short context to avoid long blocking
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		// attempt connect
-		_ = n.host.Connect(ctx, addrInfo)
-		// attempt stream creation on any protocol we control; using neighborhoodRequest as a cheap check
-		s, err := n.host.NewStream(ctx, peerID, protocol.ID(neighborhoodRequest))
-		if err == nil && s != nil {
-			_ = s.Close()
+		err := n.host.Connect(ctx, addrInfo)
+		if err == nil {
 			cancel()
 			return true
 		}
+
 		cancel()
 	}
 	n.logger.Warn("Connectivity verification failed; dropping neighbor", zap.String("peer_id", peerID.String()))

@@ -3,9 +3,9 @@ package network
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
-	"math/big"
 	rnd "math/rand/v2"
 	"sync"
 
@@ -16,13 +16,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
@@ -161,6 +161,15 @@ func (n *P2PNode) Close() error {
 	return n.host.Close()
 }
 
+func cryptoFloat64() (float64, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0, err
+	}
+	u := binary.BigEndian.Uint64(b[:]) >> 11 // keep the top 53 bits
+	return float64(u) / (1 << 53), nil
+}
+
 func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 	// snapshot neighbors to avoid concurrent map writes if send() drops neighbors
 	n.mu.Lock()
@@ -173,19 +182,18 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		// simulation: optional probabilistic drop per recipient using crypto-secure RNG (avoid G404)
 		if n.dropOnSend {
 			// draw a uniform float in [0,1) using 53 random bits (float64 mantissa)
-			r, err := rand.Int(rand.Reader, big.NewInt(1<<53))
-			if err == nil {
-				if float64(r.Int64())/float64(1<<53) < n.dropOnSendProbability {
-					n.logger.Info(
-						"Simulation: dropped outgoing message",
-						zap.String("peer_id", addrInfo.ID.String()),
-						zap.Float64("probability", n.dropOnSendProbability),
-						zap.String("protocol", protocolID),
-					)
-					continue
-				}
-			} else {
+			f, err := cryptoFloat64()
+			if err != nil {
 				n.logger.Warn("Simulation: crypto RNG failed; skipping drop decision", zap.Error(err))
+			} else if f < n.dropOnSendProbability {
+				n.logger.Info(
+					"Simulation: dropped outgoing message",
+					zap.String("peer_id", addrInfo.ID.String()),
+					zap.Float64("probability", n.dropOnSendProbability),
+					zap.String("protocol", protocolID),
+					zap.Float64("random_float", f),
+				)
+				continue
 			}
 		}
 

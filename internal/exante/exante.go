@@ -515,8 +515,8 @@ func (e *ExAnte) processMessage(
 					zap.Binary("value", msg.Value),
 					zap.Int("grade", g),
 				)
-				return
 			}
+			return
 		}
 		// Use pooled objects for message propagation
 		pMsg := getExAnteTimestampMessage()

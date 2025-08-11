@@ -8,8 +8,8 @@
       "bootstrap_peers": ["/ip4/127.0.0.1/tcp/4001", "/ip4/192.168.1.113/tcp/4001"]
     },
     "connectivity_retries": 3,
-    "drop_on_send": false,
-    "drop_on_send_probability": 0.0
+    "drop_on_send": true,
+    "drop_on_send_probability": 0.02
   },
   "graph": {
     "diameter": 4,
