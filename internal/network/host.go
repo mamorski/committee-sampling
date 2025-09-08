@@ -69,6 +69,7 @@ type P2PNode struct {
 	sync                common.Synchronizer
 	mu                  sync.Mutex
 	connectivityRetries int
+	sid                 string
 	// simulation options
 	dropOnSend            bool
 	dropOnSendProbability float64
@@ -117,6 +118,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		key:                priv,
 		stopReceivingPeers: atomic.Bool{},
 		sync:               synchronizer,
+		sid:                sid,
 		connectivityRetries: func() int {
 			if cfg.ConnectivityRetries <= 0 {
 				return 3
@@ -373,7 +375,7 @@ func (n *P2PNode) onNeighborRequest(s network.Stream) {
 	}
 
 	resp.MessageData.Sign = signature
-	ok := n.sendProtoMessage(s.Conn().RemotePeer(), neighborhoodResponse, resp)
+	ok := n.sendProtoMessage(s.Conn().RemotePeer(), protocol.ID(neighborhoodResponse+"/"+n.sid), resp)
 	if !ok {
 		n.logger.Error("Failed to send response")
 		n.dropNeighbor(s.Conn().RemotePeer())
@@ -444,7 +446,7 @@ func (n *P2PNode) sendRequestToNeighbor(info peer.AddrInfo) {
 	}
 
 	msg.MessageData.Sign = signature
-	if ok := n.send(info, neighborhoodRequest, msg); !ok {
+	if ok := n.send(info, protocol.ID(neighborhoodRequest+"/"+n.sid), msg); !ok {
 		n.logger.Error("Failed to send request to neighbor", zap.String("peer", info.ID.String()))
 		return
 	}
