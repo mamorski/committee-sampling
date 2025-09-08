@@ -133,19 +133,21 @@ func (n *P2PNode) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message
 }
 
 func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
-	err := n.host.Connect(context.Background(), addrInfo)
-	if err != nil {
-		n.logger.Error("Failed to connect to peer", zap.Error(err))
-		// verify connectivity and drop neighbor if unreachable asynchronously
-		go n.verifyNeighbor(addrInfo.ID)
-		return false
-	}
-
 	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
-		n.logger.Error("Failed to create stream", zap.Error(err))
-		go n.verifyNeighbor(addrInfo.ID)
-		return false
+		// Attempt to establish a connection and retry once
+		if errConn := n.host.Connect(context.Background(), addrInfo); errConn != nil {
+			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
+			go n.verifyNeighbor(addrInfo.ID)
+			return false
+		}
+
+		s, err = n.host.NewStream(context.Background(), addrInfo.ID, p)
+		if err != nil {
+			n.logger.Error("Failed to create stream", zap.Error(err))
+			go n.verifyNeighbor(addrInfo.ID)
+			return false
+		}
 	}
 
 	defer func(s network.Stream) {

@@ -34,7 +34,7 @@ type MDAG struct {
 	step         common.Step         // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
 	mu             sync.Mutex
-	messages       map[int][][]byte // messages received from the network, keyed by round number
+	messages       map[int][][]byte // messages received from the network, keyed by a round number
 	state          [][][]byte       // state: bucket S_{i,r} of labels received in round (r-1)
 	computedLabels [][]byte         // computed label for each round (r >= 1)
 	currentLabel   []byte           // label computed in the most recent round
@@ -73,7 +73,7 @@ func New(
 		oracle:         oracle,
 		network:        network,
 		synchronizer:   synchronizer,
-		logger:         logger.Named("mdag"),
+		logger:         logger.Named(protocolType),
 		messages:       make(map[int][][]byte),
 		computedLabels: make([][]byte, rounds+1),
 		state:          make([][][]byte, rounds),
@@ -96,7 +96,7 @@ func New(
 //
 // The protocol follows these steps:
 // 1. Compute the initial label from session ID, verification key, and additional inputs
-// 2. For each round, collect messages from the previous round and compute new label
+// 2. For each round, collect messages from the previous round and compute a new label
 // 3. Broadcast the new label to all peers
 //
 // Parameters:
@@ -198,15 +198,16 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.currentLabel = newLabel
 		m.computedLabels[r] = newLabel
 
-		m.logger.Info(
-			"Completed round", zap.Int("round", r), zap.Binary("new_label", m.currentLabel), zap.Int("num_messages", len(sortedLabels)),
-		)
-
 		if r < m.rounds {
 			m.broadcast(r, m.currentLabel)
 		}
 		elapsed := time.Since(start)
-		m.logger.Info("Round completed", zap.Int("round", r), zap.Duration("elapsed", elapsed))
+		m.logger.Info("Finished processing messages for round",
+			zap.Int("round", r),
+			zap.Duration("elapsed", elapsed),
+			zap.Binary("new_label", m.currentLabel),
+			zap.Int("num_messages", len(sortedLabels)),
+		)
 	}
 
 	// Mark the protocol as completed

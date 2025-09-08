@@ -1,13 +1,15 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
-	rnd "math/rand/v2"
+	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -21,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
@@ -62,7 +65,7 @@ type P2PNode struct {
 	discovery           discovery.PeerDiscovery
 	maxOutbound         int
 	key                 crypto.PrivKey
-	stopReceivingPeers  bool
+	stopReceivingPeers  atomic.Bool
 	sync                common.Synchronizer
 	mu                  sync.Mutex
 	connectivityRetries int
@@ -71,7 +74,7 @@ type P2PNode struct {
 	dropOnSendProbability float64
 }
 
-func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer) (*P2PNode, error) {
+func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer, sid string) (*P2PNode, error) {
 	c, cancel := context.WithCancel(ctx)
 
 	// Generate private key
@@ -112,7 +115,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		logger:             logger.Named("network"),
 		neighbors:          make(map[peer.ID]peer.AddrInfo),
 		key:                priv,
-		stopReceivingPeers: false,
+		stopReceivingPeers: atomic.Bool{},
 		sync:               synchronizer,
 		connectivityRetries: func() int {
 			if cfg.ConnectivityRetries <= 0 {
@@ -138,10 +141,9 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
 		)
 	}
-
 	// Set stream handler
-	h.SetStreamHandler(neighborhoodRequest, node.onNeighborRequest)
-	h.SetStreamHandler(neighborhoodResponse, node.onNeighborResponse)
+	h.SetStreamHandler(protocol.ID(neighborhoodRequest+"/"+sid), node.onNeighborRequest)
+	h.SetStreamHandler(protocol.ID(neighborhoodResponse+"/"+sid), node.onNeighborResponse)
 
 	// Start d
 	if err := d.Start(c); err != nil {
@@ -286,7 +288,7 @@ func (n *P2PNode) graphBuilder() {
 		panic(err)
 	}
 	<-ch
-	n.stopReceivingPeers = true
+	n.stopReceivingPeers.Store(true)
 	n.logger.Info("Network building phase completed")
 	n.logger.Info(
 		"List of neighbors", zap.Int("count", len(n.neighbors)), zap.Strings("neighbors", n.GetNeighbors()),
@@ -460,7 +462,7 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	}
 
 	// Check if timeout for receiving peers has been reached
-	if n.stopReceivingPeers {
+	if n.stopReceivingPeers.Load() {
 		n.logger.Debug("Stopping receiving peers, not adding new neighbor", zap.String("peer", addrInfo.ID.String()))
 		return fmt.Errorf("stopping receiving peers")
 	}
@@ -472,14 +474,6 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		zap.Int("current_neighbors", len(n.neighbors)),
 		zap.Int("max_neighbors", n.maxOutbound),
 	)
-
-	err := n.host.Connect(context.Background(), addrInfo)
-	if err != nil {
-		n.logger.Error(
-			"Failed to add to neighbor", zap.String("peer", addrInfo.ID.String()), zap.Error(err),
-		)
-		return err
-	}
 
 	n.neighbors[addrInfo.ID] = addrInfo // Ensure the peer is stored in the map
 
@@ -510,14 +504,28 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 func (n *P2PNode) buildNetwork() {
 	n.logger.Info("Starting network building phase")
 
+	type candidate struct {
+		peer.AddrInfo
+		dist []byte
+	}
+
 	// Get all potential neighbors
-	var potentialPeers []peer.AddrInfo
+	var potentialPeers []candidate
+	selfID := hash.Oracle([]byte(n.host.ID().String()))
 	n.potentialNeighbors.Range(
 		func(key, value any) bool {
-			potentialPeers = append(potentialPeers, value.(peer.AddrInfo))
+			d := dist(selfID, hash.Oracle([]byte(key.(peer.ID).String())))
+			potentialPeers = append(potentialPeers, candidate{
+				AddrInfo: value.(peer.AddrInfo),
+				dist:     d,
+			})
 			return true
 		},
 	)
+
+	sort.Slice(potentialPeers, func(i, j int) bool {
+		return bytes.Compare(potentialPeers[i].dist, potentialPeers[j].dist) < 0
+	})
 
 	if len(potentialPeers) == 0 {
 		n.logger.Warn("No potential neighbors found for network building")
@@ -525,12 +533,6 @@ func (n *P2PNode) buildNetwork() {
 	}
 
 	n.logger.Info("Found potential neighbors for network building", zap.Int("count", len(potentialPeers)))
-
-	rnd.Shuffle(
-		len(potentialPeers), func(i, j int) {
-			potentialPeers[i], potentialPeers[j] = potentialPeers[j], potentialPeers[i]
-		},
-	)
 
 	connectCount := n.maxOutbound
 	if len(potentialPeers) < connectCount {
@@ -542,7 +544,7 @@ func (n *P2PNode) buildNetwork() {
 	)
 
 	for i := 0; i < connectCount; i++ {
-		go n.sendRequestToNeighbor(potentialPeers[i])
+		go n.sendRequestToNeighbor(potentialPeers[i].AddrInfo)
 	}
 }
 
@@ -553,4 +555,16 @@ func addrsToStrings(addrs []multiaddr.Multiaddr) []string {
 		result[i] = addr.String()
 	}
 	return result
+}
+
+func dist(a, b []byte) []byte {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		out[i] = a[i] ^ b[i]
+	}
+	return out
 }
