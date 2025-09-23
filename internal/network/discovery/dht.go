@@ -2,15 +2,18 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
-	"github.com/mamorski/committee-sampling/pkg/config"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
+
+	"github.com/mamorski/committee-sampling/pkg/config"
 )
 
 type DHTDiscovery struct {
@@ -21,9 +24,31 @@ type DHTDiscovery struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	logger          *zap.Logger
+	bucketSize      int
 }
 
-func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger) *DHTDiscovery {
+func (d *DHTDiscovery) ClosestPeers(target peer.ID) ([]peer.ID, error) {
+	if d.dht == nil {
+		return nil, errors.New("DHT not initialized")
+	}
+
+	for i := 0; i < 3; i++ {
+		peers, err := d.dht.GetClosestPeers(d.ctx, target.String())
+		if err == nil {
+			return peers, nil
+		}
+		d.logger.Warn(
+			"Attempt to get closest peers failed",
+			zap.Int("attempt", i),
+			zap.Error(err),
+		)
+		time.Sleep(time.Duration(100) * time.Millisecond)
+	}
+
+	return nil, errors.New("failed to get closest peers after multiple attempts")
+}
+
+func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger, bucketSize int) *DHTDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DHTDiscovery{
 		host:            h,
@@ -32,17 +57,19 @@ func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger) *
 		ctx:             ctx,
 		cancel:          cancel,
 		logger:          logger.Named("dht-discovery"),
+		bucketSize:      bucketSize,
 	}
 }
 
 func (d *DHTDiscovery) Start(ctx context.Context) error {
 	var err error
-	d.dht, err = dht.New(ctx, d.host)
+	d.dht, err = dht.New(ctx, d.host, dht.Mode(dht.ModeClient), dht.BucketSize(d.bucketSize))
 	if err != nil {
 		return err
 	}
 
-	d.logger.Info("Starting DHT discovery",
+	d.logger.Info(
+		"Starting DHT discovery",
 		zap.String("protocol_id", d.config.ProtocolID),
 		zap.Strings("bootstrap_peers", d.config.BootstrapPeers),
 	)
@@ -50,14 +77,16 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 	// Connect to bootstrap peers with proper error handling
 	connectedBootstrapPeers := 0
 	for i, addr := range d.config.BootstrapPeers {
-		d.logger.Debug("Attempting to connect to bootstrap peer",
+		d.logger.Debug(
+			"Attempting to connect to bootstrap peer",
 			zap.Int("peer_index", i),
 			zap.String("address", addr),
 		)
 
 		a, err := multiaddr.NewMultiaddr(addr)
 		if err != nil {
-			d.logger.Error("Failed to parse bootstrap peer address",
+			d.logger.Error(
+				"Failed to parse bootstrap peer address",
 				zap.String("address", addr),
 				zap.Error(err),
 			)
@@ -66,7 +95,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 
 		p2pAddr, err := peer.AddrInfoFromP2pAddr(a)
 		if err != nil {
-			d.logger.Error("Failed to create peer address info",
+			d.logger.Error(
+				"Failed to create peer address info",
 				zap.String("address", addr),
 				zap.Error(err),
 			)
@@ -74,7 +104,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 		}
 
 		if err := d.host.Connect(ctx, *p2pAddr); err != nil {
-			d.logger.Error("Failed to connect to bootstrap peer",
+			d.logger.Error(
+				"Failed to connect to bootstrap peer",
 				zap.String("address", addr),
 				zap.String("peer_id", p2pAddr.ID.String()),
 				zap.Error(err),
@@ -83,7 +114,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 		}
 
 		connectedBootstrapPeers++
-		d.logger.Info("Successfully connected to bootstrap peer",
+		d.logger.Info(
+			"Successfully connected to bootstrap peer",
 			zap.String("address", addr),
 			zap.String("peer_id", p2pAddr.ID.String()),
 		)
@@ -92,7 +124,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 	if connectedBootstrapPeers == 0 {
 		d.logger.Error("Failed to connect to any bootstrap peers - DHT may not work properly")
 	} else {
-		d.logger.Info("Connected to bootstrap peers",
+		d.logger.Info(
+			"Connected to bootstrap peers",
 			zap.Int("connected_count", connectedBootstrapPeers),
 			zap.Int("total_count", len(d.config.BootstrapPeers)),
 		)
@@ -109,7 +142,11 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 	routingDiscovery := routing.NewRoutingDiscovery(d.dht)
 
 	// Retry advertisement with exponential backoff
-	go d.retryAdvertisement(ctx, routingDiscovery)
+	err = d.advertise(ctx, routingDiscovery)
+	if err != nil {
+		d.logger.Error("Failed to advertise on DHT", zap.Error(err))
+		return err
+	}
 
 	// Start discovering peers
 	go d.discoverPeers(ctx, routingDiscovery)
@@ -117,44 +154,29 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 	return nil
 }
 
-func (d *DHTDiscovery) retryAdvertisement(ctx context.Context, routingDiscovery *routing.RoutingDiscovery) {
-	maxRetries := 10
-	baseDelay := 2 * time.Second
+func (d *DHTDiscovery) advertise(ctx context.Context, routingDiscovery *routing.RoutingDiscovery) error {
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Wait before each attempt (including first)
-		delay := time.Duration(attempt) * baseDelay
-		d.logger.Info("Attempting DHT advertisement",
-			zap.Int("attempt", attempt),
-			zap.Int("max_retries", maxRetries),
-			zap.Duration("delay", delay))
-
-		time.Sleep(delay)
-
-		_, err := routingDiscovery.Advertise(ctx, d.config.ProtocolID)
+	for i := 0; i < 3; i++ {
+		_, err := routingDiscovery.Advertise(ctx, d.config.ProtocolID, discovery.TTL(24*time.Hour))
 		if err != nil {
-			d.logger.Warn("DHT advertisement attempt failed",
-				zap.Int("attempt", attempt),
-				zap.Error(err))
-
-			if attempt == maxRetries {
-				d.logger.Error("All DHT advertisement attempts failed", zap.Error(err))
-				return
-			}
+			d.logger.Warn(
+				"DHT advertisement attempt failed",
+				zap.Int("attempt", i),
+				zap.Error(err),
+			)
+			time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
 			continue
 		}
 
-		d.logger.Debug("Successfully advertised on DHT",
+		d.logger.Debug(
+			"Successfully advertised on DHT",
 			zap.String("protocol_id", d.config.ProtocolID),
-			zap.Int("attempt", attempt))
-		return
+			zap.Int("attempt", i),
+		)
+		return nil
 	}
+
+	return errors.New("failed to advertise on DHT after multiple attempts")
 }
 
 func (d *DHTDiscovery) Stop() error {
@@ -192,7 +214,8 @@ func (d *DHTDiscovery) discoverPeers(ctx context.Context, routingDiscovery *rout
 					continue
 				}
 
-				d.logger.Debug("Discovered peer",
+				d.logger.Debug(
+					"Discovered peer",
 					zap.String("peer_id", p.ID.String()),
 					zap.Strings("addresses", addrsToStrings(p.Addrs)),
 				)
