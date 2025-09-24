@@ -138,14 +138,12 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 		// Attempt to establish a connection and retry once
 		if errConn := n.host.Connect(context.Background(), addrInfo); errConn != nil {
 			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
-			go n.verifyNeighbor(addrInfo.ID)
 			return false
 		}
 
 		s, err = n.host.NewStream(context.Background(), addrInfo.ID, p)
 		if err != nil {
 			n.logger.Error("Failed to create stream", zap.Error(err))
-			go n.verifyNeighbor(addrInfo.ID)
 			return false
 		}
 	}
@@ -167,45 +165,8 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	if err != nil {
 		n.logger.Error("Failed to write message to stream", zap.Error(err))
 		_ = s.Reset()
-		go n.verifyNeighbor(addrInfo.ID)
 		return false
 	}
+
 	return true
-}
-
-// verifyConnectivity tries to establish a new stream up to connectivityRetries times.
-// Returns true if any attempt succeeds, otherwise false.
-func (n *P2PNode) verifyConnectivity(peerID peer.ID) bool {
-	retries := n.connectivityRetries
-	if retries <= 0 {
-		retries = 3
-	}
-
-	addrInfo, ok := n.getNeighbor(peerID)
-	if !ok {
-		// If not found, no need to drop
-		return true
-	}
-
-	for attempt := 0; attempt < retries; attempt++ {
-		// try to connect
-		// use a short context to avoid long blocking
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		// attempt connect
-		err := n.host.Connect(ctx, addrInfo)
-		if err == nil {
-			cancel()
-			return true
-		}
-
-		cancel()
-	}
-	n.logger.Warn("Connectivity verification failed; dropping neighbor", zap.String("peer_id", peerID.String()))
-	return false
-}
-
-func (n *P2PNode) verifyNeighbor(peerID peer.ID) {
-	if !n.verifyConnectivity(peerID) {
-		n.dropNeighbor(peerID)
-	}
 }

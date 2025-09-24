@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"io"
@@ -140,6 +141,7 @@ func (suite *HostTestSuite) SetupTest() {
 		key:         suite.testPrivKey,
 		neighbors:   make(map[peer.ID]peer.AddrInfo),
 	}
+	suite.node.acceptingPotentialNeighbors.Store(true)
 }
 
 func (suite *HostTestSuite) TearDownTest() {
@@ -209,16 +211,15 @@ func (suite *HostTestSuite) TestSendProtocolMessageNoNeighbors() {
 
 func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 	// Setup mock expectations
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey)
-	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey)
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
+	suite.mockHost.On("ID").Return(suite.testPeerID).Times(3)
+	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Twice()
+	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Once()
+	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Once()
 
 	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(100, nil)
-	mockStream.On("Close").Return(nil)
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
+	mockStream.On("Close").Return(nil).Once()
 
 	// Add a neighbor
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -314,16 +315,15 @@ func (suite *HostTestSuite) TestSendRequestToNeighborSuccess() {
 	lowerPeerID, _ := peer.IDFromPublicKey(lowerPriv.GetPublic())
 
 	// Ensure our node has higher ID
-	suite.mockHost.On("ID").Return(peer.ID("z" + lowerPeerID.String()))
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-	suite.mockPeerstore.On("PubKey", mock.Anything).Return(suite.testPubKey)
-	suite.mockPeerstore.On("PrivKey", mock.Anything).Return(suite.testPrivKey)
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
+	suite.mockHost.On("ID").Return(peer.ID("z" + lowerPeerID.String())).Times(3)
+	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Twice()
+	suite.mockPeerstore.On("PubKey", mock.Anything).Return(suite.testPubKey).Once()
+	suite.mockPeerstore.On("PrivKey", mock.Anything).Return(suite.testPrivKey).Once()
 
 	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(100, nil)
-	mockStream.On("Close").Return(nil)
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
+	mockStream.On("Close").Return(nil).Once()
 
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
 	addrInfo := peer.AddrInfo{
@@ -331,7 +331,8 @@ func (suite *HostTestSuite) TestSendRequestToNeighborSuccess() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	suite.node.sendRequestToNeighbor(addrInfo)
+	err := suite.node.sendRequestToNeighbor(addrInfo)
+	assert.Nil(suite.T(), err)
 
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
@@ -349,9 +350,11 @@ func (suite *HostTestSuite) TestSendRequestToNeighborAlreadyConnected() {
 	suite.node.neighbors[suite.testPeerID] = addrInfo
 
 	// Should not send request to already connected peer
-	suite.node.sendRequestToNeighbor(addrInfo)
+	err := suite.node.sendRequestToNeighbor(addrInfo)
+	assert.Nil(suite.T(), err)
 	// Should not call any methods on mockHost
 	suite.mockHost.AssertExpectations(suite.T())
+	suite.Equal(len(suite.node.neighbors), 1)
 }
 
 func (suite *HostTestSuite) TestOnNeighborRequestSuccess() {
@@ -384,18 +387,20 @@ func (suite *HostTestSuite) TestOnNeighborRequestSuccess() {
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(messageBytes), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, messageBytes)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(messageBytes), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, messageBytes)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
-	mockStream.On("Conn").Return(mockConn).Times(4)
-	mockConn.On("RemotePeer").Return(suite.testPeerID).Times(3)
+	mockStream.On("Conn").Return(mockConn).Times(3)
+	mockConn.On("RemotePeer").Return(suite.testPeerID).Times(2)
 	mockConn.On("RemoteMultiaddr").Return(addr).Once()
 
 	// Setup host expectations for adding neighbor
-	suite.mockHost.On("Connect", mock.Anything, mock.AnythingOfType("peer.AddrInfo")).Return(nil).Twice()
+	suite.mockHost.On("Connect", mock.Anything, mock.AnythingOfType("peer.AddrInfo")).Return(nil).Once()
 
 	// Setup expectations for response sending (reuse existing mocks)
 	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Once()
@@ -428,10 +433,12 @@ func (suite *HostTestSuite) TestOnNeighborRequestInvalidMessage() {
 	mockStream := &MockStream{}
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(invalidMessage), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, invalidMessage)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(invalidMessage), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, invalidMessage)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 
@@ -466,10 +473,12 @@ func (suite *HostTestSuite) TestOnNeighborRequestAuthenticationFailure() {
 	mockConn := &MockConn{}
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(messageBytes), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, messageBytes)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(messageBytes), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, messageBytes)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 	mockStream.On("Conn").Return(mockConn)
@@ -506,9 +515,11 @@ func (suite *HostTestSuite) TestOnNeighborRequestAddNeighborFailure() {
 	mockStream := &MockStream{}
 	mockConn := &MockConn{}
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	mockStream.On("Read", mock.Anything).Return(len(payload), nil).Run(func(args mock.Arguments) {
-		copy(args.Get(0).([]byte), payload)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(payload), nil).Run(
+		func(args mock.Arguments) {
+			copy(args.Get(0).([]byte), payload)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 	mockStream.On("Conn").Return(mockConn)
@@ -516,7 +527,8 @@ func (suite *HostTestSuite) TestOnNeighborRequestAddNeighborFailure() {
 	mockConn.On("RemoteMultiaddr").Return(addr)
 
 	// Simulate connection failure exactly once
-	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(assert.AnError).Once()
+	suite.mockHost.On("Connect", context.Background(), mock.Anything).Return(assert.AnError).Twice()
+	suite.mockHost.On("NewStream", context.Background(), mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
 
 	// Execute
 	suite.node.onNeighborRequest(mockStream)
@@ -562,10 +574,12 @@ func (suite *HostTestSuite) TestOnNeighborResponseSuccess() {
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, responseBytes)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, responseBytes)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 	mockStream.On("Conn").Return(mockConn)
@@ -619,10 +633,12 @@ func (suite *HostTestSuite) TestOnNeighborResponseRejected() {
 	mockConn := &MockConn{}
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, responseBytes)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, responseBytes)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 	mockStream.On("Conn").Return(mockConn)
@@ -646,10 +662,12 @@ func (suite *HostTestSuite) TestOnNeighborResponseInvalidMessage() {
 	mockStream := &MockStream{}
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(invalidMessage), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, invalidMessage)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(invalidMessage), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, invalidMessage)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 
@@ -684,10 +702,12 @@ func (suite *HostTestSuite) TestOnNeighborResponseAuthenticationFailure() {
 	mockStream := &MockStream{}
 
 	// Setup stream read expectations
-	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(func(args mock.Arguments) {
-		buf := args.Get(0).([]byte)
-		copy(buf, responseBytes)
-	}).Once()
+	mockStream.On("Read", mock.Anything).Return(len(responseBytes), nil).Run(
+		func(args mock.Arguments) {
+			buf := args.Get(0).([]byte)
+			copy(buf, responseBytes)
+		},
+	).Once()
 	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Once()
 	mockStream.On("Close").Return(nil)
 
@@ -737,4 +757,14 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 
 func TestHostSuite(t *testing.T) {
 	suite.Run(t, new(HostTestSuite))
+}
+
+func TestReadStreamWithLimit(t *testing.T) {
+	payload := []byte("payload")
+	result, err := readStreamWithLimit(bytes.NewReader(payload), int64(len(payload)+10))
+	assert.NoError(t, err)
+	assert.Equal(t, payload, result)
+
+	_, err = readStreamWithLimit(bytes.NewReader(make([]byte, maxInboundMessageSize+1)), int64(maxInboundMessageSize))
+	assert.Error(t, err)
 }

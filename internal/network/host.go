@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	neighborhoodRequest  = "/neighborhood/req/1.0.0"
-	neighborhoodResponse = "/neighborhood/resp/1.0.0"
-	clientVersion        = "go-p2p-node/0.0.1"
+	neighborhoodRequest   = "/neighborhood/req/1.0.0"
+	neighborhoodResponse  = "/neighborhood/resp/1.0.0"
+	clientVersion         = "go-p2p-node/0.0.1"
+	maxInboundMessageSize = 1 << 20 // 1 MiB safety cap on inbound payloads
 )
 
 type MessageHandler func(from peer.ID, payload []byte) error
@@ -54,20 +55,20 @@ type Host interface {
 }
 
 type P2PNode struct {
-	host                Host
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	logger              *zap.Logger
-	neighbors           map[peer.ID]peer.AddrInfo // Stores connected peers
-	potentialNeighbors  sync.Map                  // Stores discovered peers before network building
-	discovery           discovery.PeerDiscovery
-	maxOutbound         int
-	key                 crypto.PrivKey
-	stopReceivingPeers  atomic.Bool
-	sync                common.Synchronizer
-	mu                  sync.Mutex
-	connectivityRetries int
-	sid                 string
+	host                        Host
+	ctx                         context.Context
+	cancel                      context.CancelFunc
+	logger                      *zap.Logger
+	neighbors                   map[peer.ID]peer.AddrInfo // Stores connected peers
+	potentialNeighbors          sync.Map                  // Stores discovered peers before network building
+	discovery                   discovery.PeerDiscovery
+	maxOutbound                 int
+	key                         crypto.PrivKey
+	acceptingPotentialNeighbors atomic.Bool
+	sync                        common.Synchronizer
+	mu                          sync.Mutex
+	connectivityRetries         int
+	sid                         string
 	// simulation options
 	dropOnSend            bool
 	dropOnSendProbability float64
@@ -106,17 +107,17 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
 	node := &P2PNode{
-		host:               h,
-		ctx:                c,
-		cancel:             cancel,
-		maxOutbound:        cfg.MaxOutboundDegree,
-		discovery:          d,
-		logger:             logger.Named("network"),
-		neighbors:          make(map[peer.ID]peer.AddrInfo),
-		key:                priv,
-		stopReceivingPeers: atomic.Bool{},
-		sync:               synchronizer,
-		sid:                sid,
+		host:                        h,
+		ctx:                         c,
+		cancel:                      cancel,
+		maxOutbound:                 cfg.MaxOutboundDegree,
+		discovery:                   d,
+		logger:                      logger.Named("network"),
+		neighbors:                   make(map[peer.ID]peer.AddrInfo),
+		key:                         priv,
+		acceptingPotentialNeighbors: atomic.Bool{},
+		sync:                        synchronizer,
+		sid:                         sid,
 		connectivityRetries: func() int {
 			if cfg.ConnectivityRetries <= 0 {
 				return 3
@@ -141,6 +142,8 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
 		)
 	}
+
+	node.acceptingPotentialNeighbors.Store(true)
 	// Set stream handler
 	h.SetStreamHandler(protocol.ID(neighborhoodRequest+"/"+sid), node.onNeighborRequest)
 	h.SetStreamHandler(protocol.ID(neighborhoodResponse+"/"+sid), node.onNeighborResponse)
@@ -252,15 +255,18 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 	n.host.SetStreamHandler(
 		protocol.ID(protocolID), func(s network.Stream) {
 			data := &pproto.ProtocolMessage{}
-			buf, err := io.ReadAll(s)
+			buf, err := readStreamWithLimit(s, int64(maxInboundMessageSize))
 			if err != nil {
 				n.logger.Error("Failed to read message", zap.Error(err))
+				_ = s.Reset()
 				return
 			}
-			_ = s.Close()
 
-			err = proto.Unmarshal(buf, data)
-			if err != nil {
+			if err := s.Close(); err != nil {
+				n.logger.Debug("Failed to close stream after read", zap.Error(err))
+			}
+
+			if err := proto.Unmarshal(buf, data); err != nil {
 				n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
 				return
 			}
@@ -270,8 +276,7 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 				return
 			}
 
-			err = handler(s.Conn().RemotePeer(), data.Payload)
-			if err != nil {
+			if err := handler(s.Conn().RemotePeer(), data.Payload); err != nil {
 				n.logger.Error("Failed to handle message", zap.Error(err))
 			}
 		},
@@ -292,7 +297,7 @@ func (n *P2PNode) graphBuilder() {
 	}
 
 	<-ch
-	n.cancel() // Cancel the context to stop the discovery handler
+	n.acceptingPotentialNeighbors.Store(false)
 	n.buildNetwork()
 
 	ch, err = n.sync.WaitForRound(common.Network, 1)
@@ -301,7 +306,6 @@ func (n *P2PNode) graphBuilder() {
 		panic(err)
 	}
 	<-ch
-	n.stopReceivingPeers.Store(true)
 	n.logger.Info("Network building phase completed")
 	neighbors := n.GetNeighbors()
 	n.logger.Info(
@@ -326,6 +330,11 @@ func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
 				continue
 			}
 
+			if !n.acceptingPotentialNeighbors.Load() {
+				n.logger.Debug("Ignoring newly discovered peer; potential neighbor intake stopped", zap.String("peer_id", pi.ID.String()))
+				return
+			}
+
 			if _, exists := n.potentialNeighbors.Load(pi.ID); exists {
 				continue
 			}
@@ -340,15 +349,17 @@ func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
 
 func (n *P2PNode) onNeighborRequest(s network.Stream) {
 	data := &pproto.NeighborMessage{}
-	buf, err := io.ReadAll(s)
+	buf, err := readStreamWithLimit(s, int64(maxInboundMessageSize))
 	if err != nil {
 		n.logger.Error("Failed to read neighbor request message", zap.Error(err))
+		_ = s.Reset()
 		return
 	}
-	_ = s.Close()
+	if err := s.Close(); err != nil {
+		n.logger.Debug("Failed to close request stream", zap.Error(err))
+	}
 
-	err = proto.Unmarshal(buf, data)
-	if err != nil {
+	if err := proto.Unmarshal(buf, data); err != nil {
 		n.logger.Error("Failed to unmarshal negotiation message", zap.Error(err))
 		return
 	}
@@ -400,15 +411,17 @@ func (n *P2PNode) onNeighborRequest(s network.Stream) {
 
 func (n *P2PNode) onNeighborResponse(s network.Stream) {
 	data := &pproto.NeighborMessageResponse{}
-	buf, err := io.ReadAll(s)
+	buf, err := readStreamWithLimit(s, int64(maxInboundMessageSize))
 	if err != nil {
 		n.logger.Error("Failed to read negotiation message", zap.Error(err))
+		_ = s.Reset()
 		return
 	}
-	_ = s.Close()
+	if err := s.Close(); err != nil {
+		n.logger.Debug("Failed to close response stream", zap.Error(err))
+	}
 
-	err = proto.Unmarshal(buf, data)
-	if err != nil {
+	if err := proto.Unmarshal(buf, data); err != nil {
 		n.logger.Error("Failed to unmarshal negotiation message", zap.Error(err))
 		return
 	}
@@ -483,7 +496,7 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	}
 
 	// Check if timeout for receiving peers has been reached
-	if n.stopReceivingPeers.Load() {
+	if !n.acceptingPotentialNeighbors.Load() {
 		n.logger.Debug("Stopping receiving peers, not adding new neighbor", zap.String("peer", addrInfo.ID.String()))
 		return fmt.Errorf("stopping receiving peers")
 	}
@@ -505,6 +518,11 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		zap.Int("current_neighbors", len(n.neighbors)),
 		zap.Int("max_neighbors", n.maxOutbound),
 	)
+
+	if err := n.host.Connect(context.Background(), addrInfo); err != nil {
+		n.logger.Error("Failed to connect to neighbor", zap.String("peer_id", addrInfo.ID.String()), zap.Error(err))
+		return err
+	}
 
 	n.neighbors[addrInfo.ID] = addrInfo // Ensure the peer is stored in the map
 
@@ -567,4 +585,21 @@ func addrsToStrings(addrs []multiaddr.Multiaddr) []string {
 		result[i] = addr.String()
 	}
 	return result
+}
+
+func readStreamWithLimit(r io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid read limit: %d", limit)
+	}
+
+	buf, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(buf)) > limit {
+		return nil, fmt.Errorf("message exceeds max allowed size of %d bytes", limit)
+	}
+
+	return buf, nil
 }
