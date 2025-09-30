@@ -16,5 +16,5 @@ type PeerDiscovery interface {
 	// DiscoveredPeers returns a channel that receives newly discovered peers
 	DiscoveredPeers() <-chan peer.AddrInfo
 
-	ClosestPeers(target peer.ID) ([]peer.ID, error)
+	ClosestPeers(target peer.ID, peersNum int) []peer.ID
 }

@@ -24,31 +24,47 @@ type DHTDiscovery struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	logger          *zap.Logger
-	bucketSize      int
 }
 
-func (d *DHTDiscovery) ClosestPeers(target peer.ID) ([]peer.ID, error) {
+func (d *DHTDiscovery) ClosestPeers(target peer.ID, peersNum int) []peer.ID {
 	if d.dht == nil {
-		return nil, errors.New("DHT not initialized")
+		return nil
 	}
 
+	peers, err := d.fetchClosestPeers(target.String())
+	if err != nil {
+		d.logger.Error("Failed to fetch closest peers", zap.String("target", target.String()), zap.Error(err))
+		return nil
+	}
+
+	// TODO: Implement a mechanism that will try to fetch more peers if the number of fetched peers is less than peersNum.
+	// For now, we just log a warning if we fetch fewer than 20 peers.
+	if len(peers) < 20 {
+		d.logger.Warn("Fetched fewer peers than expected", zap.Int("fetched", len(peers)), zap.Int("required", peersNum))
+		return peers
+	}
+
+	return peers
+}
+
+func (d *DHTDiscovery) fetchClosestPeers(target string) ([]peer.ID, error) {
+	if d.dht == nil {
+		return nil, nil
+	}
 	for i := 0; i < 3; i++ {
-		peers, err := d.dht.GetClosestPeers(d.ctx, target.String())
-		if err == nil {
-			return peers, nil
+		peers, err := d.dht.GetClosestPeers(d.ctx, target)
+		if err != nil {
+			d.logger.Warn("Error getting closest peers from DHT", zap.String("target", target), zap.Error(err))
+			continue
 		}
-		d.logger.Warn(
-			"Attempt to get closest peers failed",
-			zap.Int("attempt", i),
-			zap.Error(err),
-		)
-		time.Sleep(time.Duration(100) * time.Millisecond)
+
+		return peers, nil
 	}
 
 	return nil, errors.New("failed to get closest peers after multiple attempts")
 }
 
-func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger, bucketSize int) *DHTDiscovery {
+func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger) *DHTDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DHTDiscovery{
 		host:            h,
@@ -57,14 +73,14 @@ func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger, b
 		ctx:             ctx,
 		cancel:          cancel,
 		logger:          logger.Named("dht-discovery"),
-		bucketSize:      bucketSize,
 	}
 }
 
 func (d *DHTDiscovery) Start(ctx context.Context) error {
 	var err error
-	d.dht, err = dht.New(ctx, d.host, dht.Mode(dht.ModeClient), dht.BucketSize(d.bucketSize))
+	d.dht, err = dht.New(ctx, d.host)
 	if err != nil {
+		d.logger.Error("Failed to create DHT instance", zap.Error(err))
 		return err
 	}
 

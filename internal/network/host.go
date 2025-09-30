@@ -103,7 +103,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	}
 
 	// Create d service
-	d := discovery.NewDHTDiscovery(h, cfg.DiscoveryConfig, logger, cfg.MaxOutboundDegree*5)
+	d := discovery.NewDHTDiscovery(h, cfg.DiscoveryConfig, logger)
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
 	node := &P2PNode{
@@ -553,11 +553,7 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 func (n *P2PNode) buildNetwork() {
 	n.logger.Info("Starting network building phase")
 
-	closestPeers, err := n.discovery.ClosestPeers(n.host.ID())
-	if err != nil {
-		n.logger.Error("Failed to get closest peers from discovery", zap.Error(err))
-		return
-	}
+	closestPeers := n.discovery.ClosestPeers(n.host.ID(), n.maxOutbound)
 
 	n.logger.Info(
 		"Attempting to connect to closest neighbors", zap.Int("selected", len(closestPeers)),
