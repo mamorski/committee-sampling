@@ -12,7 +12,9 @@ import (
 	"github.com/mamorski/committee-sampling/internal/mdag"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 )
 
@@ -21,6 +23,15 @@ func createIntegrationTestPeerID(id string) peer.ID {
 	// For integration testing, we can just cast the string to peer.ID
 	// This is simpler than creating proper libp2p peer IDs
 	return peer.ID(id)
+}
+
+type CollectorMock struct {
+	mock.Mock
+}
+
+func (m *CollectorMock) AddCustomMetric(_ prometheus.Collector) error {
+	args := m.Called()
+	return args.Error(0)
 }
 
 // InMemoryNetwork implements network.Network for integration testing
@@ -184,6 +195,8 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 	mdagRounds := 6
 	sessionID := "test-expost-five-nodes"
 	syncer := newDelayedSync(20 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -195,8 +208,7 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -262,8 +274,10 @@ func TestExPostIntegrationFiveNodes(t *testing.T) {
 				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
 				Sigma:     states[idx],
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(
+				sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction,
+			)
 		}(i)
 	}
 
@@ -329,6 +343,8 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 	mdagRounds := 4
 	sessionID := "test-expost-prover"
 	syncer := newDelayedSync(20 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -349,8 +365,7 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 32, proverGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, proverGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -411,8 +426,10 @@ func TestExPostIntegrationProverBehavior(t *testing.T) {
 				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
 				Sigma:     states[idx],
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(
+				sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction,
+			)
 		}(i)
 	}
 
@@ -478,6 +495,8 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 	mdagRounds := 3
 	sessionID := "test-expost-filtering"
 	syncer := newDelayedSync(20 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -489,8 +508,7 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase
@@ -551,8 +569,10 @@ func TestExPostIntegrationMessageFiltering(t *testing.T) {
 				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
 				Sigma:     states[idx],
 			}
-			results[idx], verifyErrors[idx] = exposts[idx].Verify(sessionID,
-				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
+			results[idx], verifyErrors[idx] = exposts[idx].Verify(
+				sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction,
+			)
 		}(i)
 	}
 
@@ -617,6 +637,8 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 	mdagRounds := 5
 	sessionID := "test-expost-concurrent"
 	syncer := newDelayedSync(150 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -628,8 +650,7 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 16, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 16, testGradeFunction, logger)
 	}
 
 	// Run generation and verification concurrently
@@ -666,7 +687,14 @@ func TestExPostIntegrationConcurrentExecution(t *testing.T) {
 				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
 				Sigma:     state,
 			}
-			result, verifyErr := exposts[idx].Verify(sessionID, []byte(fmt.Sprintf("node%d-vk", idx)), fSigmaExp, auxTag, 0.5, testFilterTagFunction)
+			result, verifyErr := exposts[idx].Verify(
+				sessionID,
+				[]byte(fmt.Sprintf("node%d-vk", idx)),
+				fSigmaExp,
+				auxTag,
+				0.5,
+				testFilterTagFunction,
+			)
 
 			if verifyErr != nil {
 				errors[idx] = verifyErr
@@ -744,6 +772,8 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 	mdagRounds := 3
 	sessionID := "test-expost-errors"
 	syncer := newDelayedSync(200 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -756,8 +786,7 @@ func TestExPostIntegrationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should fail because R = 15 > mdagRounds = 3
@@ -834,6 +863,8 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	mdagRounds := 6
 	sessionID := "test-expost-verify-errors"
 	syncer := newDelayedSync(200 * time.Millisecond)
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	for i := 0; i < nodeCount; i++ {
 		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
@@ -846,8 +877,7 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 
 	for i := 0; i < nodeCount; i++ {
 		vk := []byte(fmt.Sprintf("node%d-vk", i))
-		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD,
-			expostBigD, 32, testGradeFunction, logger)
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
 	}
 
 	// Generate phase - this should succeed
@@ -913,8 +943,10 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 				Challenge: []byte(fmt.Sprintf("challenge-%d", idx)),
 				Sigma:     insufficientSigma,
 			}
-			_, verifyErrors[idx] = exposts[idx].Verify(sessionID, []byte(fmt.Sprintf("node%d-vk", idx)),
-				fSigmaExp, auxTag, 0.5, testFilterTagFunction)
+			_, verifyErrors[idx] = exposts[idx].Verify(
+				sessionID, []byte(fmt.Sprintf("node%d-vk", idx)),
+				fSigmaExp, auxTag, 0.5, testFilterTagFunction,
+			)
 		}(i)
 	}
 

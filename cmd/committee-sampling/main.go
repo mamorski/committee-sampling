@@ -38,13 +38,14 @@ func main() {
 	// Start the synchronizer
 	sync.Start()
 
-	node, err := network.New(ctx, cfg.Network, logger, sync)
+	node, err := network.New(ctx, cfg.Network, logger, sync, cfg.Committee.SessionID)
 	if err != nil {
 		panic(err)
 	}
 
 	nodeID := node.GetNodeID()
 	logger = logger.With(zap.String("node_id", nodeID))
+	logger.Info("Starting node with id")
 
 	// Initialize metrics collector
 	metricsCollector, err := metrics.New(ctx, &cfg.Metrics, logger, nodeID, cfg.Committee.SessionID)
@@ -63,7 +64,7 @@ func main() {
 		panic(err)
 	}
 
-	// Set up graceful shutdown
+	// Set up a graceful shutdown
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 

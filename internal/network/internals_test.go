@@ -10,6 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -56,6 +57,7 @@ func (suite *InternalsTestSuite) SetupTest() {
 		key:       suite.testPrivKey,
 		neighbors: make(map[peer.ID]peer.AddrInfo),
 	}
+	suite.node.acceptingPotentialNeighbors.Store(true)
 }
 
 func (suite *InternalsTestSuite) TestSignData() {
@@ -362,13 +364,10 @@ func (suite *InternalsTestSuite) TestSendProtoMessageSuccess() {
 	}
 	suite.node.neighbors[suite.testPeerID] = addrInfo
 
-	// Setup mock expectations
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
-
 	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(100, nil)
-	mockStream.On("Close").Return(nil)
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
+	mockStream.On("Close").Return(nil).Once()
 
 	testMessage := &pproto.NeighborMessage{
 		MessageData: &pproto.MessageData{
@@ -384,12 +383,11 @@ func (suite *InternalsTestSuite) TestSendProtoMessageSuccess() {
 }
 
 func (suite *InternalsTestSuite) TestSendSuccess() {
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
 
 	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(100, nil)
-	mockStream.On("Close").Return(nil)
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
+	mockStream.On("Close").Return(nil).Once()
 
 	testMessage := &pproto.NeighborMessage{
 		MessageData: &pproto.MessageData{
@@ -413,7 +411,8 @@ func (suite *InternalsTestSuite) TestSendSuccess() {
 }
 
 func (suite *InternalsTestSuite) TestSendConnectionFailure() {
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(errors.New("connection failed"))
+	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(errors.New("connection failed")).Once()
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
 
 	testMessage := &pproto.NeighborMessage{
 		MessageData: &pproto.MessageData{
@@ -460,9 +459,6 @@ func (suite *InternalsTestSuite) TestSendStreamCreationFailure() {
 }
 
 func (suite *InternalsTestSuite) TestSendMarshalFailure() {
-	// This is difficult to test since proto.Marshal rarely fails
-	// We'll test with a valid message
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
 
 	mockStream := &MockStream{}
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
@@ -491,13 +487,12 @@ func (suite *InternalsTestSuite) TestSendMarshalFailure() {
 }
 
 func (suite *InternalsTestSuite) TestSendWriteFailure() {
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
 
 	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil)
-	mockStream.On("Write", mock.Anything).Return(0, errors.New("write failed"))
-	mockStream.On("Reset").Return(nil)
-	mockStream.On("Close").Return(nil) // Add missing Close expectation
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(0, errors.New("write failed")).Once()
+	mockStream.On("Reset").Return(nil).Once()
+	mockStream.On("Close").Return(nil).Once()
 
 	testMessage := &pproto.NeighborMessage{
 		MessageData: &pproto.MessageData{

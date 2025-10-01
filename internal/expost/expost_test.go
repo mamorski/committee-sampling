@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -127,6 +127,9 @@ func (suite *ExPostTestSuite) SetupTest() {
 		protocolID:   "/expost/1.0.0/" + suite.sid,
 		nodeID:       "test-node",
 		R:            3 * 5,
+
+		validMessages: make([]int, 15),
+		totalMessages: make([]int, 15),
 	}
 }
 
@@ -147,9 +150,13 @@ func (suite *ExPostTestSuite) TestNew() {
 	mockNet.On("RegisterHandler", "/expost/1.0.0/test-new-session", mock.AnythingOfType("network.MessageHandler")).Once()
 	mockNet.On("GetNodeID").Return("test-node").Once()
 
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
+
 	// Call the New function
-	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond),
-		testDiameter, testD, testLambda, testGradeFunc, testLogger)
+	expost := New(
+		mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond), testDiameter, testD, testLambda, testGradeFunc, testLogger,
+	)
 
 	// Verify the instance is created correctly
 	suite.NotNil(expost)
@@ -194,6 +201,9 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	expectedProtocolID := "/expost/1.0.0/special/chars@session#123"
 	mockNet.On("RegisterHandler", expectedProtocolID, mock.AnythingOfType("network.MessageHandler")).Once()
 	mockNet.On("GetNodeID").Return("test-node").Once()
+
+	collector := &CollectorMock{}
+	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
 	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
 
@@ -598,9 +608,11 @@ func mockFilterTagFuncFalse(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
 
 func (suite *ExPostTestSuite) TestGenerateWithEmptyCharset() {
 	// This should panic due to empty charset
-	suite.Panics(func() {
-		_, _ = secureRandomBytes(10, "")
-	})
+	suite.Panics(
+		func() {
+			_, _ = secureRandomBytes(10, "")
+		},
+	)
 }
 
 func (suite *ExPostTestSuite) TestGenerateWithZeroLength() {
@@ -958,8 +970,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 
 	// Verify the result contains the expected data
 	result, exists := results.Get(
-		base64.StdEncoding.EncodeToString([]byte("test-vk")),
-		base64.StdEncoding.EncodeToString([]byte("test-value")),
+		base64.StdEncoding.EncodeToString([]byte("test-vk")), base64.StdEncoding.EncodeToString([]byte("test-value")),
 	)
 	suite.True(exists)
 	suite.Equal("test-node", result.ID)

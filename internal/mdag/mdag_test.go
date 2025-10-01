@@ -9,7 +9,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
-
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -109,7 +108,7 @@ func (suite *MDAGTestSuite) TestNew() {
 func (suite *MDAGTestSuite) TestOracle() {
 	suite.setupMDAG()
 
-	// Test with single input
+	// Test with a single input
 	input1 := []byte("test-input")
 	result1 := suite.mdag.Oracle(input1)
 	suite.NotNil(result1)

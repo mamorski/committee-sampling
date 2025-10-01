@@ -43,15 +43,14 @@ type Metrics struct {
 	PushGateway  PushGateway   `mapstructure:"push_gateway"`  // Push gateway configuration
 	HTTPServer   HTTPServer    `mapstructure:"http_server"`   // HTTP server for /metrics endpoint
 	PushInterval time.Duration `mapstructure:"push_interval"` // Interval for pushing metrics
-	JobName      string        `mapstructure:"job_name"`      // Job name for metrics
-	InstanceName string        `mapstructure:"instance_name"` // Instance name for metrics
 }
 
 type PushGateway struct {
-	Enabled  bool   `mapstructure:"enabled"`  // Enable push gateway
-	URL      string `mapstructure:"url"`      // Push gateway URL
-	Username string `mapstructure:"username"` // Basic auth username (optional)
-	Password string `mapstructure:"password"` // Basic auth password (optional)
+	Enabled      bool   `mapstructure:"enabled"`        // Enable push gateway
+	URL          string `mapstructure:"url"`            // Push gateway URL
+	Username     string `mapstructure:"username"`       // Basic auth username (optional)
+	Password     string `mapstructure:"password"`       // Basic auth password (optional)
+	DeleteOnStop bool   `mapstructure:"delete_on_stop"` // Delete metrics on stop
 }
 
 type HTTPServer struct {
@@ -61,10 +60,15 @@ type HTTPServer struct {
 }
 
 type Network struct {
-	ListenPort        int       `mapstructure:"listen_port"`         // Port to listen for incoming connections
-	MaxOutboundDegree int       `mapstructure:"max_outbound_degree"` // Maximum number of outbound connections
-	DiscoveryConfig   Discovery `mapstructure:"discovery_config"`    // Configuration for peer discoveryÏ
+	ListenPort          int       `mapstructure:"listen_port"`          // Port to listen for incoming connections
+	MaxOutboundDegree   int       `mapstructure:"max_outbound_degree"`  // Maximum number of outbound connections
+	DiscoveryConfig     Discovery `mapstructure:"discovery_config"`     // Configuration for peer discovery
+	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
+	// default: 3)
 
+	// Simulation-only options
+	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
+	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
 }
 
 type Discovery struct {
@@ -121,13 +125,14 @@ func Load(configPath string) (*Config, error) {
 	_, _ = fmt.Println("Using config file:", viper.ConfigFileUsed())
 	cfg := &Config{}
 
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			stringToTimeHookFunc(),
-			stringToDurationHookFunc(),
-		),
-		Result: cfg,
-	})
+	decoder, err := mapstructure.NewDecoder(
+		&mapstructure.DecoderConfig{
+			DecodeHook: mapstructure.ComposeDecodeHookFunc(
+				stringToTimeHookFunc(), stringToDurationHookFunc(),
+			),
+			Result: cfg,
+		},
+	)
 	if err != nil {
 		panic(fmt.Sprintf("Error creating decoder: %s", err))
 	}

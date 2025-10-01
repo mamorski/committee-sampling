@@ -279,6 +279,11 @@ type MockDiscovery struct {
 	ch chan peer.AddrInfo
 }
 
+func (m *MockDiscovery) ClosestPeers(target peer.ID, peersNum int) []peer.ID {
+	args := m.Called(target)
+	return args.Get(0).([]peer.ID)
+}
+
 func (m *MockDiscovery) Start(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)

@@ -101,27 +101,29 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerID peer.ID, pubK
 // newMessageData helper method - generate message data shared between all node's p2p protocols
 // messageId: unique for requests, copied from request for responses
 func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageData {
-	// Add proto bin data for message author public key
-	// this is useful for authenticating  messages forwarded by a node authored by another node
+	// Add proto bin data for a message author public key
+	// this is useful for authenticating messages forwarded by a node authored by another node
 	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
 
 	if err != nil {
 		n.logger.Fatal("Failed to get public key for sender from local peer store", zap.Error(err))
 	}
 
-	return &pproto.MessageData{ClientVersion: clientVersion,
-		NodeId:     n.host.ID().String(),
-		NodePubKey: nodePubKey,
-		Timestamp:  time.Now().Unix(),
-		Id:         messageID,
-		Gossip:     gossip}
+	return &pproto.MessageData{
+		ClientVersion: clientVersion,
+		NodeId:        n.host.ID().String(),
+		NodePubKey:    nodePubKey,
+		Timestamp:     time.Now().Unix(),
+		Id:            messageID,
+		Gossip:        gossip,
+	}
 }
 
 // sendProtoMessage helper method - writes a proto go data object to a network stream
 // data: reference of proto go data object to send (not the object itself)
 // s: network stream to write the data to
 func (n *P2PNode) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool {
-	addrInfo, ok := n.neighbors[id]
+	addrInfo, ok := n.getNeighbor(id)
 	if !ok {
 		n.logger.Error("Failed to find peer", zap.String("peer", id.String()))
 		return false
@@ -131,16 +133,19 @@ func (n *P2PNode) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message
 }
 
 func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
-	err := n.host.Connect(context.Background(), addrInfo)
-	if err != nil {
-		n.logger.Error("Failed to connect to peer", zap.Error(err))
-		return false
-	}
-
 	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
-		n.logger.Error("Failed to create stream", zap.Error(err))
-		return false
+		// Attempt to establish a connection and retry once
+		if errConn := n.host.Connect(context.Background(), addrInfo); errConn != nil {
+			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
+			return false
+		}
+
+		s, err = n.host.NewStream(context.Background(), addrInfo.ID, p)
+		if err != nil {
+			n.logger.Error("Failed to create stream", zap.Error(err))
+			return false
+		}
 	}
 
 	defer func(s network.Stream) {
@@ -152,6 +157,7 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	if err != nil {
 		n.logger.Error("Failed to marshal proto message", zap.Error(err))
 		_ = s.Reset()
+		// no connectivity check for marshal failure
 		return false
 	}
 
@@ -161,5 +167,6 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 		_ = s.Reset()
 		return false
 	}
+
 	return true
 }

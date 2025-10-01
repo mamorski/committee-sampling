@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
@@ -138,6 +138,11 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		messages:      make(map[int][]*pb.TimestampMessage), // changed
 		sid:           suite.testSID,
 		isRunning:     true,
+		R:             suite.testD * suite.testBigD, // R is the product of d and D
+		nodeID:        suite.testNodeID,
+
+		validMessages: make([]int, suite.testD*suite.testBigD),
+		totalMessages: make([]int, suite.testD*suite.testBigD),
 	}
 }
 
@@ -173,6 +178,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 
 	// Setup mock expectations
 	mockNetwork.On("RegisterHandler", "/exante/1.0.0/test-session", mock.AnythingOfType("network.MessageHandler")).Once()
+	mockNetwork.On("GetNodeID").Return("test-node-id").Once()
 
 	// Call New function
 	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
@@ -196,12 +202,15 @@ func (suite *ExAnteTestSuite) TestGenerate_Success() {
 		{[]byte("state3"), []byte("state4")},
 	}
 
-	suite.mockMDAG.On("Generate", suite.testSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return(expectedState, nil).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockMDAG.On(
+		"Generate", suite.testSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return(expectedState, nil).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -231,12 +240,15 @@ func (suite *ExAnteTestSuite) TestGenerate_MDAGGenerationFailure() {
 	testPiRP := []byte("test-pi-rp")
 	expectedError := errors.New("MDAG generation failed")
 
-	suite.mockMDAG.On("Generate", suite.testSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return([][][]byte(nil), expectedError).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockMDAG.On(
+		"Generate", suite.testSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return([][][]byte(nil), expectedError).Once()
 
 	result, err := suite.exante.Generate(suite.testSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -258,12 +270,15 @@ func (suite *ExAnteTestSuite) TestGenerate_EmptySessionID() {
 		{[]byte("state1")},
 	}
 
-	suite.mockMDAG.On("Generate", newSID, suite.testVK, mock.MatchedBy(func(args [][]byte) bool {
-		return len(args) == 2 &&
-			string(args[0]) == string(suite.testChallenge) &&
-			string(args[1]) == string(testPiRP)
-	})).Return(expectedState, nil).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
+	suite.mockMDAG.On(
+		"Generate", newSID, suite.testVK, mock.MatchedBy(
+			func(args [][]byte) bool {
+				return len(args) == 2 &&
+					string(args[0]) == string(suite.testChallenge) &&
+					string(args[1]) == string(testPiRP)
+			},
+		),
+	).Return(expectedState, nil).Once()
 
 	result, err := suite.exante.Generate(newSID, suite.testVK, suite.testChallenge, testPiRP)
 
@@ -287,7 +302,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_Success() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "node1")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -361,7 +375,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_UnknownNeighbor() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(false).Once()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Once()
 
 	msg := createTestTimestampMessage(suite.testSID, suite.testVK, suite.testChallenge, testAux, 0, "unknown-node")
 	msgBytes := marshalMessage(suite.T(), msg)
@@ -387,7 +400,6 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 	}
 
 	suite.mockNetwork.On("IsNeighbor", mock.Anything).Return(true).Twice()
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
 
 	msg1 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value1"), testAux, 0, "node1")
 	msg2 := createTestTimestampMessage(suite.testSID, suite.testVK, []byte("value2"), testAux, 0, "node1")
@@ -658,7 +670,8 @@ func (suite *ExAnteTestSuite) TestConvertTimestampToBytes() {
 //
 //nolint:unparam
 func createTestTimestampMessage(
-	sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string) *pb.TimestampMessage {
+	sessionID string, vk []byte, challenge []byte, aux *common.AuxTag, round uint32, from string,
+) *pb.TimestampMessage {
 
 	return &pb.TimestampMessage{
 		SessionId:       sessionID,
@@ -732,9 +745,9 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 	}
 	sigma := [][][]byte{
 		{[]byte("sigma0")},
-		{[]byte("sigma1")},
-		// Insufficient length: need d * D = 3 * 2 = 6, but only have 2
+		{[]byte("sigma1")}, // Insufficient length: need d * D = 3 * 2 = 6, but only have 2
 	}
+	suite.exante.R = 6 // Set R to 3 for this test
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 
@@ -744,7 +757,7 @@ func (suite *ExAnteTestSuite) TestVerify_InsufficientSigmaLength() {
 	suite.False(suite.exante.isRunning)
 }
 
-// TestVerify_AsProver tests Verify when node acts as a prover
+// TestVerify_AsProver tests Verify when the node acts as a prover
 func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 	testAux := &common.AuxTag{
 		PiRP: []byte("test-pi-rp"),
@@ -770,8 +783,7 @@ func (suite *ExAnteTestSuite) TestVerify_AsProver() {
 		return 5 // >= d+1 = 4, so node is a prover
 	}
 
-	// Mock network calls for sending initial message
-	suite.mockNetwork.On("GetNodeID").Return(suite.testNodeID).Twice()
+	// Mock network calls for sending an initial message
 	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
@@ -851,8 +863,7 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 
 	// Verify that the message was processed and included in results
 	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK),
-		base64.StdEncoding.EncodeToString(suite.testChallenge),
+		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
 	)
 	suite.True(exists)
 	suite.Equal(2, r.Grade)
@@ -892,7 +903,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		return 3 // Subsequent calls (message processing) - valid grade
 	}
 
-	// Pre-populate messages with same key but different senders
+	// Pre-populate messages with the same key but different senders
 	suite.exante.messages[0] = []*pb.TimestampMessage{
 		{
 			SessionId:       suite.testSID,
@@ -914,7 +925,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 		{
 			SessionId:       suite.testSID,
 			VerificationKey: suite.testVK,
-			Value:           suite.testChallenge, // Same key as first message
+			Value:           suite.testChallenge, // Same key as the first message
 			Aux: &pb.Aux{
 				PiRP: testAux.PiRP,
 				AuxKey: &pb.AuxKeyMessage{
@@ -941,7 +952,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
+	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Twice()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 	suite.NoError(err)
@@ -949,8 +960,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 
 	// Should only have one entry for the key (higher grade wins)
 	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK),
-		base64.StdEncoding.EncodeToString(suite.testChallenge),
+		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
 	)
 	suite.True(exists)
 	suite.Equal(result.Len(), 1)
@@ -960,7 +970,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockNetwork.AssertExpectations(suite.T())
 }
 
-// TestIsMessageValid_GradeZero tests when grade function returns 0
+// TestIsMessageValid_GradeZero tests when a grade function returns 0
 func (suite *ExAnteTestSuite) TestIsMessageValid_GradeZero() {
 	testAux := &common.AuxTag{
 		PiRP: []byte("test-pi-rp"),
@@ -1069,8 +1079,7 @@ func (suite *ExAnteTestSuite) TestIsMessageValid_ValidatePathFails() {
 
 	// Setup state that will cause validateMerklePath to fail (insufficient length)
 	suite.exante.state = [][][]byte{
-		{[]byte("state0")},
-		// Missing state[1] - will cause validateMerklePath to fail
+		{[]byte("state0")}, // Missing state[1] - will cause validateMerklePath to fail
 	}
 
 	// Mock Oracle calls

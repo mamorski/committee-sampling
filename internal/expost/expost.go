@@ -10,14 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -104,24 +103,6 @@ func putState(state *pb.State) {
 	}
 }
 
-var (
-	expostMessagesTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "expost_messages_received_total",
-			Help: "Total number of messages received by ExPost handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
-
-	expostMessagesValid = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "expost_messages_valid_total",
-			Help: "Total number of valid messages processed by ExPost handleMessage",
-		},
-		[]string{"node_id", "round", "protocol", "sid"},
-	)
-)
-
 // MDAG defines the interface for the MDAG required by ExPost
 type MDAG interface {
 	Generate(sid string, vk []byte, vi ...[]byte) ([][][]byte, error)
@@ -151,6 +132,9 @@ type ExPost struct {
 	nodeID     string
 	R          int // d * D
 	threadPool *threadpool.ThreadPool
+
+	validMessages []int
+	totalMessages []int
 }
 
 // New creates a new ExPost instance
@@ -164,9 +148,10 @@ func New(
 	diameterBound int,
 	lambda int,
 	gradeFunc common.GradeFunc,
-	logger *zap.Logger) *ExPost {
+	logger *zap.Logger,
+) *ExPost {
 
-	protocolID := expostProtocolID + "/" + sid
+	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
 
 	e := &ExPost{
 		network:      net,
@@ -185,6 +170,9 @@ func New(
 		protocolID: protocolID,
 		nodeID:     net.GetNodeID(),
 		R:          gradeLevels * diameterBound,
+
+		validMessages: make([]int, gradeLevels*diameterBound),
+		totalMessages: make([]int, gradeLevels*diameterBound),
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -200,8 +188,8 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Generate completed",
-			zap.Duration("elapsed", elapsed),
+		e.logger.Info(
+			"Generate completed", zap.Duration("elapsed", elapsed),
 		)
 	}()
 
@@ -230,12 +218,8 @@ func (e *ExPost) Generate(session string, vk []byte) ([][][]byte, []byte, error)
 
 // Verify implements the ExPost Verification phase
 func (e *ExPost) Verify(
-	session string,
-	vk []byte,
-	fSigmaExp *common.FSigmaExp,
-	auxTag *common.AuxTag,
-	auxLocal float64,
-	filterFn common.FilterTagF) (*common.Committee, error) { //nolint:funlen
+	session string, vk []byte, fSigmaExp *common.FSigmaExp, auxTag *common.AuxTag, auxLocal float64, filterFn common.FilterTagF,
+) (*common.Committee, error) { //nolint:funlen
 
 	e.logger.Info("Verify started")
 	start := time.Now()
@@ -245,9 +229,10 @@ func (e *ExPost) Verify(
 
 	defer func() {
 		elapsed := time.Since(start)
-		e.logger.Info("Verify completed",
-			zap.Duration("elapsed", elapsed),
+		e.logger.Info(
+			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
+		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -259,16 +244,16 @@ func (e *ExPost) Verify(
 	challenge := fSigmaExp.Challenge
 	if len(sigma) < e.R {
 		e.isRunning = false
-		e.logger.Warn("Sigma length is less than required rounds",
-			zap.Int("expected_rounds", e.R),
-			zap.Int("actual_length", len(sigma)))
+		e.logger.Warn(
+			"Sigma length is less than required rounds", zap.Int("expected_rounds", e.R), zap.Int("actual_length", len(sigma)),
+		)
 
 		return nil, fmt.Errorf("sigma length is less than required rounds: %d < %d", len(sigma), e.R)
 	}
 
-	e.logger.Info("Starting ExPost Verification phase",
-		zap.String("session_id", session),
-		zap.String("node_id", e.nodeID))
+	e.logger.Info(
+		"Starting ExPost Verification phase", zap.String("session_id", session), zap.String("node_id", e.nodeID),
+	)
 
 	results := &common.Committee{}
 
@@ -286,7 +271,8 @@ func (e *ExPost) Verify(
 	if grade >= (e.d+1) &&
 		filterFn(session, e.nodeID, vk, challenge, auxPb) {
 
-		e.logger.Info("Node is a prover, sending initial message",
+		e.logger.Info(
+			"Node is a prover, sending initial message",
 			zap.Int("grade", grade),
 			zap.Int("d", e.d),
 			zap.Binary("vk", vk),
@@ -343,9 +329,8 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
-		e.logger.Info("ExPost verification round",
-			zap.Int("round", r),
-			zap.String("node_id", e.nodeID),
+		e.logger.Info(
+			"ExPost verification round", zap.Int("round", r), zap.String("node_id", e.nodeID),
 		)
 		e.mu.Lock()
 		msgs := e.messages[r-1]
@@ -358,14 +343,17 @@ func (e *ExPost) Verify(
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
 		for _, msg := range msgs {
-			e.threadPool.Submit(func() {
-				e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results)
-			})
+			e.threadPool.Submit(
+				func() {
+					e.processMessage(msg, session, sigma, auxLocal, filterFn, r, results)
+				},
+			)
 		}
 
 		// Wait for all tasks in this round to complete
 		e.threadPool.Wait()
-		e.logger.Info("Finished processing messages for round",
+		e.logger.Info(
+			"Finished processing messages for round",
 			zap.Int("round", r),
 			zap.Duration("elapsed", time.Since(loopStart)),
 			zap.Int("messages_processed", len(msgs)),
@@ -386,38 +374,36 @@ func (e *ExPost) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 	// Check if we have enough layers in the merkle path
 	// We need layers from R-round+1 to R (inclusive)
 	if len(msg.MerklePath) < r {
-		e.logger.Warn("Invalid Merkle path length",
-			zap.Int("expected", r),
-			zap.Int("actual", len(msg.MerklePath)),
-			zap.String("sender_id", msg.Id),
+		e.logger.Warn(
+			"Invalid Merkle path length", zap.Int("expected", r), zap.Int("actual", len(msg.MerklePath)), zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if !filterFn(msg.SessionId, msg.Id, msg.VerificationKey, msg.Value, msg.Aux) {
-		e.logger.Warn("Message does not pass filter function",
-			zap.String("sender_id", msg.Id),
+		e.logger.Warn(
+			"Message does not pass filter function", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if !(e.gradeFunc(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal) > 0) {
-		e.logger.Warn("Message does not pass grade function",
-			zap.String("sender_id", msg.Id),
+		e.logger.Warn(
+			"Message does not pass grade function", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if msg.Value == nil || string(msg.Value) != string(e.mdag.Oracle(msg.MerklePath[len(msg.MerklePath)-1].Row...)) {
-		e.logger.Warn("Message does not pass value check",
-			zap.String("sender_id", msg.Id),
+		e.logger.Warn(
+			"Message does not pass value check", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
 
 	if !e.validateMerklePath(msg.MerklePath, r) {
-		e.logger.Warn("Merkle path validation failed",
-			zap.String("sender_id", msg.Id),
+		e.logger.Warn(
+			"Merkle path validation failed", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
@@ -438,7 +424,7 @@ func (e *ExPost) validateMerklePath(merklePath []*pb.State, round int) bool {
 	// Validate the Merkle path structure
 	// Each layer should contain the hash of the previous layer
 	for i := 1; i < round; i++ {
-		// Hash the previous layer (i-1) and check if it's in current layer (i)
+		// Hash the previous layer (i-1) and check if it's in the current layer (i)
 		prevLayerHash := e.mdag.Oracle(merklePath[i-1].Row...)
 		if !isValueInState(prevLayerHash, merklePath[i].Row) {
 			e.logger.Warn("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
@@ -457,28 +443,35 @@ func (e *ExPost) processMessage(
 	auxLocal float64,
 	filterFn common.FilterTagF,
 	r int,
-	results *common.Committee) {
+	results *common.Committee,
+) {
 
 	if e.isMessageValid(msg, auxLocal, filterFn, r) {
 
 		g := min(e.d-r/e.D, e.gradeFunc(msg.SessionId, msg.VerificationKey, msg.Value, msg.Aux.AuxKey, auxLocal))
-		e.logger.Debug("Processing valid message", zap.Int("round", r),
-			zap.String("sender_id", msg.Id),
-			zap.Int("round", r),
-			zap.Int("grade", g),
-		)
+		if e.logger.Core().Enabled(zap.DebugLevel) {
+			e.logger.Debug(
+				"Processing valid message", zap.Int("round", r), zap.String("sender_id", msg.Id), zap.Int("round", r), zap.Int("grade", g),
+			)
+		}
 		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
-			e.logger.Info("Added to results",
+			e.logger.Info(
+				"Added to results",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
 				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+				zap.Int("grade", g),
+			)
 		} else {
-			e.logger.Debug("Skipping message with lower grade",
-				zap.String("sender_id", msg.Id),
-				zap.Binary("vk", msg.VerificationKey),
-				zap.Binary("value", msg.Value),
-				zap.Int("grade", g))
+			if e.logger.Core().Enabled(zap.DebugLevel) {
+				e.logger.Debug(
+					"Skipping message with lower grade",
+					zap.String("sender_id", msg.Id),
+					zap.Binary("vk", msg.VerificationKey),
+					zap.Binary("value", msg.Value),
+					zap.Int("grade", g),
+				)
+			}
 			return
 		}
 
@@ -518,9 +511,8 @@ func (e *ExPost) processMessage(
 			putState(state)
 		}
 	} else {
-		e.logger.Info("Ignoring invalid message",
-			zap.Int("round", r),
-			zap.String("sender_id", msg.Id),
+		e.logger.Info(
+			"Ignoring invalid message", zap.Int("round", r), zap.String("sender_id", msg.Id),
 		)
 	}
 }
@@ -531,7 +523,9 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		return fmt.Errorf("protocol not running")
 	}
 
-	e.logger.Debug(fmt.Sprintf("Received message from %s", from.String()))
+	if e.logger.Core().Enabled(zap.DebugLevel) {
+		e.logger.Debug(fmt.Sprintf("Received message from %s", from.String()))
+	}
 
 	var msg pb.TimestampMessage
 	if err := proto.Unmarshal(payload, &msg); err != nil {
@@ -540,15 +534,20 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	}
 
 	round := int(msg.Round)
+	if round < 0 || round >= e.R {
+		e.logger.Warn("Received message with invalid round", zap.Int("round", round), zap.Int("max", e.R))
+		return nil
+	}
 
 	// Increment total messages received metric
-	expostMessagesTotal.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost", e.sid).Inc()
+	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
+	e.totalMessages[round]++
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
-		e.logger.Warn("Received message with mismatched session id",
-			zap.String("expected", e.sid),
-			zap.String("received", msg.SessionId))
+		e.logger.Warn(
+			"Received message with mismatched session id", zap.String("expected", e.sid), zap.String("received", msg.SessionId),
+		)
 
 		return err
 	}
@@ -576,17 +575,21 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Debug("ExPost: Received message",
-		zap.String("from", from.String()),
-		zap.String("sender_id", msg.Id),
-		zap.Int("round", round),
-		zap.Binary("verification_key", msg.VerificationKey),
-		zap.Binary("value", msg.Value),
-		zap.Binary("proof", msg.Aux.PiRP),
-	)
+	if e.logger.Core().Enabled(zap.DebugLevel) {
+		e.logger.Debug(
+			"ExPost: Received message",
+			zap.String("from", from.String()),
+			zap.String("sender_id", msg.Id),
+			zap.Int("round", round),
+			zap.Binary("verification_key", msg.VerificationKey),
+			zap.Binary("value", msg.Value),
+			zap.Binary("proof", msg.Aux.PiRP),
+		)
+	}
 
 	// Increment valid messages metric - message passed all validation checks
-	expostMessagesValid.WithLabelValues(e.nodeID, strconv.Itoa(round), "expost", e.sid).Inc()
+	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
+	e.validMessages[round]++
 
 	e.messages[round] = append(e.messages[round], &msg)
 	return nil
@@ -606,7 +609,9 @@ func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {
 }
 
 func isValueInState(value []byte, state [][]byte) bool {
-	return slices.ContainsFunc(state, func(s []byte) bool {
-		return slices.Equal(s, value)
-	})
+	return slices.ContainsFunc(
+		state, func(s []byte) bool {
+			return slices.Equal(s, value)
+		},
+	)
 }
