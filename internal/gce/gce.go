@@ -4,9 +4,10 @@ import (
 	"errors"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/hash"
-	"go.uber.org/zap"
 )
 
 type VRF interface {

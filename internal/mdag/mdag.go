@@ -202,7 +202,8 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 			m.broadcast(r, m.currentLabel)
 		}
 		elapsed := time.Since(start)
-		m.logger.Info("Finished processing messages for round",
+		m.logger.Info(
+			"Finished processing messages for round",
 			zap.Int("round", r),
 			zap.Duration("elapsed", elapsed),
 			zap.Binary("new_label", m.currentLabel),
