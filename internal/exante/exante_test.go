@@ -952,7 +952,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.mockMDAG.On("Oracle", mock.Anything).Return([]byte("oracle-result")).Times(4)
 
 	// Mock network calls
-	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Twice()
+	suite.mockNetwork.On("SendProtocolMessage", mock.AnythingOfType("string"), mock.AnythingOfType("[]uint8")).Once()
 
 	result, err := suite.exante.Verify(suite.testSID, suite.testVK, sigma, testAux, 1.0, filterTrue)
 	suite.NoError(err)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -477,16 +476,6 @@ func (n *P2PNode) notifyNeighborDrop(info peer.AddrInfo) {
 	}
 }
 
-func (n *P2PNode) notifyNeighborDropByID(peerID peer.ID) {
-	addrInfo, ok := n.getNeighbor(peerID)
-	if !ok {
-		n.logger.Debug("No address info for neighbor drop", zap.String("peer", peerID.String()))
-		addrInfo = peer.AddrInfo{ID: peerID}
-	}
-
-	n.notifyNeighborDrop(addrInfo)
-}
-
 func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -496,22 +485,11 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		return nil
 	}
 
-	if n.maxOutbound > 0 && len(n.neighbors) >= n.maxOutbound {
-		n.logger.Info(
-			"Neighbor capacity reached, rejecting new neighbor",
-			zap.String("peer_id", addrInfo.ID.String()),
-			zap.Int("current_neighbors", len(n.neighbors)),
-			zap.Int("max_neighbors", n.maxOutbound),
-		)
-		return fmt.Errorf("neighbor capacity reached")
-	}
-
 	n.logger.Info(
 		"Attempting to add neighbor",
 		zap.String("peer_id", addrInfo.ID.String()),
 		zap.Strings("addresses", addrsToStrings(addrInfo.Addrs)),
 		zap.Int("current_neighbors", len(n.neighbors)),
-		zap.Int("max_neighbors", n.maxOutbound),
 	)
 
 	if err := n.host.Connect(context.Background(), addrInfo); err != nil {
@@ -541,7 +519,6 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	n.logger.Info(
 		"Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)),
 	)
-	return
 }
 
 // StartBuildingNetwork initiates the network building phase by randomly selecting
@@ -555,16 +532,17 @@ func (n *P2PNode) buildNetwork() {
 		return
 	}
 
-	selected := n.selectHashClosestNeighbors(candidates, n.maxOutbound)
+	selected := n.selectRandomNeighbors(candidates)
 
 	n.logger.Info(
-		"Attempting to connect to closest neighbors",
+		"Attempting to connect to random neighbors",
 		zap.Int("candidates", len(candidates)),
 		zap.Int("selected", len(selected)),
 	)
 
+	connected := 0
 	for _, info := range selected {
-		if n.maxOutbound > 0 && n.neighborCount() >= n.maxOutbound {
+		if n.maxOutbound > 0 && connected >= n.maxOutbound {
 			break
 		}
 
@@ -581,6 +559,8 @@ func (n *P2PNode) buildNetwork() {
 		if err := n.notifyNeighborAdd(info); err != nil {
 			n.logger.Error("Failed to announce neighbor", zap.String("peer_id", info.ID.String()), zap.Error(err))
 			n.dropNeighbor(info.ID)
+		} else {
+			connected++
 		}
 	}
 }
@@ -632,47 +612,23 @@ func (n *P2PNode) collectPotentialNeighbors() []peer.AddrInfo {
 	return candidates
 }
 
-func (n *P2PNode) selectHashClosestNeighbors(candidates []peer.AddrInfo, limit int) []peer.AddrInfo {
+func (n *P2PNode) selectRandomNeighbors(candidates []peer.AddrInfo) []peer.AddrInfo {
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	type candidateDistance struct {
-		info     peer.AddrInfo
-		distance *big.Int
-	}
-	myAddr := n.host.ID().String()
+	shuffled := make([]peer.AddrInfo, len(candidates))
+	copy(shuffled, candidates)
 
-	scored := make([]candidateDistance, 0, len(candidates))
-	for _, info := range candidates {
-		scored = append(
-			scored, candidateDistance{
-				info:     info,
-				distance: xorDistance(myAddr, info.ID.String()),
-			},
-		)
-	}
-
-	slices.SortFunc(
-		scored, func(a, b candidateDistance) int {
-			return a.distance.Cmp(b.distance)
-		},
-	)
-
-	selected := make([]peer.AddrInfo, 0, limit)
-	for i, entry := range scored {
-		if i >= limit {
-			break
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			n.logger.Error("Failed to shuffle neighbors securely", zap.Error(err))
+			return shuffled
 		}
-		selected = append(selected, entry.info)
+		idx := int(j.Int64())
+		shuffled[i], shuffled[idx] = shuffled[idx], shuffled[i]
 	}
 
-	return selected
-}
-
-func xorDistance(a, b string) *big.Int {
-	A := new(big.Int).SetBytes([]byte(a))
-	B := new(big.Int).SetBytes([]byte(b))
-
-	return new(big.Int).Xor(A, B)
+	return shuffled
 }

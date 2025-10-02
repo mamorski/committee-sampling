@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/network"
-	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/network"
+	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
 // Helper function to create peer.ID from string for testing
