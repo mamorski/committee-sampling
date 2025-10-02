@@ -7,10 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	mathrand "math/rand"
+	"math/big"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -477,16 +476,6 @@ func (n *P2PNode) notifyNeighborDrop(info peer.AddrInfo) {
 	}
 }
 
-func (n *P2PNode) notifyNeighborDropByID(peerID peer.ID) {
-	addrInfo, ok := n.getNeighbor(peerID)
-	if !ok {
-		n.logger.Debug("No address info for neighbor drop", zap.String("peer", peerID.String()))
-		addrInfo = peer.AddrInfo{ID: peerID}
-	}
-
-	n.notifyNeighborDrop(addrInfo)
-}
-
 func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -530,7 +519,6 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	n.logger.Info(
 		"Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)),
 	)
-	return
 }
 
 // StartBuildingNetwork initiates the network building phase by randomly selecting
@@ -632,12 +620,15 @@ func (n *P2PNode) selectRandomNeighbors(candidates []peer.AddrInfo) []peer.AddrI
 	shuffled := make([]peer.AddrInfo, len(candidates))
 	copy(shuffled, candidates)
 
-	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-	r.Shuffle(
-		len(shuffled), func(i, j int) {
-			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-		},
-	)
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			n.logger.Error("Failed to shuffle neighbors securely", zap.Error(err))
+			return shuffled
+		}
+		idx := int(j.Int64())
+		shuffled[i], shuffled[idx] = shuffled[idx], shuffled[i]
+	}
 
 	return shuffled
 }

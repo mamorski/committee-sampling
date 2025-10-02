@@ -99,7 +99,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 			zap.String("address", addr),
 		)
 
-		a, err := multiaddr.NewMultiaddr(addr)
+		var a multiaddr.Multiaddr
+		a, err = multiaddr.NewMultiaddr(addr)
 		if err != nil {
 			d.logger.Error(
 				"Failed to parse bootstrap peer address",
@@ -109,7 +110,8 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 			continue
 		}
 
-		p2pAddr, err := peer.AddrInfoFromP2pAddr(a)
+		var p2pAddr *peer.AddrInfo
+		p2pAddr, err = peer.AddrInfoFromP2pAddr(a)
 		if err != nil {
 			d.logger.Error(
 				"Failed to create peer address info",
@@ -119,7 +121,7 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 			continue
 		}
 
-		if err := d.host.Connect(ctx, *p2pAddr); err != nil {
+		if err = d.host.Connect(ctx, *p2pAddr); err != nil {
 			d.logger.Error(
 				"Failed to connect to bootstrap peer",
 				zap.String("address", addr),
@@ -147,7 +149,7 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 		)
 	}
 
-	if err := d.dht.Bootstrap(ctx); err != nil {
+	if err = d.dht.Bootstrap(ctx); err != nil {
 		d.logger.Error("Failed to bootstrap DHT", zap.Error(err))
 		return err
 	}
