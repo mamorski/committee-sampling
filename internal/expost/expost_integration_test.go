@@ -1,21 +1,29 @@
 package expost
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/mdag"
-	"github.com/mamorski/committee-sampling/internal/network"
-	pb "github.com/mamorski/committee-sampling/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
+	gproto "google.golang.org/protobuf/proto"
+
+	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
+	"github.com/mamorski/committee-sampling/internal/mdag"
+	"github.com/mamorski/committee-sampling/internal/network"
+	"github.com/mamorski/committee-sampling/internal/sim/adversary"
+	pb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
 // Helper function to create peer.ID from string for integration testing
@@ -36,15 +44,21 @@ func (m *CollectorMock) AddCustomMetric(_ prometheus.Collector) error {
 
 // InMemoryNetwork implements network.Network for integration testing
 type InMemoryNetwork struct {
-	nodeID         string
-	handlers       map[string]network.MessageHandler
-	peers          map[string]*InMemoryNetwork
-	neighbors      []string
-	mu             sync.RWMutex
-	messageCounter int
-	messageChan    chan networkMessage
-	stopChan       chan struct{}
+	nodeID              string
+	handlers            map[string]network.MessageHandler
+	peers               map[string]*InMemoryNetwork
+	neighbors           []string
+	mu                  sync.RWMutex
+	messageCounter      int
+	messageChan         chan networkMessage
+	stopChan            chan struct{}
+	outboundInterceptor OutboundInterceptor
+	inboundInterceptor  InboundInterceptor
 }
+
+type OutboundInterceptor func(protocolID, from, to string, payload []byte) (drop bool, mutated []byte, delay time.Duration)
+
+type InboundInterceptor func(protocolID, from string, payload []byte) (drop bool, mutated []byte)
 
 type networkMessage struct {
 	protocolID string
@@ -72,10 +86,21 @@ func (n *InMemoryNetwork) processMessages() {
 		case msg := <-n.messageChan:
 			n.mu.RLock()
 			handler, exists := n.handlers[msg.protocolID]
+			inbound := n.inboundInterceptor
 			n.mu.RUnlock()
 
 			if exists {
-				_ = handler(createIntegrationTestPeerID(msg.from), msg.data)
+				payload := append([]byte(nil), msg.data...)
+				if inbound != nil {
+					drop, mutated := inbound(msg.protocolID, msg.from, payload)
+					if drop {
+						continue
+					}
+					if len(mutated) > 0 {
+						payload = append([]byte(nil), mutated...)
+					}
+				}
+				_ = handler(createIntegrationTestPeerID(msg.from), payload)
 			}
 		case <-n.stopChan:
 			return
@@ -93,23 +118,40 @@ func (n *InMemoryNetwork) SendProtocolMessage(protocolID string, data []byte) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	n.messageCounter++
-
 	neighborSet := make(map[string]bool)
 	for _, neighbor := range n.neighbors {
 		neighborSet[neighbor] = true
 	}
 
 	for peerID, p := range n.peers {
-		if neighborSet[peerID] {
-			select {
-			case p.messageChan <- networkMessage{
-				protocolID: protocolID,
-				data:       data,
-				from:       n.nodeID,
-			}:
-			default:
+		if !neighborSet[peerID] || p == nil {
+			continue
+		}
+
+		payload := append([]byte(nil), data...)
+		delay := time.Duration(0)
+		if n.outboundInterceptor != nil {
+			drop, mutated, d := n.outboundInterceptor(protocolID, n.nodeID, peerID, payload)
+			if drop {
+				continue
 			}
+			if len(mutated) > 0 {
+				payload = append([]byte(nil), mutated...)
+			}
+			delay = d
+		}
+
+		msg := networkMessage{
+			protocolID: protocolID,
+			data:       payload,
+			from:       n.nodeID,
+		}
+
+		n.messageCounter++
+		if delay > 0 {
+			n.dispatchMessageWithDelay(p, msg, delay)
+		} else {
+			n.dispatchMessage(p, msg)
 		}
 	}
 }
@@ -142,6 +184,36 @@ func (n *InMemoryNetwork) AddPeer(peer *InMemoryNetwork) {
 	n.peers[peer.nodeID] = peer
 }
 
+func (n *InMemoryNetwork) SetOutboundInterceptor(f OutboundInterceptor) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.outboundInterceptor = f
+}
+
+func (n *InMemoryNetwork) SetInboundInterceptor(f InboundInterceptor) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.inboundInterceptor = f
+}
+
+func (n *InMemoryNetwork) dispatchMessage(peer *InMemoryNetwork, msg networkMessage) {
+	select {
+	case peer.messageChan <- msg:
+	default:
+	}
+}
+
+func (n *InMemoryNetwork) dispatchMessageWithDelay(peer *InMemoryNetwork, msg networkMessage, delay time.Duration) {
+	time.AfterFunc(
+		delay, func() {
+			select {
+			case peer.messageChan <- msg:
+			default:
+			}
+		},
+	)
+}
+
 func (n *InMemoryNetwork) GetMessageCount() int {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -149,13 +221,13 @@ func (n *InMemoryNetwork) GetMessageCount() int {
 }
 
 func testOracle(data []byte) []byte {
-	hash := sha256.Sum256(data)
-	return hash[:]
+	h := sha256.Sum256(data)
+	return h[:]
 }
 
 func testGradeFunction(_ string, vk []byte, ch []byte, _ *pb.AuxKeyMessage, _ float64) int {
-	hash := sha256.Sum256(append(vk, ch...))
-	return int(hash[0]) % 10
+	h := sha256.Sum256(append(vk, ch...))
+	return int(h[0]) % 10
 }
 
 func testFilterTagFunction(_, _ string, _ []byte, _ []byte, _ *pb.Aux) bool {
@@ -972,4 +1044,234 @@ func TestExPostIntegrationVerificationErrorHandling(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		_ = nodes[i].Close()
 	}
+}
+
+//nolint:funlen
+func TestExPostIntegrationAdversarialScenarios(t *testing.T) {
+	logger := zap.NewNop()
+	const nodeCount = 32
+
+	t.Run(
+		"network_drop_jitter", func(t *testing.T) {
+			var counter uint64
+			results := runAdversarialExPostScenario(
+				t, "drop-jitter", nodeCount, logger, func(idx int, net *InMemoryNetwork) {
+					config := adversary.NetworkUnreliabilityConfig{
+						DropProbability: 0.05,
+						JitterMin:       5 * time.Millisecond,
+						JitterMax:       15 * time.Millisecond,
+					}
+					behavior := adversary.NewNetworkUnreliability(logger.Named(fmt.Sprintf("drop-%d", idx)), int64(1000+idx), config)
+					net.SetOutboundInterceptor(
+						func(protocolID, from, to string, payload []byte) (bool, []byte, time.Duration) {
+							env := &adversary.Envelope{
+								ProtocolID: protocolID,
+								From:       createIntegrationTestPeerID(from),
+								To:         createIntegrationTestPeerID(to),
+								Message: &pb.ProtocolMessage{
+									Payload:     append([]byte(nil), payload...),
+									MessageData: &pb.MessageData{Id: fmt.Sprintf("msg-%d", atomic.AddUint64(&counter, 1))},
+								},
+							}
+							decision := behavior.Outbound(env)
+							switch decision.Action {
+							case adversary.ActionDrop:
+								return true, nil, 0
+							case adversary.ActionDelay:
+								return false, env.Message.Payload, decision.Delay
+							default:
+								return false, env.Message.Payload, 0
+							}
+						},
+					)
+				},
+			)
+
+			nonEmpty := 0
+			for idx, committee := range results {
+				assert.NotNil(t, committee, "node %d should produce committee", idx)
+				if committee.Len() > 0 {
+					nonEmpty++
+				}
+			}
+			assert.GreaterOrEqual(t, nonEmpty, nodeCount/3, "at least one third of the nodes should retain committee members")
+		},
+	)
+
+	t.Run(
+		"ex_ante_equivocator", func(t *testing.T) {
+			mutated := make(map[string]struct{})
+			var mutatedMu sync.Mutex
+			_ = runAdversarialExPostScenario(
+				t, "equivocator", nodeCount, logger, func(idx int, net *InMemoryNetwork) {
+					net.SetOutboundInterceptor(
+						func(protocolID, from, to string, payload []byte) (bool, []byte, time.Duration) {
+							if !strings.HasPrefix(protocolID, "/expost/") {
+								return false, payload, 0
+							}
+							msg := &pb.TimestampMessage{}
+							if err := gproto.Unmarshal(payload, msg); err != nil {
+								return false, payload, 0
+							}
+							digest := hash.Sum([]byte(to))
+							mutatedPayload := payload
+							if len(digest) > 0 && digest[0]&1 == 1 && len(msg.Value) > 0 {
+								msg.Value = hash.Sum(msg.Value, []byte(to))
+								if encoded, err := gproto.Marshal(msg); err == nil {
+									mutatedPayload = encoded
+									challenge := base64.StdEncoding.EncodeToString(msg.Value)
+									mutatedMu.Lock()
+									mutated[challenge] = struct{}{}
+									mutatedMu.Unlock()
+								}
+							}
+							return false, mutatedPayload, 0
+						},
+					)
+				},
+			)
+
+			assert.NotEmpty(t, mutated, "equivocator should produce mutated payloads")
+		},
+	)
+
+	t.Run(
+		"ex_post_freshness_cheater", func(t *testing.T) {
+			var counter uint64
+			mutated := make(map[string]struct{})
+			var mutatedMu sync.Mutex
+			_ = runAdversarialExPostScenario(
+				t, "freshness-cheater", nodeCount, logger, func(idx int, net *InMemoryNetwork) {
+					behavior := adversary.NewFreshnessCheater(
+						logger.Named(fmt.Sprintf("freshness-%d", idx)),
+						adversary.ParseFreshnessMode("both"),
+						1,
+						true,
+					)
+					net.SetOutboundInterceptor(
+						func(protocolID, from, to string, payload []byte) (bool, []byte, time.Duration) {
+							if !strings.HasPrefix(protocolID, "/expost/") {
+								return false, payload, 0
+							}
+							original := append([]byte(nil), payload...)
+							env := &adversary.Envelope{
+								ProtocolID: protocolID,
+								From:       createIntegrationTestPeerID(from),
+								To:         createIntegrationTestPeerID(to),
+								Message: &pb.ProtocolMessage{
+									Payload:     append([]byte(nil), payload...),
+									MessageData: &pb.MessageData{Id: fmt.Sprintf("msg-%d", atomic.AddUint64(&counter, 1))},
+								},
+							}
+							_ = behavior.Outbound(env)
+							mutatedPayload := env.Message.Payload
+							if !bytes.Equal(mutatedPayload, original) {
+								ts := &pb.TimestampMessage{}
+								if err := gproto.Unmarshal(mutatedPayload, ts); err == nil && len(ts.Value) > 0 {
+									challenge := base64.StdEncoding.EncodeToString(ts.Value)
+									mutatedMu.Lock()
+									mutated[challenge] = struct{}{}
+									mutatedMu.Unlock()
+								}
+							}
+							return false, mutatedPayload, 0
+						},
+					)
+				},
+			)
+
+			assert.NotEmpty(t, mutated, "freshness cheater should mutate payloads")
+		},
+	)
+}
+
+func runAdversarialExPostScenario(
+	t *testing.T,
+	scenario string,
+	nodeCount int,
+	logger *zap.Logger,
+	configure func(idx int, net *InMemoryNetwork),
+) []*common.Committee {
+	nodes := make([]*InMemoryNetwork, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		neighbors := make([]string, 0, nodeCount-1)
+		for j := 0; j < nodeCount; j++ {
+			if i != j {
+				neighbors = append(neighbors, fmt.Sprintf("%s-node%d", scenario, j))
+			}
+		}
+		nodes[i] = NewInMemoryNetwork(fmt.Sprintf("%s-node%d", scenario, i), neighbors)
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		for j := 0; j < nodeCount; j++ {
+			if i != j {
+				nodes[i].AddPeer(nodes[j])
+			}
+		}
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		configure(i, nodes[i])
+	}
+
+	mdagRounds := 16
+	sessionID := fmt.Sprintf("adversarial-%s", scenario)
+	syncer := newDelayedSync(10 * time.Millisecond)
+	mdags := make([]*mdag.MDAG, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		mdags[i] = mdag.New(mdagRounds, sessionID, testOracle, nodes[i], syncer, logger, common.ExPostMDAG, "")
+	}
+
+	expostD := 4
+	expostBigD := 4
+	exposts := make([]*ExPost, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		vk := []byte(fmt.Sprintf("node%d-vk", i))
+		exposts[i] = New(nodes[i], mdags[i], sessionID, vk, syncer, expostD, expostBigD, 32, testGradeFunction, logger)
+	}
+
+	states := make([][][][]byte, nodeCount)
+	labels := make([][]byte, nodeCount)
+	genErrors := make([]error, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		states[i], labels[i], genErrors[i] = exposts[i].Generate(sessionID, exposts[i].vk)
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		assert.NoError(t, genErrors[i], "node %d generation should succeed", i)
+	}
+
+	results := make([]*common.Committee, nodeCount)
+	errs := make([]error, nodeCount)
+	var wg sync.WaitGroup
+	wg.Add(nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			auxTag := &common.AuxTag{
+				PiRP: []byte(fmt.Sprintf("pi-rp-%d", idx)),
+				AuxKey: &common.AuxKey{
+					PhiVRF: []byte(fmt.Sprintf("phi-vrf-%d", idx)),
+					PiVRF:  []byte(fmt.Sprintf("pi-vrf-%d", idx)),
+					PhiVDF: []byte(fmt.Sprintf("phi-vdf-%d", idx)),
+					PiVDF:  []byte(fmt.Sprintf("pi-vdf-%d", idx)),
+				},
+			}
+			fSigma := &common.FSigmaExp{Challenge: labels[idx], Sigma: states[idx]}
+			results[idx], errs[idx] = exposts[idx].Verify(sessionID, exposts[idx].vk, fSigma, auxTag, 0.5, testFilterTagFunction)
+		}(i)
+	}
+
+	wg.Wait()
+
+	for i := 0; i < nodeCount; i++ {
+		assert.NoError(t, errs[i], "node %d verification should succeed", i)
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		_ = nodes[i].Close()
+	}
+
+	return results
 }

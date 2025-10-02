@@ -80,10 +80,22 @@ type Adversary struct {
 	JitterMax       time.Duration   `mapstructure:"jitter_max"`
 	ClockSkew       time.Duration   `mapstructure:"clock_skew"`
 	ExAnte          ExAnteAdversary `mapstructure:"ex_ante"`
+	ExPost          ExPostAdversary `mapstructure:"ex_post"`
 }
 
 type ExAnteAdversary struct {
 	Equivocator bool `mapstructure:"equivocator"`
+}
+
+type ExPostAdversary struct {
+	FreshnessCheater FreshnessCheaterConfig `mapstructure:"freshness_cheater"`
+}
+
+type FreshnessCheaterConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	Mode         string `mapstructure:"mode"`
+	StaleRounds  int    `mapstructure:"stale_rounds"`
+	TruncateLeaf bool   `mapstructure:"truncate_leaf"`
 }
 
 type Discovery struct {

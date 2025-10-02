@@ -2,6 +2,7 @@ package adversary
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,6 +21,7 @@ type NetworkUnreliabilityConfig struct {
 type NetworkUnreliabilityBehavior struct {
 	logger *zap.Logger
 	rng    *rand.Rand
+	mu     sync.Mutex
 	cfg    NetworkUnreliabilityConfig
 }
 
@@ -27,7 +29,7 @@ type NetworkUnreliabilityBehavior struct {
 func NewNetworkUnreliability(logger *zap.Logger, seed int64, cfg NetworkUnreliabilityConfig) *NetworkUnreliabilityBehavior {
 	return &NetworkUnreliabilityBehavior{
 		logger: logger,
-		rng:    rand.New(rand.NewSource(seed)),
+		rng:    rand.New(rand.NewSource(seed)), // #nosec G404: deterministic RNG for simulation only
 		cfg:    cfg,
 	}
 }
@@ -35,7 +37,7 @@ func NewNetworkUnreliability(logger *zap.Logger, seed int64, cfg NetworkUnreliab
 // Outbound applies drop or delay decisions based on deterministic RNG.
 func (b *NetworkUnreliabilityBehavior) Outbound(_ *Envelope) Decision {
 	if b.cfg.DropProbability > 0 {
-		if b.rng.Float64() < b.cfg.DropProbability {
+		if b.randomFloat() < b.cfg.DropProbability {
 			if b.logger != nil {
 				b.logger.Debug("Adversary: dropping outbound message")
 			}
@@ -68,5 +70,17 @@ func (b *NetworkUnreliabilityBehavior) jitterDuration() time.Duration {
 		return jitterMax
 	}
 	span := jitterMax - jitterMin
-	return jitterMin + time.Duration(b.rng.Int63n(int64(span)+1))
+	return jitterMin + time.Duration(b.randomInt63n(int64(span)+1))
+}
+
+func (b *NetworkUnreliabilityBehavior) randomFloat() float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rng.Float64()
+}
+
+func (b *NetworkUnreliabilityBehavior) randomInt63n(n int64) int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rng.Int63n(n)
 }

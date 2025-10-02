@@ -301,6 +301,46 @@ Key configuration sections:
 - **Synchronization**: Timing and consensus
 - **Logger**: Logging configuration
 
+#### Adversarial Simulation Options
+
+The optional `network.adversary` block enables deterministic fault-injection during simulations. All flags default to `false`/zero, so production runs remain unaffected until explicitly enabled.
+
+- `enabled`: master switch for the advanced behaviors. When set, the node evaluates additional knobs below.
+- `seed`: 64-bit seed used to derive per-node RNGs (drop/jitter ordering and Merkle tampering remain reproducible across runs).
+- `drop_probability`, `jitter_min`, `jitter_max`: tune unreliable links; outbound messages may be dropped or delayed by a deterministic amount within the configured range. Jitter is applied only when `enabled` is true.
+- `clock_skew`: shifts the local wall-clock and synchronizer timers (useful for skew studies). Accepts Go duration strings (e.g. `"250ms"`, `"-1s"`).
+- `ex_ante.equivocator`: when `true`, Ex-Ante timestamp messages are deterministically split so half the neighbors receive an altered value while signatures remain valid.
+- `ex_post.freshness_cheater`: controls Ex-Post tampering. Supported fields:
+  - `enabled`: master toggle for the behavior.
+  - `mode`: `"stale"`, `"truncate"`, or `"both"`. `stale` resends an older challenge; `truncate` removes the last sibling from the Merkle path; `both` applies both attacks.
+  - `stale_rounds`: (optional) how many rounds back to reuse the cached challenge when `mode` includes `stale` (default `1`).
+  - `truncate_leaf`: optional manual override; set to `false` to force `mode="both"` to only stale challenges.
+
+Example excerpt:
+
+```
+"network": {
+  "adversary": {
+    "enabled": true,
+    "seed": 12345,
+    "drop_probability": 0.05,
+    "jitter_min": "20ms",
+    "jitter_max": "150ms",
+    "clock_skew": "250ms",
+    "ex_ante": { "equivocator": true },
+    "ex_post": {
+      "freshness_cheater": {
+        "enabled": true,
+        "mode": "both",
+        "stale_rounds": 2
+      }
+    }
+  }
+}
+```
+
+These settings apply locally per node; in multi-node simulations configure each participant identically (or with distinct seeds) to reproduce desired adversarial patterns.
+
 ## Contributing
 
 ### Development Workflow

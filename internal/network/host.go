@@ -146,7 +146,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		seedMaterial := hash.Sum([]byte(h.ID().String()))
 		var derivedSeed int64
 		if len(seedMaterial) >= 8 {
-			derivedSeed = int64(binary.BigEndian.Uint64(seedMaterial[:8]))
+			derivedSeed = int64(binary.BigEndian.Uint64(seedMaterial[:8])) // #nosec G115: only used for deterministic simulations
 		}
 		baseSeed := cfg.Adversary.Seed
 		if baseSeed == 0 {
@@ -193,6 +193,24 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	if cfg.Adversary.ExAnte.Equivocator {
 		node.behaviors = append(node.behaviors, adversary.NewExAnteEquivocator(node.logger.Named("equivocator")))
 		node.logger.Info("Simulation: ex-ante equivocator enabled")
+	}
+
+	if cfg.Adversary.ExPost.FreshnessCheater.Enabled {
+		mode := adversary.ParseFreshnessMode(cfg.Adversary.ExPost.FreshnessCheater.Mode)
+		fresh := cfg.Adversary.ExPost.FreshnessCheater
+		behavior := adversary.NewFreshnessCheater(
+			node.logger.Named("freshness_cheater"),
+			mode,
+			fresh.StaleRounds,
+			fresh.TruncateLeaf,
+		)
+		node.behaviors = append(node.behaviors, behavior)
+		node.logger.Info(
+			"Simulation: ex-post freshness cheater enabled",
+			zap.String("mode", string(mode)),
+			zap.Int("stale_rounds", fresh.StaleRounds),
+			zap.Bool("truncate_leaf", fresh.TruncateLeaf),
+		)
 	}
 
 	node.acceptingPotentialNeighbors.Store(true)
@@ -284,7 +302,6 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 				switch dec.Action {
 				case adversary.ActionDrop:
 					decision = dec
-					break
 				case adversary.ActionDelay:
 					if decision.Action != adversary.ActionDelay || dec.Delay > decision.Delay {
 						decision = dec
