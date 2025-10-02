@@ -73,12 +73,17 @@ type Network struct {
 }
 
 type Adversary struct {
-	Enabled         bool          `mapstructure:"enabled"`
-	Seed            int64         `mapstructure:"seed"`
-	DropProbability float64       `mapstructure:"drop_probability"`
-	JitterMin       time.Duration `mapstructure:"jitter_min"`
-	JitterMax       time.Duration `mapstructure:"jitter_max"`
-	ClockSkew       time.Duration `mapstructure:"clock_skew"`
+	Enabled         bool            `mapstructure:"enabled"`
+	Seed            int64           `mapstructure:"seed"`
+	DropProbability float64         `mapstructure:"drop_probability"`
+	JitterMin       time.Duration   `mapstructure:"jitter_min"`
+	JitterMax       time.Duration   `mapstructure:"jitter_max"`
+	ClockSkew       time.Duration   `mapstructure:"clock_skew"`
+	ExAnte          ExAnteAdversary `mapstructure:"ex_ante"`
+}
+
+type ExAnteAdversary struct {
+	Equivocator bool `mapstructure:"equivocator"`
 }
 
 type Discovery struct {

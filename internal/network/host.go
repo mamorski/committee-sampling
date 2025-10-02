@@ -174,14 +174,25 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 			},
 		)
 		node.behaviors = append(node.behaviors, behavior)
-		node.clockSkew = cfg.Adversary.ClockSkew
 		node.logger.Info(
-			"Simulation: adversarial network behavior enabled",
+			"Simulation: adversarial drop/jitter enabled",
 			zap.Float64("drop_probability", dropProbability),
 			zap.Duration("jitter_min", jitterMin),
 			zap.Duration("jitter_max", jitterMax),
+		)
+	}
+
+	if cfg.Adversary.ClockSkew != 0 {
+		node.clockSkew = cfg.Adversary.ClockSkew
+		node.logger.Info(
+			"Simulation: clock skew enabled",
 			zap.Duration("clock_skew", node.clockSkew),
 		)
+	}
+
+	if cfg.Adversary.ExAnte.Equivocator {
+		node.behaviors = append(node.behaviors, adversary.NewExAnteEquivocator(node.logger.Named("equivocator")))
+		node.logger.Info("Simulation: ex-ante equivocator enabled")
 	}
 
 	node.acceptingPotentialNeighbors.Store(true)
@@ -254,18 +265,11 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 			}
 		}
 
+		payloadCopy := append([]byte(nil), data...)
 		m := &pproto.ProtocolMessage{
-			Payload:     data,
+			Payload:     payloadCopy,
 			MessageData: n.newMessageData(uuid.New().String(), false),
 		}
-
-		signature, err := n.signProtoMessage(m)
-		if err != nil {
-			n.logger.Error("Failed to sign message", zap.Error(err))
-			continue
-		}
-
-		m.MessageData.Sign = signature
 
 		decision := adversary.SendNow()
 		if len(n.behaviors) > 0 {
@@ -294,13 +298,24 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 			}
 		}
 
-		switch decision.Action {
-		case adversary.ActionDrop:
+		if decision.Action == adversary.ActionDrop {
 			n.logger.Warn(
 				"Adversary: outbound message dropped",
 				zap.String("peer_id", addrInfo.ID.String()),
 				zap.String("protocol", protocolID),
 			)
+			continue
+		}
+
+		signature, err := n.signProtoMessage(m)
+		if err != nil {
+			n.logger.Error("Failed to sign message", zap.Error(err))
+			continue
+		}
+
+		m.MessageData.Sign = signature
+
+		switch decision.Action {
 		case adversary.ActionDelay:
 			n.delayedSend(addrInfo, protocol.ID(protocolID), m, decision.Delay)
 		default:
@@ -367,7 +382,6 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 				return
 			}
 
-			payload := append([]byte(nil), data.Payload...)
 			from := s.Conn().RemotePeer()
 			dec := adversary.SendNow()
 			if len(n.behaviors) > 0 {
@@ -395,6 +409,7 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 				}
 			}
 
+			payload := append([]byte(nil), data.Payload...)
 			deliver := func() {
 				if err := handler(from, payload); err != nil {
 					n.logger.Error("Failed to handle message", zap.Error(err))

@@ -56,7 +56,7 @@ func (b *NetworkUnreliabilityBehavior) Outbound(_ *Envelope) Decision {
 	return SendNow()
 }
 
-// Inbound leaves inbound traffic untouched for drop/jitter behavior.
+// Inbound leaves traffic untouched for drop/jitter behavior.
 func (b *NetworkUnreliabilityBehavior) Inbound(_ *Envelope) Decision {
 	return SendNow()
 }
