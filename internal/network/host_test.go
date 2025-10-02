@@ -159,6 +159,20 @@ func (suite *HostTestSuite) TestClose() {
 	suite.mockHost.AssertExpectations(suite.T())
 }
 
+func (suite *HostTestSuite) TestNewMessageDataRespectsClockSkew() {
+	suite.node.clockSkew = 2 * time.Second
+	suite.mockHost.On("ID").Return(suite.testPeerID)
+	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Once()
+	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Once()
+
+	reference := time.Now().Add(suite.node.clockSkew).Unix()
+	data := suite.node.newMessageData(uuid.New().String(), false)
+
+	suite.InDelta(float64(reference), float64(data.Timestamp), 1)
+	suite.mockHost.AssertExpectations(suite.T())
+	suite.mockPeerstore.AssertExpectations(suite.T())
+}
+
 func (suite *HostTestSuite) TestCloseDiscoveryError() {
 	suite.mockDiscovery.On("Stop").Return(assert.AnError)
 

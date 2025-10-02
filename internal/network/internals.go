@@ -113,10 +113,14 @@ func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageD
 		ClientVersion: clientVersion,
 		NodeId:        n.host.ID().String(),
 		NodePubKey:    nodePubKey,
-		Timestamp:     time.Now().Unix(),
+		Timestamp:     n.now().Unix(),
 		Id:            messageID,
 		Gossip:        gossip,
 	}
+}
+
+func (n *P2PNode) now() time.Time {
+	return time.Now().Add(n.clockSkew)
 }
 
 // sendProtoMessage helper method - writes a proto go data object to a network stream
@@ -169,4 +173,21 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	}
 
 	return true
+}
+
+func (n *P2PNode) delayedSend(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message, delay time.Duration) {
+	if delay <= 0 {
+		n.send(addrInfo, p, data)
+		return
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			n.send(addrInfo, p, data)
+		case <-n.ctx.Done():
+			return
+		}
+	}()
 }

@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -23,7 +24,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	"github.com/mamorski/committee-sampling/internal/sim/adversary"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
@@ -72,6 +75,8 @@ type P2PNode struct {
 	// simulation options
 	dropOnSend            bool
 	dropOnSendProbability float64
+	behaviors             []adversary.Behavior
+	clockSkew             time.Duration
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer, sid string) (*P2PNode, error) {
@@ -134,6 +139,48 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	if node.dropOnSend {
 		node.logger.Info(
 			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
+		)
+	}
+
+	if cfg.Adversary.Enabled {
+		seedMaterial := hash.Sum([]byte(h.ID().String()))
+		var derivedSeed int64
+		if len(seedMaterial) >= 8 {
+			derivedSeed = int64(binary.BigEndian.Uint64(seedMaterial[:8]))
+		}
+		baseSeed := cfg.Adversary.Seed
+		if baseSeed == 0 {
+			baseSeed = derivedSeed
+		}
+		dropProbability := cfg.Adversary.DropProbability
+		if dropProbability < 0 {
+			dropProbability = 0
+		}
+		if dropProbability > 1 {
+			dropProbability = 1
+		}
+		jitterMin := cfg.Adversary.JitterMin
+		jitterMax := cfg.Adversary.JitterMax
+		if jitterMax < jitterMin {
+			jitterMax = jitterMin
+		}
+		behavior := adversary.NewNetworkUnreliability(
+			node.logger.Named("adversary"),
+			baseSeed,
+			adversary.NetworkUnreliabilityConfig{
+				DropProbability: dropProbability,
+				JitterMin:       jitterMin,
+				JitterMax:       jitterMax,
+			},
+		)
+		node.behaviors = append(node.behaviors, behavior)
+		node.clockSkew = cfg.Adversary.ClockSkew
+		node.logger.Info(
+			"Simulation: adversarial network behavior enabled",
+			zap.Float64("drop_probability", dropProbability),
+			zap.Duration("jitter_min", jitterMin),
+			zap.Duration("jitter_max", jitterMax),
+			zap.Duration("clock_skew", node.clockSkew),
 		)
 	}
 
@@ -219,7 +266,46 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		}
 
 		m.MessageData.Sign = signature
-		n.send(addrInfo, protocol.ID(protocolID), m)
+
+		decision := adversary.SendNow()
+		if len(n.behaviors) > 0 {
+			envelope := &adversary.Envelope{
+				ProtocolID: protocolID,
+				From:       n.host.ID(),
+				To:         addrInfo.ID,
+				Message:    m,
+			}
+			for _, behavior := range n.behaviors {
+				dec := behavior.Outbound(envelope)
+				switch dec.Action {
+				case adversary.ActionDrop:
+					decision = dec
+					break
+				case adversary.ActionDelay:
+					if decision.Action != adversary.ActionDelay || dec.Delay > decision.Delay {
+						decision = dec
+					}
+				default:
+					// keep existing decision
+				}
+				if decision.Action == adversary.ActionDrop {
+					break
+				}
+			}
+		}
+
+		switch decision.Action {
+		case adversary.ActionDrop:
+			n.logger.Warn(
+				"Adversary: outbound message dropped",
+				zap.String("peer_id", addrInfo.ID.String()),
+				zap.String("protocol", protocolID),
+			)
+		case adversary.ActionDelay:
+			n.delayedSend(addrInfo, protocol.ID(protocolID), m, decision.Delay)
+		default:
+			n.send(addrInfo, protocol.ID(protocolID), m)
+		}
 	}
 }
 
@@ -281,8 +367,61 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 				return
 			}
 
-			if err := handler(s.Conn().RemotePeer(), data.Payload); err != nil {
-				n.logger.Error("Failed to handle message", zap.Error(err))
+			payload := append([]byte(nil), data.Payload...)
+			from := s.Conn().RemotePeer()
+			dec := adversary.SendNow()
+			if len(n.behaviors) > 0 {
+				envelope := &adversary.Envelope{
+					ProtocolID: protocolID,
+					From:       from,
+					To:         n.host.ID(),
+					Message:    data,
+				}
+				for _, behavior := range n.behaviors {
+					bDec := behavior.Inbound(envelope)
+					switch bDec.Action {
+					case adversary.ActionDrop:
+						dec = bDec
+					case adversary.ActionDelay:
+						if dec.Action != adversary.ActionDelay || bDec.Delay > dec.Delay {
+							dec = bDec
+						}
+					default:
+						// keep existing decision
+					}
+					if dec.Action == adversary.ActionDrop {
+						break
+					}
+				}
+			}
+
+			deliver := func() {
+				if err := handler(from, payload); err != nil {
+					n.logger.Error("Failed to handle message", zap.Error(err))
+				}
+			}
+
+			switch dec.Action {
+			case adversary.ActionDrop:
+				n.logger.Debug(
+					"Adversary: inbound message dropped",
+					zap.String("from", from.String()),
+					zap.String("protocol", protocolID),
+				)
+				return
+			case adversary.ActionDelay:
+				go func(delay time.Duration) {
+					timer := time.NewTimer(delay)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+						deliver()
+					case <-n.ctx.Done():
+						return
+					}
+				}(dec.Delay)
+			default:
+				deliver()
 			}
 		},
 	)
