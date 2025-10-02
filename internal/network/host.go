@@ -496,22 +496,11 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		return nil
 	}
 
-	if n.maxOutbound > 0 && len(n.neighbors) >= n.maxOutbound {
-		n.logger.Info(
-			"Neighbor capacity reached, rejecting new neighbor",
-			zap.String("peer_id", addrInfo.ID.String()),
-			zap.Int("current_neighbors", len(n.neighbors)),
-			zap.Int("max_neighbors", n.maxOutbound),
-		)
-		return fmt.Errorf("neighbor capacity reached")
-	}
-
 	n.logger.Info(
 		"Attempting to add neighbor",
 		zap.String("peer_id", addrInfo.ID.String()),
 		zap.Strings("addresses", addrsToStrings(addrInfo.Addrs)),
 		zap.Int("current_neighbors", len(n.neighbors)),
-		zap.Int("max_neighbors", n.maxOutbound),
 	)
 
 	if err := n.host.Connect(context.Background(), addrInfo); err != nil {
@@ -555,7 +544,7 @@ func (n *P2PNode) buildNetwork() {
 		return
 	}
 
-	selected := n.selectHashClosestNeighbors(candidates, n.maxOutbound)
+	selected := n.selectHashClosestNeighbors(candidates)
 
 	n.logger.Info(
 		"Attempting to connect to closest neighbors",
@@ -563,8 +552,9 @@ func (n *P2PNode) buildNetwork() {
 		zap.Int("selected", len(selected)),
 	)
 
+	connected := 0
 	for _, info := range selected {
-		if n.maxOutbound > 0 && n.neighborCount() >= n.maxOutbound {
+		if n.maxOutbound > 0 && connected >= n.maxOutbound {
 			break
 		}
 
@@ -581,6 +571,8 @@ func (n *P2PNode) buildNetwork() {
 		if err := n.notifyNeighborAdd(info); err != nil {
 			n.logger.Error("Failed to announce neighbor", zap.String("peer_id", info.ID.String()), zap.Error(err))
 			n.dropNeighbor(info.ID)
+		} else {
+			connected++
 		}
 	}
 }
@@ -632,7 +624,7 @@ func (n *P2PNode) collectPotentialNeighbors() []peer.AddrInfo {
 	return candidates
 }
 
-func (n *P2PNode) selectHashClosestNeighbors(candidates []peer.AddrInfo, limit int) []peer.AddrInfo {
+func (n *P2PNode) selectHashClosestNeighbors(candidates []peer.AddrInfo) []peer.AddrInfo {
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -659,11 +651,8 @@ func (n *P2PNode) selectHashClosestNeighbors(candidates []peer.AddrInfo, limit i
 		},
 	)
 
-	selected := make([]peer.AddrInfo, 0, limit)
-	for i, entry := range scored {
-		if i >= limit {
-			break
-		}
+	selected := make([]peer.AddrInfo, 0, len(scored))
+	for _, entry := range scored {
 		selected = append(selected, entry.info)
 	}
 
