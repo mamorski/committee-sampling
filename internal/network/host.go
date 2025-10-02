@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
-	"slices"
+	mathrand "math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -544,10 +544,10 @@ func (n *P2PNode) buildNetwork() {
 		return
 	}
 
-	selected := n.selectHashClosestNeighbors(candidates)
+	selected := n.selectRandomNeighbors(candidates)
 
 	n.logger.Info(
-		"Attempting to connect to closest neighbors",
+		"Attempting to connect to random neighbors",
 		zap.Int("candidates", len(candidates)),
 		zap.Int("selected", len(selected)),
 	)
@@ -624,44 +624,20 @@ func (n *P2PNode) collectPotentialNeighbors() []peer.AddrInfo {
 	return candidates
 }
 
-func (n *P2PNode) selectHashClosestNeighbors(candidates []peer.AddrInfo) []peer.AddrInfo {
+func (n *P2PNode) selectRandomNeighbors(candidates []peer.AddrInfo) []peer.AddrInfo {
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	type candidateDistance struct {
-		info     peer.AddrInfo
-		distance *big.Int
-	}
-	myAddr := n.host.ID().String()
+	shuffled := make([]peer.AddrInfo, len(candidates))
+	copy(shuffled, candidates)
 
-	scored := make([]candidateDistance, 0, len(candidates))
-	for _, info := range candidates {
-		scored = append(
-			scored, candidateDistance{
-				info:     info,
-				distance: xorDistance(myAddr, info.ID.String()),
-			},
-		)
-	}
-
-	slices.SortFunc(
-		scored, func(a, b candidateDistance) int {
-			return a.distance.Cmp(b.distance)
+	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(
+		len(shuffled), func(i, j int) {
+			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 		},
 	)
 
-	selected := make([]peer.AddrInfo, 0, len(scored))
-	for _, entry := range scored {
-		selected = append(selected, entry.info)
-	}
-
-	return selected
-}
-
-func xorDistance(a, b string) *big.Int {
-	A := new(big.Int).SetBytes([]byte(a))
-	B := new(big.Int).SetBytes([]byte(b))
-
-	return new(big.Int).Xor(A, B)
+	return shuffled
 }
