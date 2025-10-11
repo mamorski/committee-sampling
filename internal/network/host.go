@@ -49,6 +49,8 @@ type Network interface {
 	IsNeighbor(peerID peer.ID) bool
 }
 
+var ErrNeighborCapacity = errors.New("neighbor capacity reached")
+
 type Host interface {
 	ID() peer.ID
 	Close() error
@@ -67,6 +69,7 @@ type P2PNode struct {
 	potentialNeighbors          sync.Map                  // Stores discovered peers before network building
 	discovery                   discovery.PeerDiscovery
 	maxOutbound                 int
+	degreeSlack                 int
 	key                         crypto.PrivKey
 	acceptingPotentialNeighbors atomic.Bool
 	sync                        common.Synchronizer
@@ -119,6 +122,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		discovery:                   d,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
+		degreeSlack:                 cfg.DegreeSlack,
 		key:                         priv,
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
@@ -182,7 +186,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		)
 	}
 
-	if cfg.Adversary.ClockSkew != 0 {
+	if cfg.Adversary.Enabled && cfg.Adversary.ClockSkew != 0 {
 		node.clockSkew = cfg.Adversary.ClockSkew
 		node.logger.Info(
 			"Simulation: clock skew enabled",
@@ -365,6 +369,20 @@ func (n *P2PNode) neighborCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.neighbors)
+}
+
+func (n *P2PNode) neighborLimit() int {
+	capacity := n.maxOutbound
+	switch {
+	case capacity > 0 && n.degreeSlack > 0:
+		return capacity + n.degreeSlack
+	case capacity > 0:
+		return capacity
+	case n.degreeSlack > 0:
+		return n.degreeSlack
+	default:
+		return 0
+	}
 }
 
 func (n *P2PNode) getNeighbor(peerID peer.ID) (peer.AddrInfo, bool) {
@@ -656,6 +674,16 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		return nil
 	}
 
+	if limit := n.neighborLimit(); limit > 0 && len(n.neighbors) >= limit {
+		n.logger.Info(
+			"Neighbor capacity reached",
+			zap.String("peer_id", addrInfo.ID.String()),
+			zap.Int("current_neighbors", len(n.neighbors)),
+			zap.Int("limit", limit),
+		)
+		return ErrNeighborCapacity
+	}
+
 	n.logger.Info(
 		"Attempting to add neighbor",
 		zap.String("peer_id", addrInfo.ID.String()),
@@ -722,6 +750,9 @@ func (n *P2PNode) buildNetwork() {
 		}
 
 		if err := n.addNeighbor(info); err != nil {
+			if errors.Is(err, ErrNeighborCapacity) {
+				break
+			}
 			n.logger.Error("Failed to add neighbor before announcement", zap.String("peer_id", info.ID.String()), zap.Error(err))
 			continue
 		}
@@ -733,6 +764,7 @@ func (n *P2PNode) buildNetwork() {
 		} else {
 			connected++
 		}
+		time.Sleep(200 * time.Millisecond) // brief pause to avoid overwhelming the network
 	}
 }
 

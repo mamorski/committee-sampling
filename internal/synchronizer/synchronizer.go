@@ -35,12 +35,16 @@ type Synchronizer struct {
 }
 
 func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
+	var clockSkew time.Duration
+	if cfg.Network.Adversary.Enabled {
+		clockSkew = cfg.Network.Adversary.ClockSkew
+	}
 	s := &Synchronizer{
 		cfg:           cfg,
 		logger:        logger,
 		stopChan:      make(chan struct{}),
 		roundChannels: make(map[common.Step][]chan struct{}),
-		clockSkew:     cfg.Network.Adversary.ClockSkew,
+		clockSkew:     clockSkew,
 	}
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels

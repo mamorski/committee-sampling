@@ -425,6 +425,26 @@ func (suite *HostTestSuite) TestAddNeighborAlreadyExists() {
 	suite.NoError(err)
 }
 
+func (suite *HostTestSuite) TestAddNeighborRespectsCapacity() {
+	suite.node.maxOutbound = 2
+	suite.node.degreeSlack = 1
+
+	for i := 0; i < 3; i++ {
+		pid := peer.ID(fmt.Sprintf("peer-cap-%d", i))
+		suite.node.neighbors[pid] = peer.AddrInfo{ID: pid}
+	}
+
+	extraAddr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/9000")
+	extraInfo := peer.AddrInfo{
+		ID:    peer.ID("peer-cap-extra"),
+		Addrs: []multiaddr.Multiaddr{extraAddr},
+	}
+
+	err := suite.node.addNeighbor(extraInfo)
+	suite.ErrorIs(err, ErrNeighborCapacity)
+	suite.mockHost.AssertNotCalled(suite.T(), "Connect", mock.Anything, mock.Anything)
+}
+
 func (suite *HostTestSuite) TestNotifyNeighborAddSuccess() {
 	// Create a peer with lower ID to ensure request is sent
 	lowerPriv, _, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)

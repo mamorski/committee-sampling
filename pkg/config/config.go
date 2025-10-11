@@ -62,6 +62,7 @@ type HTTPServer struct {
 type Network struct {
 	ListenPort          int       `mapstructure:"listen_port"`          // Port to listen for incoming connections
 	MaxOutboundDegree   int       `mapstructure:"max_outbound_degree"`  // Maximum number of outbound connections
+	DegreeSlack         int       `mapstructure:"degree_slack"`         // Additional inbound capacity beyond max_outbound_degree
 	DiscoveryConfig     Discovery `mapstructure:"discovery_config"`     // Configuration for peer discovery
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)

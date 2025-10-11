@@ -1,420 +1,237 @@
-# CommitteeSampling
-Setup-Free Committee Sampling with Subquadratic Communication
+# Committee Sampling Framework
 
-## Table of Contents
-- [Overview](#overview)
-- [Getting Started](#getting-started)
-- [Development](#development)
-- [Docker & Containerization](#docker--containerization)
-- [CI/CD Pipeline](#cicd-pipeline)
-- [Deployment](#deployment)
-- [Monitoring](#monitoring)
-- [Configuration](#configuration)
-- [Contributing](#contributing)
+Committee Sampling is a full Go implementation of a setup-free committee election protocol that combines verifiable random functions, verifiable delay functions, and resource-bounded proofs. It forms short-lived committees out of a large population while keeping communication subquadratic and exposing rich observability and adversarial simulation hooks.
 
-## Overview
+---
 
-CommitteeSampling implements a setup-free committee sampling protocol with subquadratic communication complexity. The system provides efficient distributed consensus mechanisms for blockchain and distributed systems applications.
+## How the System Fits Together
 
-### Key Features
-- **Setup-Free Protocol**: No trusted setup required
-- **Subquadratic Communication**: Efficient message complexity
-- **Multi-Environment Support**: Development, staging, and production configurations
-- **Containerized Deployment**: Docker-based infrastructure
-- **Comprehensive CI/CD**: Automated testing, building, and deployment
+The binary entry point is `cmd/committee-sampling/main.go`. At startup the following stages fire in order:
 
-## Getting Started
+1. **Configuration** – `pkg/config/config.go` loads a JSON profile (or falls back to `./configs/{ENV}.json`) and decodes it into strongly typed structs.
+2. **Logging** – `createLogger` builds a zap logger configured by `logger.level`.
+3. **Time Synchronization** – `internal/synchronizer` queries the configured NTP server, computes per-step start times, and exposes `WaitForRound(step, round)` channels that gate protocol progress.
+4. **Networking** – `internal/network` spins up a libp2p host, joins the discovery DHT, handles neighbor churn, authenticates protobuf messages, and applies optional simulation behaviors.
+5. **Metrics** – `internal/metrics` registers Prometheus counters and optionally launches a `/metrics` HTTP server or Pushgateway pusher.
+6. **Protocol Bootstrapping** – `internal/boot` wires together the building blocks:
+   - `internal/resourceproof` provides proof-of-work based resource certificates.
+   - `internal/resourcebound` runs Ex-Post and Ex-Ante timestamp protocols in parallel and intersects their outputs.
+   - `internal/mdag` runs the Multi-Digraph aggregation gadget for message collection.
+   - `internal/expost` and `internal/exante` orchestrate their respective timestamp rounds using the synchronizer.
+   - `internal/vdf` and `internal/vrf` wrap the VDF/VRF implementations.
+   - `internal/gce` drives the two-phase Graded Committee Election.
+7. **Execution** – `Bootstrap.Run()` performs the initialization phase (VRF key generation, RB-ExP proofs, VDF evaluation) followed by committee election, printing elected members (ID, verification key, grade) and logging the final neighbor set.
 
-### Prerequisites
-- Go 1.23+
-- Docker & Docker Compose
-- Make
-- Protocol Buffers compiler (`protoc`)
+Shutdown is coordinated through OS signal handlers, a background error channel, and graceful teardown of metrics and network components.
 
-### Quick Start
-
-"""bash
-# Clone the repository
-git clone <repository-url>
-cd committee-sampling
-
-# Install dependencies
-make deps
-
-# Generate protobuf files
-make proto
-
-# Build the application
-make build
-
-# Run the application
-make run
-"""
-
-### Environment Variables
-
-The application uses environment-based configuration:
-
-- `ENV`: Environment type (`dev`, `stg`, `prod`) - defaults to `dev`
-- `PORT`: Application port - defaults to `8080`
-
-## Development
-
-### Local Development Setup
-
-"""bash
-# Install dependencies and run in development mode
-make dev
-
-# Run tests
-make test
-
-# Generate protobuf files
-make proto
-
-# Clean build artifacts
-make clean
-"""
-
-### Code Quality
-
-The project includes automated linting and formatting:
-- **golangci-lint**: Comprehensive Go linting
-- **gofmt**: Code formatting
-- **go vet**: Static analysis
-
-## Docker & Containerization
-
-### Building Docker Images
-
-"""bash
-# Build Docker image
-make docker-build
-
-# Run container with development config
-make docker-run-dev
-
-# Run container with production config  
-make docker-run-prod
-
-# Run container with staging config
-make docker-run-stg
-
-# Clean up Docker resources
-make docker-clean
-"""
-
-### Docker Compose
-
-For local development with additional services:
-
-"""bash
-# Start application stack
-make compose-up
-
-# Start with specific environment
-make compose-up-dev
-make compose-up-prod
-make compose-up-stg
-
-# Start with monitoring stack
-make compose-monitoring
-
-# View logs
-make compose-logs
-
-# Stop all services
-make compose-down
-"""
-
-### Multi-Stage Docker Build
-
-The Dockerfile uses multi-stage builds for optimization:
-1. **Builder Stage**: Go 1.23 Alpine with build tools
-2. **Runtime Stage**: Minimal Alpine with security features
-
-Key features:
-- **Security**: Non-root user execution
-- **Efficiency**: Small final image size
-- **Caching**: Optimized layer caching
-- **Protobuf**: Automatic proto compilation
-
-## CI/CD Pipeline
-
-### GitHub Actions Workflow
-
-The project includes a comprehensive CI/CD pipeline (`.github/workflows/ci-cd.yml`) with:
-
-#### 🔄 **Continuous Integration**
-- **Code Quality**: Linting, formatting, and static analysis
-- **Testing**: Comprehensive test suite execution
-- **Build Verification**: Multi-architecture builds
-- **Security Scanning**: Vulnerability assessment with Trivy
-
-#### 🚀 **Continuous Deployment**
-- **Automatic Deployments**: Branch-based deployment strategy
-- **Environment Promotion**: Dev → Staging → Production
-- **Image Management**: Container registry with GitHub Packages
-
-#### 📊 **Pipeline Stages**
-
-1. **Test Stage**
-   """bash
-   - Go setup and dependency installation
-   - Protobuf compilation
-   - Code linting with golangci-lint
-   - Unit and integration tests
-   - Build artifact generation
-   """
-
-2. **Docker Build Stage**
-   """bash
-   - Multi-platform Docker builds
-   - Container registry push (ghcr.io)
-   - Image testing and validation
-   - Build cache optimization
-   """
-
-3. **Security Stage**
-   """bash
-   - Trivy vulnerability scanning
-   - SARIF report generation
-   - Security findings upload to GitHub
-   """
-
-4. **Deployment Stages**
-   """bash
-   - Development: Triggered on 'develop' branch
-   - Staging: Triggered on 'main' branch  
-   - Production: Triggered on release tags
-   """
-
-### Triggering Deployments
-
-#### Development Environment
-"""bash
-git push origin develop
-# Automatically deploys to development environment
-"""
-
-#### Staging Environment  
-"""bash
-git push origin main
-# Automatically deploys to staging environment
-"""
-
-#### Production Environment
-"""bash
-git tag v1.0.0
-git push origin v1.0.0
-# Automatically deploys to production environment
-"""
-
-### CI/CD Make Targets
-
-"""bash
-# CI/CD specific builds
-make ci-build     # Multi-stage build with caching
-make ci-test      # Container smoke tests
-make ci-push      # Push to container registry
-"""
-
-## Deployment
-
-### Environment Configuration
-
-The application supports multiple deployment environments:
-
-| Environment | Branch/Trigger | Config File | Description |
-|-------------|----------------|-------------|-------------|
-| Development | `develop` | `dev.json` | Development and testing |
-| Staging | `main` | `stg.json` | Pre-production validation |
-| Production | Release tags | `prod.json` | Live production system |
-
-### Container Registry
-
-Images are published to GitHub Container Registry:
-- **Registry**: `ghcr.io`
-- **Image**: `ghcr.io/<username>/committee-sampling`
-- **Tags**: Branch names, PR numbers, semantic versions
-
-### Deployment Commands
-
-"""bash
-# Pull and run latest development image
-docker run -e ENV=dev ghcr.io/<username>/committee-sampling:develop
-
-# Pull and run latest production image  
-docker run -e ENV=prod ghcr.io/<username>/committee-sampling:v1.0.0
-"""
-
-## Monitoring
-
-### Health Checks
-
-The application includes Docker health checks:
-"""bash
-# Docker Compose health check endpoint
-wget --quiet --tries=1 --spider http://localhost:8080/health
-"""
-
-### Monitoring Stack (Optional)
-
-Enable monitoring with Docker Compose:
-"""bash
-make compose-monitoring
-"""
-
-Includes:
-- **Prometheus**: Metrics collection (http://localhost:9090)
-- **Grafana**: Metrics visualization (http://localhost:3000)
-
-Default Grafana credentials:
-- Username: `admin`
-- Password: `admin`
+---
 
 ## Configuration
 
-### Environment-Based Config
+All runtime parameters live under the top-level keys described below. Examples can be found in `configs/dev.json` and `configs/sample_simulation_plan.json`.
 
-The application loads configuration based on the `ENV` environment variable:
+### `network`
 
-"""bash
-ENV=dev     # Loads configs/dev.json
-ENV=stg     # Loads configs/stg.json  
-ENV=prod    # Loads configs/prod.json
-"""
-
-### Configuration Files
-
-Configuration files are located in the `configs/` directory:
-- `dev.json`: Development settings
-- `stg.json`: Staging settings
-- `prod.json`: Production settings
-
-### Runtime Configuration
-
-Key configuration sections:
-- **Network**: P2P networking and discovery
-- **Graph**: Protocol parameters
-- **Runtime**: Session and committee settings
-- **Synchronization**: Timing and consensus
-- **Logger**: Logging configuration
-
-#### Adversarial Simulation Options
-
-The optional `network.adversary` block enables deterministic fault-injection during simulations. All flags default to `false`/zero, so production runs remain unaffected until explicitly enabled.
-
-- `enabled`: master switch for the advanced behaviors. When set, the node evaluates additional knobs below.
-- `seed`: 64-bit seed used to derive per-node RNGs (drop/jitter ordering and Merkle tampering remain reproducible across runs).
-- `drop_probability`, `jitter_min`, `jitter_max`: tune unreliable links; outbound messages may be dropped or delayed by a deterministic amount within the configured range. Jitter is applied only when `enabled` is true.
-- `clock_skew`: shifts the local wall-clock and synchronizer timers (useful for skew studies). Accepts Go duration strings (e.g. `"250ms"`, `"-1s"`).
-- `ex_ante.equivocator`: when `true`, Ex-Ante timestamp messages are deterministically split so half the neighbors receive an altered value while signatures remain valid.
-- `ex_post.freshness_cheater`: controls Ex-Post tampering. Supported fields:
-  - `enabled`: master toggle for the behavior.
-  - `mode`: `"stale"`, `"truncate"`, or `"both"`. `stale` resends an older challenge; `truncate` removes the last sibling from the Merkle path; `both` applies both attacks.
-  - `stale_rounds`: (optional) how many rounds back to reuse the cached challenge when `mode` includes `stale` (default `1`).
-  - `truncate_leaf`: optional manual override; set to `false` to force `mode="both"` to only stale challenges.
-
-Example excerpt:
-
+```json
+{
+  "network": {
+    "listen_port": 0,
+    "max_outbound_degree": 4,
+    "degree_slack": 0,
+    "discovery_config": {
+      "protocol_id": "/committee-sampling/1.0.0",
+      "interval": "5s",
+      "bootstrap_peers": [
+        "/ip4/127.0.0.1/tcp/4001"
+      ]
+    },
+    "connectivity_retries": 3,
+    "drop_on_send": false,
+    "drop_on_send_probability": 0.0,
+    "adversary": {
+    }
+  }
+}
 ```
-"network": {
-  "adversary": {
+
+* `drop_on_send` adds a coarse random lossy link simulation using crypto-grade randomness per recipient.
+* `degree_slack` lets a node accept a limited number of inbound connections beyond `max_outbound_degree`, reducing the chance of creating supernodes while keeping the overlay connected.
+* `adversary` (documented later) unlocks deterministic, reproducible network fault injection and message tampering.
+
+### `graph`, `committee`, `synchronization`
+
+These control the protocol dynamics: graph diameter/grades, target committee size, session identifier, VRF security parameter `lambda`, the VDF delay, and timeouts for each round. Synchronization includes the launch timestamp and NTP server (`time.google.com` by default).
+
+### `logger`
+
+Single field `level` (`debug`, `info`, `warn`, `error`).
+
+### `metrics`
+
+```json
+{
+  "metrics": {
     "enabled": true,
-    "seed": 12345,
-    "drop_probability": 0.05,
-    "jitter_min": "20ms",
-    "jitter_max": "150ms",
-    "clock_skew": "250ms",
-    "ex_ante": { "equivocator": true },
-    "ex_post": {
-      "freshness_cheater": {
-        "enabled": true,
-        "mode": "both",
-        "stale_rounds": 2
+    "push_gateway": {
+      "enabled": true,
+      "url": "http://localhost:9091",
+      "username": "",
+      "password": "",
+      "delete_on_stop": false
+    },
+    "http_server": {
+      "enabled": false,
+      "port": 9090,
+      "path": "/metrics"
+    },
+    "push_interval": "30s"
+  }
+}
+```
+
+The collector always registers Prometheus counters:
+
+| Metric           | Labels                                | Meaning                                                  |
+|------------------|---------------------------------------|----------------------------------------------------------|
+| `total_messages` | `round`, `protocol`, `node_id`, `sid` | Every inbound MDAG/ExAnte/ExPost packet the node parsed. |
+| `valid_messages` | Same as above                         | Subset that passed all validation checks.                |
+
+When `push_gateway.enabled` is true, metrics are pushed on the configured interval and optionally deleted on shutdown. The HTTP server exposes live metrics if `http_server.enabled` is set. Disable the entire block (`enabled: false`) for bare-bones runs.
+
+---
+
+## Adversarial Simulation Toolkit
+
+Advanced behaviors live under `network.adversary`. They compose with drop-on-send and are deterministic once seeded:
+
+```json
+{
+  "network": {
+    "adversary": {
+      "enabled": true,
+      "seed": 1337,
+      "drop_probability": 0.05,
+      "jitter_min": "50ms",
+      "jitter_max": "250ms",
+      "clock_skew": "200ms",
+      "ex_ante": {
+        "equivocator": true
+      },
+      "ex_post": {
+        "freshness_cheater": {
+          "enabled": true,
+          "mode": "both",
+          "stale_rounds": 3,
+          "truncate_leaf": true
+        }
       }
     }
   }
 }
 ```
 
-These settings apply locally per node; in multi-node simulations configure each participant identically (or with distinct seeds) to reproduce desired adversarial patterns.
+* `seed` – deterministic PRNG seed. When omitted the node derives one from its peer ID hash.
+* `drop_probability` – probability the adversary behavior drops an outbound message after looking at envelope metadata (independent from `drop_on_send`).
+* `jitter_min`, `jitter_max` – delay window applied to outbound messages (Go duration strings).
+* `clock_skew` – applies to both the synchronizer and message timestamps.
+* `ex_ante.equivocator` – splits Ex-Ante timestamp streams to deliver mismatched Merkle branches to half the peers.
+* `ex_post.freshness_cheater` – replays stale challenges, truncates Merkle paths, or both depending on `mode`. `stale_rounds` chooses the lookback window; `truncate_leaf` can force/disable truncation explicitly.
 
-## Contributing
-
-### Development Workflow
-
-1. **Fork and Clone**
-   """bash
-   git clone <your-fork>
-   cd committee-sampling
-   """
-
-2. **Create Feature Branch**
-   """bash
-   git checkout -b feature/your-feature-name
-   """
-
-3. **Develop and Test**
-   """bash
-   make dev      # Development mode
-   make test     # Run tests
-   make proto    # Generate protobuf files
-   """
-
-4. **Quality Checks**
-   """bash
-   # The CI pipeline will automatically run:
-   # - golangci-lint
-   # - go vet
-   # - Unit tests
-   # - Docker builds
-   # - Security scans
-   """
-
-5. **Submit Pull Request**
-   - Target the `develop` branch for features
-   - Target the `main` branch for hotfixes
-   - Include comprehensive commit messages
-   - Ensure all CI checks pass
-
-### Code Guidelines
-
-- **Functions**: Short and focused (< 100 lines)
-- **Files**: Modular and cohesive (< 200 lines)
-- **Comments**: Minimal - prefer self-documenting code
-- **Names**: Explicit and contextual
-- **Returns**: Early return pattern preferred
-- **Testing**: Comprehensive unit and integration tests
+Inbound behaviors are evaluated too; if any behavior decides to drop a message, delivery to higher layers is skipped.
 
 ---
 
-## Quick Reference
+## Building and Running
 
-### Essential Commands
-"""bash
-# Development
-make dev              # Run in development mode
-make test             # Run tests
-make build            # Build binary
+```bash
+# Install dependencies (protobufs, Go modules, lint config)
+make deps
 
-# Docker
-make docker-run-dev   # Run container (dev)
-make docker-clean     # Clean Docker resources
+# Generate protobuf stubs if definitions changed
+make proto
 
-# Docker Compose  
-make compose-up-dev   # Start dev stack
-make compose-down     # Stop all services
-make compose-logs     # View logs
+# Run tests
+make test
 
-# CI/CD
-make ci-build         # CI-optimized build
-make ci-test          # Container tests
-"""
+# Build the committee-sampling binary
+make build
+```
 
-### Environment URLs
-- **Development**: http://localhost:8080
-- **Monitoring**: http://localhost:3000 (Grafana), http://localhost:9090 (Prometheus)
+To launch a node:
 
-For more detailed information, see the individual configuration files and workflow definitions.
+```bash
+./bin/committee-sampling -config ./configs/dev.json
+```
+
+If `-config` is omitted the loader reads `ENV` (default `dev`) and uses `./configs/{env}.json`.
+
+Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, elected committee members, and error conditions are emitted via zap.
+
+---
+
+## Batch Simulations
+
+`scripts/run_simulations.py` orchestrates multi-node experiments. It starts a libp2p bootstrap server, spawns committee-sampling binaries, assigns generated configs, and optionally kills random nodes for liveness testing.
+
+```bash
+python scripts/run_simulations.py configs/sample_simulation_plan.json
+```
+
+Key CLI flags:
+
+| Flag                                                                   | Purpose                                                                            |
+|------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `--drop-on-send-percent`, `--drop-on-send-probability`                 | Default drop-on-send profile for nodes not overriding the value in the batch file. |
+| `--adversary-percent`, `--adversary-*`                                 | Default adversary behavior parameters; can be overridden per run.                  |
+| `--kill-random-up-to`, `--kill-random-delay-sec`, `--kill-probability` | Enable random process termination for failure injection.                           |
+
+Each run entry in the batch JSON can redefine the same fields. Run-specific config shards are written to `scripts/configs/`, logs to `scripts/logs/<run>/`. A tar archive is created after each run for post-mortem analysis.
+
+`configs/sample_simulation_plan.json` illustrates three runs:
+
+1. Baseline 1000-node network with no simulation.
+2. 3 % of nodes enabling drop-on-send at 1 % probability.
+3. Same drop setting plus adversary behaviors enabled for 10 % of nodes with representative parameters.
+
+---
+
+## Observability & Troubleshooting
+
+* **Logs** – zap outputs to stdout/stderr. For simulations, per-node logs live under `scripts/logs/<run>/node-*.log`.
+* **Metrics** – visit the HTTP endpoint or query the Pushgateway / Prometheus instance you configured.
+* **Neighbor Topology** – final neighbor lists are logged at the end of each run for quick sanity checks.
+* **Committee Output** – elected members are printed both to stdout and to the structured logs with grade details.
+
+---
+
+## Development Notes
+
+* Run `go test ./...` before submitting changes.
+* Lint with `golangci-lint run` (the repository includes configuration).
+* Protobufs live under `pkg/proto`; regenerate with `make proto` whenever `.proto` files change.
+* Avoid editing generated files manually (`*.pb.go`).
+* The Go modules target Go 1.23+. Ensure your toolchain matches the `go.mod` requirement.
+
+---
+
+## Repository Layout
+
+| Path                                                  | Purpose                                                 |
+|-------------------------------------------------------|---------------------------------------------------------|
+| `cmd/committee-sampling`                              | Main binary.                                            |
+| `internal/boot`                                       | Protocol bootstrap wiring.                              |
+| `internal/network`                                    | libp2p host, discovery, adversary envelope handling.    |
+| `internal/mdag`, `internal/exante`, `internal/expost` | Protocol sub-components.                                |
+| `internal/resourceproof`, `internal/resourcebound`    | Resource-bounded proofs.                                |
+| `internal/synchronizer`                               | Time-based round scheduler.                             |
+| `internal/metrics`                                    | Prometheus collector.                                   |
+| `internal/sim/adversary`                              | Drop/jitter/equivocator/freshness simulation behaviors. |
+| `pkg/config`                                          | Config loader.                                          |
+| `pkg/proto`                                           | Generated protobuf stubs.                               |
+| `scripts/`                                            | Automation, simulation runners, helper scripts.         |
+
+---
+
+## License
+
+Distributed under the terms of the `LICENSE` file included in this repository.
