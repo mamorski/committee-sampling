@@ -116,25 +116,26 @@ type ExPost struct {
 	logger       *zap.Logger
 	mdag         MDAG
 	synchronizer common.Synchronizer
-	d            int
-	D            int
-	lambda       int
-	gradeFunc    common.GradeFunc
-	isRunning    bool
-	sid          string
-	vk           []byte
+	mu           sync.Mutex
+	messages     map[int][]*pb.TimestampMessage
+	state        [][][]byte
 
-	mu       sync.Mutex
-	messages map[int][]*pb.TimestampMessage
-	state    [][][]byte
+	gradeFunc  common.GradeFunc
+	threadPool *threadpool.ThreadPool
 
 	protocolID string
 	nodeID     string
-	R          int // d * D
-	threadPool *threadpool.ThreadPool
+	sid        string
+	vk         []byte
 
 	validMessages []int
 	totalMessages []int
+
+	d         int
+	D         int
+	lambda    int
+	R         int // d * D
+	isRunning bool
 }
 
 // New creates a new ExPost instance

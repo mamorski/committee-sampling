@@ -1,0 +1,61 @@
+{
+  "sleep_between_runs_sec": 10,
+  "runs": [
+    {
+      "name": "baseline-honest",
+      "number_of_nodes": 1000,
+      "max_outbound_degree": 12,
+      "diameter": 6,
+      "degree_slack": 4,
+      "verify_timeout": "45s",
+      "log_level": "info",
+      "drop_on_send_percent": 0,
+      "drop_on_send_probability": 0.0,
+      "metrics_enabled": false
+    },
+    {
+      "name": "light-drop-simulation",
+      "number_of_nodes": 1000,
+      "max_outbound_degree": 12,
+      "diameter": 6,
+      "degree_slack": 4,
+      "verify_timeout": "45s",
+      "log_level": "info",
+      "drop_on_send_percent": 3.0,
+      "drop_on_send_probability": 0.01,
+      "metrics_enabled": false
+    },
+    {
+      "name": "adversarial-drop-simulation",
+      "number_of_nodes": 1000,
+      "max_outbound_degree": 12,
+      "diameter": 6,
+      "degree_slack": 4,
+      "verify_timeout": "45s",
+      "log_level": "info",
+      "drop_on_send_percent": 3.0,
+      "drop_on_send_probability": 0.01,
+      "adversary_percent": 10.0,
+      "adversary": {
+        "enabled": true,
+        "seed": 1337,
+        "drop_probability": 0.05,
+        "jitter_min": "50ms",
+        "jitter_max": "250ms",
+        "clock_skew": "200ms",
+        "ex_ante": {
+          "equivocator": true
+        },
+        "ex_post": {
+          "freshness_cheater": {
+            "enabled": true,
+            "mode": "both",
+            "stale_rounds": 3,
+            "truncate_leaf": true
+          }
+        }
+      },
+      "metrics_enabled": false
+    }
+  ]
+}

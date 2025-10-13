@@ -62,13 +62,41 @@ type HTTPServer struct {
 type Network struct {
 	ListenPort          int       `mapstructure:"listen_port"`          // Port to listen for incoming connections
 	MaxOutboundDegree   int       `mapstructure:"max_outbound_degree"`  // Maximum number of outbound connections
+	DegreeSlack         int       `mapstructure:"degree_slack"`         // Additional inbound capacity beyond max_outbound_degree
 	DiscoveryConfig     Discovery `mapstructure:"discovery_config"`     // Configuration for peer discovery
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)
 
 	// Simulation-only options
-	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
-	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
+	DropOnSend            bool      `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
+	DropOnSendProbability float64   `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
+	Adversary             Adversary `mapstructure:"adversary"`                // Advanced adversarial simulation toggles
+}
+
+type Adversary struct {
+	Enabled         bool            `mapstructure:"enabled"`
+	Seed            int64           `mapstructure:"seed"`
+	DropProbability float64         `mapstructure:"drop_probability"`
+	JitterMin       time.Duration   `mapstructure:"jitter_min"`
+	JitterMax       time.Duration   `mapstructure:"jitter_max"`
+	ClockSkew       time.Duration   `mapstructure:"clock_skew"`
+	ExAnte          ExAnteAdversary `mapstructure:"ex_ante"`
+	ExPost          ExPostAdversary `mapstructure:"ex_post"`
+}
+
+type ExAnteAdversary struct {
+	Equivocator bool `mapstructure:"equivocator"`
+}
+
+type ExPostAdversary struct {
+	FreshnessCheater FreshnessCheaterConfig `mapstructure:"freshness_cheater"`
+}
+
+type FreshnessCheaterConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	Mode         string `mapstructure:"mode"`
+	StaleRounds  int    `mapstructure:"stale_rounds"`
+	TruncateLeaf bool   `mapstructure:"truncate_leaf"`
 }
 
 type Discovery struct {

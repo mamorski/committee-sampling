@@ -31,14 +31,20 @@ type Synchronizer struct {
 	rounds        int
 	mu            sync.Mutex
 	stopOnce      sync.Once
+	clockSkew     time.Duration
 }
 
 func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchronizer, error) {
+	var clockSkew time.Duration
+	if cfg.Network.Adversary.Enabled {
+		clockSkew = cfg.Network.Adversary.ClockSkew
+	}
 	s := &Synchronizer{
 		cfg:           cfg,
 		logger:        logger,
 		stopChan:      make(chan struct{}),
 		roundChannels: make(map[common.Step][]chan struct{}),
+		clockSkew:     clockSkew,
 	}
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
@@ -99,7 +105,7 @@ func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time,
 	}
 
 	for i := 0; i < rounds+1; i++ {
-		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout)
+		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout).Add(s.clockSkew)
 		timer := time.NewTimer(time.Until(roundStartTime))
 
 		select {

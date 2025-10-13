@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -23,7 +24,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/mamorski/committee-sampling/internal/common"
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	"github.com/mamorski/committee-sampling/internal/sim/adversary"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
@@ -46,6 +49,8 @@ type Network interface {
 	IsNeighbor(peerID peer.ID) bool
 }
 
+var ErrNeighborCapacity = errors.New("neighbor capacity reached")
+
 type Host interface {
 	ID() peer.ID
 	Close() error
@@ -56,22 +61,25 @@ type Host interface {
 }
 
 type P2PNode struct {
-	host                        Host
-	ctx                         context.Context
-	cancel                      context.CancelFunc
-	logger                      *zap.Logger
-	neighbors                   map[peer.ID]peer.AddrInfo // Stores connected peers
-	potentialNeighbors          sync.Map                  // Stores discovered peers before network building
-	discovery                   discovery.PeerDiscovery
-	maxOutbound                 int
-	key                         crypto.PrivKey
-	acceptingPotentialNeighbors atomic.Bool
-	sync                        common.Synchronizer
-	mu                          sync.Mutex
-	sid                         string
+	host               Host
+	ctx                context.Context
+	cancel             context.CancelFunc
+	logger             *zap.Logger
+	discovery          discovery.PeerDiscovery
+	sync               common.Synchronizer
+	mu                 sync.Mutex
+	key                crypto.PrivKey
+	neighbors          map[peer.ID]peer.AddrInfo // Stores connected peers
+	potentialNeighbors sync.Map                  // Stores discovered peers before network building
+	behaviors          []adversary.Behavior
+	sid                string
+	maxOutbound        int
+	degreeSlack        int
 	// simulation options
-	dropOnSend            bool
-	dropOnSendProbability float64
+	dropOnSendProbability       float64
+	clockSkew                   time.Duration
+	acceptingPotentialNeighbors atomic.Bool
+	dropOnSend                  bool
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer, sid string) (*P2PNode, error) {
@@ -114,6 +122,7 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 		discovery:                   d,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
+		degreeSlack:                 cfg.DegreeSlack,
 		key:                         priv,
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
@@ -134,6 +143,77 @@ func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchroniz
 	if node.dropOnSend {
 		node.logger.Info(
 			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
+		)
+	}
+
+	if cfg.Adversary.Enabled {
+		seedMaterial := hash.Sum([]byte(h.ID().String()))
+		var derivedSeed int64
+		if len(seedMaterial) >= 8 {
+			derivedSeed = int64(binary.BigEndian.Uint64(seedMaterial[:8])) // #nosec G115: only used for deterministic simulations
+		}
+		baseSeed := cfg.Adversary.Seed
+		if baseSeed == 0 {
+			baseSeed = derivedSeed
+		}
+		dropProbability := cfg.Adversary.DropProbability
+		if dropProbability < 0 {
+			dropProbability = 0
+		}
+		if dropProbability > 1 {
+			dropProbability = 1
+		}
+		jitterMin := cfg.Adversary.JitterMin
+		jitterMax := cfg.Adversary.JitterMax
+		if jitterMax < jitterMin {
+			jitterMax = jitterMin
+		}
+		behavior := adversary.NewNetworkUnreliability(
+			node.logger.Named("adversary"),
+			baseSeed,
+			adversary.NetworkUnreliabilityConfig{
+				DropProbability: dropProbability,
+				JitterMin:       jitterMin,
+				JitterMax:       jitterMax,
+			},
+		)
+		node.behaviors = append(node.behaviors, behavior)
+		node.logger.Info(
+			"Simulation: adversarial drop/jitter enabled",
+			zap.Float64("drop_probability", dropProbability),
+			zap.Duration("jitter_min", jitterMin),
+			zap.Duration("jitter_max", jitterMax),
+		)
+	}
+
+	if cfg.Adversary.Enabled && cfg.Adversary.ClockSkew != 0 {
+		node.clockSkew = cfg.Adversary.ClockSkew
+		node.logger.Info(
+			"Simulation: clock skew enabled",
+			zap.Duration("clock_skew", node.clockSkew),
+		)
+	}
+
+	if cfg.Adversary.ExAnte.Equivocator {
+		node.behaviors = append(node.behaviors, adversary.NewExAnteEquivocator(node.logger.Named("equivocator")))
+		node.logger.Info("Simulation: ex-ante equivocator enabled")
+	}
+
+	if cfg.Adversary.ExPost.FreshnessCheater.Enabled {
+		mode := adversary.ParseFreshnessMode(cfg.Adversary.ExPost.FreshnessCheater.Mode)
+		fresh := cfg.Adversary.ExPost.FreshnessCheater
+		behavior := adversary.NewFreshnessCheater(
+			node.logger.Named("freshness_cheater"),
+			mode,
+			fresh.StaleRounds,
+			fresh.TruncateLeaf,
+		)
+		node.behaviors = append(node.behaviors, behavior)
+		node.logger.Info(
+			"Simulation: ex-post freshness cheater enabled",
+			zap.String("mode", string(mode)),
+			zap.Int("stale_rounds", fresh.StaleRounds),
+			zap.Bool("truncate_leaf", fresh.TruncateLeaf),
 		)
 	}
 
@@ -207,9 +287,45 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 			}
 		}
 
+		payloadCopy := append([]byte(nil), data...)
 		m := &pproto.ProtocolMessage{
-			Payload:     data,
+			Payload:     payloadCopy,
 			MessageData: n.newMessageData(uuid.New().String(), false),
+		}
+
+		decision := adversary.SendNow()
+		if len(n.behaviors) > 0 {
+			envelope := &adversary.Envelope{
+				ProtocolID: protocolID,
+				From:       n.host.ID(),
+				To:         addrInfo.ID,
+				Message:    m,
+			}
+			for _, behavior := range n.behaviors {
+				dec := behavior.Outbound(envelope)
+				switch dec.Action {
+				case adversary.ActionDrop:
+					decision = dec
+				case adversary.ActionDelay:
+					if decision.Action != adversary.ActionDelay || dec.Delay > decision.Delay {
+						decision = dec
+					}
+				default:
+					// keep existing decision
+				}
+				if decision.Action == adversary.ActionDrop {
+					break
+				}
+			}
+		}
+
+		if decision.Action == adversary.ActionDrop {
+			n.logger.Warn(
+				"Adversary: outbound message dropped",
+				zap.String("peer_id", addrInfo.ID.String()),
+				zap.String("protocol", protocolID),
+			)
+			continue
 		}
 
 		signature, err := n.signProtoMessage(m)
@@ -219,7 +335,13 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		}
 
 		m.MessageData.Sign = signature
-		n.send(addrInfo, protocol.ID(protocolID), m)
+
+		switch decision.Action {
+		case adversary.ActionDelay:
+			n.delayedSend(addrInfo, protocol.ID(protocolID), m, decision.Delay)
+		default:
+			n.send(addrInfo, protocol.ID(protocolID), m)
+		}
 	}
 }
 
@@ -247,6 +369,20 @@ func (n *P2PNode) neighborCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.neighbors)
+}
+
+func (n *P2PNode) neighborLimit() int {
+	capacity := n.maxOutbound
+	switch {
+	case capacity > 0 && n.degreeSlack > 0:
+		return capacity + n.degreeSlack
+	case capacity > 0:
+		return capacity
+	case n.degreeSlack > 0:
+		return n.degreeSlack
+	default:
+		return 0
+	}
 }
 
 func (n *P2PNode) getNeighbor(peerID peer.ID) (peer.AddrInfo, bool) {
@@ -281,8 +417,61 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 				return
 			}
 
-			if err := handler(s.Conn().RemotePeer(), data.Payload); err != nil {
-				n.logger.Error("Failed to handle message", zap.Error(err))
+			from := s.Conn().RemotePeer()
+			dec := adversary.SendNow()
+			if len(n.behaviors) > 0 {
+				envelope := &adversary.Envelope{
+					ProtocolID: protocolID,
+					From:       from,
+					To:         n.host.ID(),
+					Message:    data,
+				}
+				for _, behavior := range n.behaviors {
+					bDec := behavior.Inbound(envelope)
+					switch bDec.Action {
+					case adversary.ActionDrop:
+						dec = bDec
+					case adversary.ActionDelay:
+						if dec.Action != adversary.ActionDelay || bDec.Delay > dec.Delay {
+							dec = bDec
+						}
+					default:
+						// keep existing decision
+					}
+					if dec.Action == adversary.ActionDrop {
+						break
+					}
+				}
+			}
+
+			payload := append([]byte(nil), data.Payload...)
+			deliver := func() {
+				if err := handler(from, payload); err != nil {
+					n.logger.Error("Failed to handle message", zap.Error(err))
+				}
+			}
+
+			switch dec.Action {
+			case adversary.ActionDrop:
+				n.logger.Debug(
+					"Adversary: inbound message dropped",
+					zap.String("from", from.String()),
+					zap.String("protocol", protocolID),
+				)
+				return
+			case adversary.ActionDelay:
+				go func(delay time.Duration) {
+					timer := time.NewTimer(delay)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+						deliver()
+					case <-n.ctx.Done():
+						return
+					}
+				}(dec.Delay)
+			default:
+				deliver()
 			}
 		},
 	)
@@ -485,6 +674,16 @@ func (n *P2PNode) addNeighbor(addrInfo peer.AddrInfo) error {
 		return nil
 	}
 
+	if limit := n.neighborLimit(); limit > 0 && len(n.neighbors) >= limit {
+		n.logger.Info(
+			"Neighbor capacity reached",
+			zap.String("peer_id", addrInfo.ID.String()),
+			zap.Int("current_neighbors", len(n.neighbors)),
+			zap.Int("limit", limit),
+		)
+		return ErrNeighborCapacity
+	}
+
 	n.logger.Info(
 		"Attempting to add neighbor",
 		zap.String("peer_id", addrInfo.ID.String()),
@@ -551,6 +750,9 @@ func (n *P2PNode) buildNetwork() {
 		}
 
 		if err := n.addNeighbor(info); err != nil {
+			if errors.Is(err, ErrNeighborCapacity) {
+				break
+			}
 			n.logger.Error("Failed to add neighbor before announcement", zap.String("peer_id", info.ID.String()), zap.Error(err))
 			continue
 		}
@@ -562,6 +764,7 @@ func (n *P2PNode) buildNetwork() {
 		} else {
 			connected++
 		}
+		time.Sleep(200 * time.Millisecond) // brief pause to avoid overwhelming the network
 	}
 }
 
