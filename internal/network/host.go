@@ -61,25 +61,25 @@ type Host interface {
 }
 
 type P2PNode struct {
-	host                        Host
-	ctx                         context.Context
-	cancel                      context.CancelFunc
-	logger                      *zap.Logger
-	neighbors                   map[peer.ID]peer.AddrInfo // Stores connected peers
-	potentialNeighbors          sync.Map                  // Stores discovered peers before network building
-	discovery                   discovery.PeerDiscovery
-	maxOutbound                 int
-	degreeSlack                 int
-	key                         crypto.PrivKey
-	acceptingPotentialNeighbors atomic.Bool
-	sync                        common.Synchronizer
-	mu                          sync.Mutex
-	sid                         string
+	host               Host
+	ctx                context.Context
+	cancel             context.CancelFunc
+	logger             *zap.Logger
+	discovery          discovery.PeerDiscovery
+	sync               common.Synchronizer
+	mu                 sync.Mutex
+	key                crypto.PrivKey
+	neighbors          map[peer.ID]peer.AddrInfo // Stores connected peers
+	potentialNeighbors sync.Map                  // Stores discovered peers before network building
+	behaviors          []adversary.Behavior
+	sid                string
+	maxOutbound        int
+	degreeSlack        int
 	// simulation options
-	dropOnSend            bool
-	dropOnSendProbability float64
-	behaviors             []adversary.Behavior
-	clockSkew             time.Duration
+	dropOnSendProbability       float64
+	clockSkew                   time.Duration
+	acceptingPotentialNeighbors atomic.Bool
+	dropOnSend                  bool
 }
 
 func New(ctx context.Context, cfg config.Network, logger *zap.Logger, synchronizer common.Synchronizer, sid string) (*P2PNode, error) {

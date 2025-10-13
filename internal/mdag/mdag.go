@@ -25,14 +25,11 @@ const protocolID = "/mdag/1.0.0"
 type HashOracle func([]byte) []byte
 
 type MDAG struct {
-	rounds       int                 // total number of rounds
-	oracle       HashOracle          // hash oracle (random oracle)
-	network      network.Network     // network interface for asynchronous messaging
-	synchronizer common.Synchronizer // synchronizer for round timing
-	logger       *zap.Logger         // zap logger for logging events
-	isRunning    bool                // flag indicating if the protocol is running
-	step         common.Step         // synchronizer step (ExPostMDAG or ExAnteMDAG)
-
+	rounds         int                 // total number of rounds
+	oracle         HashOracle          // hash oracle (random oracle)
+	network        network.Network     // network interface for asynchronous messaging
+	synchronizer   common.Synchronizer // synchronizer for round timing
+	logger         *zap.Logger         // zap logger for logging events
 	mu             sync.Mutex
 	messages       map[int][][]byte // messages received from the network, keyed by a round number
 	state          [][][]byte       // state: bucket S_{i,r} of labels received in round (r-1)
@@ -40,9 +37,11 @@ type MDAG struct {
 	currentLabel   []byte           // label computed in the most recent round
 	sessionID      string           // current protocol session id
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
+	step           common.Step      // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
 	validMessages []int
 	totalMessages []int
+	isRunning     bool // flag indicating if the protocol is running
 }
 
 // New creates a new MDAG instance with the specified parameters.

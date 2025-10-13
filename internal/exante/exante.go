@@ -107,28 +107,29 @@ type MDAG interface {
 
 // ExAnte implements the Ex-Ante Timestamp protocol
 type ExAnte struct {
-	network       network.Network
-	logger        *zap.Logger
-	mdag          MDAG
-	synchronizer  common.Synchronizer
-	d             int
-	D             int
-	gradeFunction common.GradeFunc
-	isRunning     bool
-	sid           string
-	challenge     []byte
+	network      network.Network
+	logger       *zap.Logger
+	mdag         MDAG
+	synchronizer common.Synchronizer
+	mu           sync.Mutex
+	messages     map[int][]*pb.TimestampMessage
+	state        [][][]byte
+	threadPool   *threadpool.ThreadPool
 
-	mu         sync.Mutex
-	messages   map[int][]*pb.TimestampMessage
-	state      [][][]byte
-	threadPool *threadpool.ThreadPool
+	gradeFunction common.GradeFunc
 
 	protocolID string
 	nodeID     string
-	R          int
+	sid        string
+	challenge  []byte
 
 	validMessages []int
 	totalMessages []int
+
+	d         int
+	D         int
+	R         int
+	isRunning bool
 }
 
 // New creates a new ExAnte instance with the specified parameters

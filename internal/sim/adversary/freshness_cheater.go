@@ -31,8 +31,8 @@ type FreshnessCheaterBehavior struct {
 	logger      *zap.Logger
 	mode        FreshnessMode
 	staleRounds uint32
-	history     map[string]map[uint32][]byte
 	truncate    bool
+	history     map[string]map[uint32][]byte
 	mu          sync.Mutex
 }
 

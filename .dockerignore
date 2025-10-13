@@ -18,7 +18,7 @@ README.md
 *_test.go
 
 # Build artifacts
-committee-sampling
+bin/committee-sampling
 *.exe
 
 # OS files
