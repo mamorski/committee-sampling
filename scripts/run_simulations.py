@@ -836,8 +836,8 @@ def main() -> None:
         "--graph-building-rounds",
         dest="graph_building_rounds",
         type=int,
-        default=3,
-        help="Number of graph building rounds to execute (default: 3)",
+        default=4,
+        help="Number of graph building rounds to execute (must be even, default: 4)",
     )
     parser.add_argument(
         "--kill-random-up-to",

@@ -171,6 +171,10 @@ func Load(configPath string) (*Config, error) {
 		panic(fmt.Sprintf("Error unmarshalling config: %s", err))
 	}
 
+	if cfg.Graph.BuildingRounds%2 != 0 {
+		cfg.Graph.BuildingRounds++
+	}
+
 	return cfg, nil
 }
 

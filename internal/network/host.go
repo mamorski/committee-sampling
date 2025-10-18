@@ -644,8 +644,7 @@ func (n *P2PNode) graphBuilder() {
 
 	if n.buildingRounds%2 != 0 {
 		n.logger.Error("Building rounds must be even", zap.Int("building_rounds", n.buildingRounds))
-		n.buildingRounds++
-		n.logger.Info("Incremented building rounds to be even", zap.Int("building_rounds", n.buildingRounds))
+		panic(fmt.Sprintf("building rounds must be even, got %d (this should have been fixed during config loading)", n.buildingRounds))
 	}
 
 	n.shuffledPotentialNeighbors = n.shuffleCandidates(n.collectPotentialNeighbors())
