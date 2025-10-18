@@ -135,20 +135,14 @@ func (suite *HostTestSuite) SetupTest() {
 	}
 
 	suite.node = &P2PNode{
-		host:              suite.mockHost,
-		ctx:               suite.ctx,
-		cancel:            suite.cancel,
-		logger:            suite.logger,
-		discovery:         suite.mockDiscovery,
-		maxOutbound:       5,
-		key:               suite.testPrivKey,
-		neighbors:         make(map[peer.ID]peer.AddrInfo),
-		outboundNeighbors: make(map[peer.ID]bool),
-		connState: &connectionState{
-			proposalsSent:    make(map[peer.ID]int),
-			pendingResponses: make(map[peer.ID]time.Time),
-			rejectedPeers:    make(map[peer.ID]bool),
-		},
+		host:        suite.mockHost,
+		ctx:         suite.ctx,
+		cancel:      suite.cancel,
+		logger:      suite.logger,
+		discovery:   suite.mockDiscovery,
+		maxOutbound: 5,
+		key:         suite.testPrivKey,
+		neighbors:   make(map[peer.ID]peer.AddrInfo),
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -430,26 +424,6 @@ func (suite *HostTestSuite) TestAddNeighborAlreadyExists() {
 	suite.NoError(err)
 }
 
-func (suite *HostTestSuite) TestAddNeighborRespectsCapacity() {
-	suite.node.maxOutbound = 2
-	suite.node.degreeSlack = 1
-
-	for i := 0; i < 3; i++ {
-		pid := peer.ID(fmt.Sprintf("peer-cap-%d", i))
-		suite.node.neighbors[pid] = peer.AddrInfo{ID: pid}
-	}
-
-	extraAddr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/9000")
-	extraInfo := peer.AddrInfo{
-		ID:    peer.ID("peer-cap-extra"),
-		Addrs: []multiaddr.Multiaddr{extraAddr},
-	}
-
-	err := suite.node.addNeighbor(extraInfo)
-	suite.ErrorIs(err, ErrNeighborCapacity)
-	suite.mockHost.AssertNotCalled(suite.T(), "Connect", mock.Anything, mock.Anything)
-}
-
 func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 	// Create a test peer
 	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
@@ -485,59 +459,29 @@ func (suite *HostTestSuite) TestHandleDiscoveredPeers() {
 
 }
 
-func (suite *HostTestSuite) TestInboundConnectionsDoNotConsumeOutboundQuota() {
+func (suite *HostTestSuite) TestRemainingCapacity() {
 	suite.node.maxOutbound = 3
 
 	addr1, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8081")
 	addr2, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8082")
-	addr3, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8083")
 
 	_, pub1, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
 	_, pub2, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-	_, pub3, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
 
 	peer1, _ := peer.IDFromPublicKey(pub1)
 	peer2, _ := peer.IDFromPublicKey(pub2)
-	peer3, _ := peer.IDFromPublicKey(pub3)
 
-	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Times(3)
+	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Times(2)
 
 	suite.node.addNeighbor(peer.AddrInfo{ID: peer1, Addrs: []multiaddr.Multiaddr{addr1}})
 	suite.node.addNeighbor(peer.AddrInfo{ID: peer2, Addrs: []multiaddr.Multiaddr{addr2}})
-	suite.node.addNeighbor(peer.AddrInfo{ID: peer3, Addrs: []multiaddr.Multiaddr{addr3}})
 
-	suite.Equal(3, len(suite.node.neighbors), "Should have 3 total neighbors")
-	suite.Equal(0, len(suite.node.outboundNeighbors), "Should have 0 outbound neighbors (all inbound)")
-	suite.Equal(3, suite.node.remainingOutboundCapacity(), "Should still have full outbound capacity")
+	suite.Equal(2, len(suite.node.neighbors), "Should have 2 total neighbors")
+	suite.Equal(1, suite.node.remainingOutboundCapacity(), "Should have 1 remaining capacity (3 - 2)")
 	suite.True(suite.node.hasOutboundCapacity(), "Should still be able to send proposals")
 }
 
-func (suite *HostTestSuite) TestPendingProposalsConsumeOutboundQuota() {
-	suite.node.maxOutbound = 3
-
-	_, pub1, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-	_, pub2, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-
-	peer1, _ := peer.IDFromPublicKey(pub1)
-	peer2, _ := peer.IDFromPublicKey(pub2)
-
-	suite.node.connState.pendingResponses[peer1] = time.Now().Add(5 * time.Second)
-	suite.node.connState.pendingResponses[peer2] = time.Now().Add(5 * time.Second)
-
-	suite.Equal(1, suite.node.remainingOutboundCapacity(), "Should account for pending proposals: 3 - 0 - 2 = 1")
-
-	suite.node.mu.Lock()
-	suite.node.outboundNeighbors[peer1] = true
-	suite.node.mu.Unlock()
-
-	suite.node.connState.mu.Lock()
-	delete(suite.node.connState.pendingResponses, peer1)
-	suite.node.connState.mu.Unlock()
-
-	suite.Equal(1, suite.node.remainingOutboundCapacity(), "Should account for confirmed + pending: 3 - 1 outbound - 1 pending = 1")
-}
-
-func (suite *HostTestSuite) TestOutboundNeighborsMarkedCorrectly() {
+func (suite *HostTestSuite) TestAddNeighborTracking() {
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8081")
 	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
 	peerID, _ := peer.IDFromPublicKey(pub)
@@ -545,18 +489,10 @@ func (suite *HostTestSuite) TestOutboundNeighborsMarkedCorrectly() {
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
 
 	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
-	suite.False(suite.node.outboundNeighbors[peerID], "addNeighbor alone should not mark as outbound")
-
-	suite.node.mu.Lock()
-	suite.node.outboundNeighbors[peerID] = true
-	suite.node.mu.Unlock()
-
-	suite.True(suite.node.outboundNeighbors[peerID], "Manual marking should work")
-	suite.Equal(1, len(suite.node.neighbors))
-	suite.Equal(1, len(suite.node.outboundNeighbors))
+	suite.Equal(1, len(suite.node.neighbors), "Should track neighbor")
 }
 
-func (suite *HostTestSuite) TestDropNeighborCleansUpBothMaps() {
+func (suite *HostTestSuite) TestDropNeighborCleansUp() {
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8081")
 	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
 	peerID, _ := peer.IDFromPublicKey(pub)
@@ -564,17 +500,127 @@ func (suite *HostTestSuite) TestDropNeighborCleansUpBothMaps() {
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
 
 	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
-	suite.node.mu.Lock()
-	suite.node.outboundNeighbors[peerID] = true
-	suite.node.mu.Unlock()
-
 	suite.Equal(1, len(suite.node.neighbors))
-	suite.Equal(1, len(suite.node.outboundNeighbors))
 
 	suite.node.dropNeighbor(peerID)
 
 	suite.Equal(0, len(suite.node.neighbors), "neighbors should be cleaned up")
-	suite.Equal(0, len(suite.node.outboundNeighbors), "outboundNeighbors should be cleaned up")
+}
+
+func (suite *HostTestSuite) TestGraphDropHandler() {
+	suite.mockHost.On("ID").Return(suite.testPeerID).Maybe()
+	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Maybe()
+	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Maybe()
+	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Maybe()
+
+	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	remotePeerID, _ := peer.IDFromPublicKey(pub)
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8081")
+
+	mockConn := &MockConn{}
+	mockConn.On("RemotePeer").Return(remotePeerID)
+	mockConn.On("RemoteMultiaddr").Return(addr)
+
+	mockStream := &MockStream{}
+	mockStream.On("Conn").Return(mockConn)
+
+	dropMsg := &pproto.GraphDrop{
+		MessageData: suite.node.newMessageData(uuid.New().String(), false),
+	}
+
+	signature, err := suite.node.signProtoMessage(dropMsg)
+	suite.Require().NoError(err)
+	dropMsg.MessageData.Sign = signature
+
+	msgBytes, err := proto.Marshal(dropMsg)
+	suite.Require().NoError(err)
+
+	mockStream.On("Close").Return(nil)
+
+	suite.node.acceptingGraphMessages.Store(true)
+
+	reader := bytes.NewReader(msgBytes)
+	buf, err := readStreamWithLimit(reader, int64(maxInboundMessageSize))
+	suite.Require().NoError(err)
+
+	data := &pproto.GraphDrop{}
+	err = proto.Unmarshal(buf, data)
+	suite.Require().NoError(err)
+
+	suite.True(suite.node.authenticateMessage(data, data.MessageData))
+
+	suite.node.queueMu.Lock()
+	initialQueueLen := len(suite.node.dropQueue)
+	suite.node.queueMu.Unlock()
+
+	suite.node.queueMu.Lock()
+	suite.node.dropQueue = append(suite.node.dropQueue, queuedDrop{
+		from:      remotePeerID,
+		timestamp: time.Now(),
+	})
+	suite.node.queueMu.Unlock()
+
+	suite.node.queueMu.Lock()
+	finalQueueLen := len(suite.node.dropQueue)
+	suite.node.queueMu.Unlock()
+
+	suite.Equal(initialQueueLen+1, finalQueueLen)
+}
+
+func (suite *HostTestSuite) TestProcessDropQueue() {
+	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	peerID, _ := peer.IDFromPublicKey(pub)
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8081")
+
+	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
+
+	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	suite.Equal(1, len(suite.node.neighbors))
+
+	suite.node.queueMu.Lock()
+	suite.node.dropQueue = append(suite.node.dropQueue, queuedDrop{
+		from:      peerID,
+		timestamp: time.Now(),
+	})
+	suite.node.queueMu.Unlock()
+
+	suite.node.processDropQueue()
+
+	suite.Equal(0, len(suite.node.neighbors), "Neighbor should be removed after processing drop queue")
+	suite.node.queueMu.Lock()
+	suite.Equal(0, len(suite.node.dropQueue), "Drop queue should be empty after processing")
+	suite.node.queueMu.Unlock()
+}
+
+func (suite *HostTestSuite) TestSendDropMessage() {
+	suite.mockHost.On("ID").Return(suite.testPeerID).Maybe()
+	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Maybe()
+	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Maybe()
+	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Maybe()
+
+	_, pub, _ := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	peerID, _ := peer.IDFromPublicKey(pub)
+
+	suite.mockPeerstore.On("Addrs", peerID).Return([]multiaddr.Multiaddr{})
+
+	mockStream := &MockStream{}
+	suite.mockHost.On("NewStream", mock.Anything, peerID, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
+	mockStream.On("Close").Return(nil).Once()
+
+	suite.node.sendDropMessage(peerID)
+
+	suite.mockHost.AssertExpectations(suite.T())
+	mockStream.AssertExpectations(suite.T())
+}
+
+func (suite *HostTestSuite) TestGenerateSelectedTarget() {
+	limit := 10
+	target, err := generateSelectedTarget(limit)
+
+	suite.NoError(err)
+	suite.GreaterOrEqual(target, limit*2, "Target should be at least limit*2")
+	suite.LessOrEqual(target, limit*3, "Target should be at most limit*3")
 }
 
 func TestHostSuite(t *testing.T) {

@@ -194,14 +194,10 @@ func (n *P2PNode) delayedSend(addrInfo peer.AddrInfo, p protocol.ID, data proto.
 
 func (n *P2PNode) remainingOutboundCapacity() int {
 	n.mu.Lock()
-	outboundCount := len(n.outboundNeighbors)
+	currentNeighbors := len(n.neighbors)
 	n.mu.Unlock()
 
-	n.connState.mu.Lock()
-	pendingCount := len(n.connState.pendingResponses)
-	n.connState.mu.Unlock()
-
-	return n.maxOutbound - outboundCount - pendingCount
+	return n.maxOutbound - currentNeighbors
 }
 
 func (n *P2PNode) remainingInboundCapacity() int {

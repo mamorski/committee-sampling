@@ -25,6 +25,10 @@ message GraphResponse {
   bool accepted = 3;
 }
 
+message GraphDrop {
+  MessageData messageData = 1;
+}
+
 message ProtocolMessage {
   MessageData messageData = 1;
   bytes payload = 2; // serialized protobufs of the method specific data
