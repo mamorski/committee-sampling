@@ -38,7 +38,7 @@ func main() {
 	// Start the synchronizer
 	sync.Start()
 
-	node, err := network.New(ctx, cfg.Network, logger, sync, cfg.Committee.SessionID)
+	node, err := network.New(ctx, cfg, logger, sync, cfg.Committee.SessionID)
 	if err != nil {
 		panic(err)
 	}

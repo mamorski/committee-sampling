@@ -24,20 +24,22 @@ func (suite *SynchronizerTestSuite) SetupTest() {
 
 	suite.cfg = &config.Config{
 		Graph: config.Graph{
-			Diameter:      2,
-			GradingLevels: 5,
+			Diameter:       2,
+			GradingLevels:  5,
+			BuildingRounds: 3,
 		},
 		Network: config.Network{
 			ListenPort: 9000,
 		},
 		Synchronization: config.Synchronization{
-			Type:                 config.TimeSync,
-			StartTime:            time.Now().Add(100 * time.Millisecond).Unix(),
-			TimeServer:           "pool.ntp.org",
-			BuildingGraphTimeout: time.Second,
-			MDAGRoundTimeout:     time.Second,
-			ExPostRoundTimeout:   time.Second,
-			ExAnteRoundTimeout:   time.Second,
+			Type:                      config.TimeSync,
+			StartTime:                 time.Now().Add(100 * time.Millisecond).Unix(),
+			TimeServer:                "pool.ntp.org",
+			GraphDiscoveryTimeout:     time.Second,
+			GraphBuildingRoundTimeout: time.Second,
+			MDAGRoundTimeout:          time.Second,
+			ExPostRoundTimeout:        time.Second,
+			ExAnteRoundTimeout:        time.Second,
 		},
 	}
 	suite.s = suite.createSynchronizerWithMock()
@@ -54,19 +56,15 @@ func (suite *SynchronizerTestSuite) createSynchronizerWithMock() *Synchronizer {
 
 	s.rounds = suite.cfg.Graph.Diameter * suite.cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
+		var numChannels int
 		if step == common.Network {
-			// Network has no rounds, so we create a single channel
-			// to signal when the step is triggered.
-			s.roundChannels[step] = make([]chan struct{}, 2)
-			// The first channel is used to signal the start of the network step,
-			// and the second channel is used to signal the end of the network step.
-			s.roundChannels[step][0] = make(chan struct{})
-			s.roundChannels[step][1] = make(chan struct{})
-			continue
+			numChannels = suite.cfg.Graph.BuildingRounds + 1
+		} else {
+			numChannels = s.rounds + 1
 		}
 
-		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
-		for i := 0; i < s.rounds+1; i++ {
+		s.roundChannels[step] = make([]chan struct{}, numChannels)
+		for i := 0; i < numChannels; i++ {
 			s.roundChannels[step][i] = make(chan struct{})
 		}
 	}

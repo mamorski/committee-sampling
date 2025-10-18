@@ -14,13 +14,15 @@ message MessageData {
   bytes sign = 7;         // signature of message data + method specific data by message authoring node.
 }
 
-message NeighborMessage {
+message GraphProposal {
   MessageData messageData = 1;
+  int32 round = 2;
 }
 
-message NeighborMessageResponse {
+message GraphResponse {
   MessageData messageData = 1;
-  bool success = 2;
+  int32 round = 2;
+  bool accepted = 3;
 }
 
 message ProtocolMessage {

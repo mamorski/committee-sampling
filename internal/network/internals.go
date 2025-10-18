@@ -191,3 +191,41 @@ func (n *P2PNode) delayedSend(addrInfo peer.AddrInfo, p protocol.ID, data proto.
 		}
 	}()
 }
+
+func (n *P2PNode) remainingOutboundCapacity() int {
+	n.mu.Lock()
+	outboundCount := len(n.outboundNeighbors)
+	n.mu.Unlock()
+
+	n.connState.mu.Lock()
+	pendingCount := len(n.connState.pendingResponses)
+	n.connState.mu.Unlock()
+
+	return n.maxOutbound - outboundCount - pendingCount
+}
+
+func (n *P2PNode) remainingInboundCapacity() int {
+	n.mu.Lock()
+	totalNeighbors := len(n.neighbors)
+	n.mu.Unlock()
+
+	limit := n.neighborLimit()
+	return limit - totalNeighbors
+}
+
+func (n *P2PNode) hasOutboundCapacity() bool {
+	return n.remainingOutboundCapacity() > 0
+}
+
+func (n *P2PNode) hasInboundCapacity() bool {
+	return n.remainingInboundCapacity() > 0
+}
+
+func (n *P2PNode) hasNeighborCapacity() bool {
+	n.mu.Lock()
+	totalNeighbors := len(n.neighbors)
+	n.mu.Unlock()
+
+	limit := n.neighborLimit()
+	return totalNeighbors < limit
+}

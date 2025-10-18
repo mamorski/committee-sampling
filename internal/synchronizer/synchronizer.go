@@ -49,19 +49,15 @@ func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchroniz
 
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
+		var numChannels int
 		if step == common.Network {
-			// Network has no rounds, so we create a single channel
-			// to signal when the step is triggered.
-			s.roundChannels[step] = make([]chan struct{}, 2)
-			// The first channel is used to signal the start of the network step,
-			// and the second channel is used to signal the end of the network step.
-			s.roundChannels[step][0] = make(chan struct{})
-			s.roundChannels[step][1] = make(chan struct{})
-			continue
+			numChannels = cfg.Graph.BuildingRounds + 1
+		} else {
+			numChannels = s.rounds + 1
 		}
 
-		s.roundChannels[step] = make([]chan struct{}, s.rounds+1)
-		for i := 0; i < s.rounds+1; i++ {
+		s.roundChannels[step] = make([]chan struct{}, numChannels)
+		for i := 0; i < numChannels; i++ {
 			s.roundChannels[step][i] = make(chan struct{})
 		}
 	}
@@ -87,7 +83,7 @@ func (s *Synchronizer) startTimeSync() {
 	startTimes := CalculateStartTimes(s.cfg, s.logger)
 	s.logger.Info("Starting time-based synchronization")
 
-	go s.runTimeSyncForStep(common.Network, startTimes.StartBuildingNetwork, s.cfg.Synchronization.BuildingGraphTimeout)
+	go s.runTimeSyncForStep(common.Network, startTimes.StartBuildingNetwork, s.cfg.Synchronization.GraphBuildingRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostMDAG, startTimes.ExPostMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExAnteMDAG, startTimes.ExAnteMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostVerify, startTimes.ExPostVerify, s.cfg.Synchronization.ExPostRoundTimeout)
@@ -101,7 +97,7 @@ func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time,
 	s.logger.Info("Scheduling rounds for step", zap.String("step", string(step)), zap.Time("startTime", startTime))
 	rounds := s.rounds
 	if step == common.Network {
-		rounds = 1 // Network has only one round
+		rounds = s.cfg.Graph.BuildingRounds
 	}
 
 	for i := 0; i < rounds+1; i++ {
@@ -174,7 +170,10 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	startTime := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
 
-	exPostMDAGTime := startTime.Add(cfg.Synchronization.BuildingGraphTimeout + 1*time.Minute)
+	graphBuildingTime := cfg.Synchronization.GraphDiscoveryTimeout +
+		cfg.Synchronization.GraphBuildingRoundTimeout*time.Duration(cfg.Graph.BuildingRounds+1)
+
+	exPostMDAGTime := startTime.Add(graphBuildingTime + 1*time.Minute)
 	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + 1*time.Minute)
 	exPostVerifyTime := exAnteMDAGTime.Add(
 		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.Committee.Delay)*time.Second + 1*time.Minute)

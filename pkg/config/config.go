@@ -106,8 +106,9 @@ type Discovery struct {
 }
 
 type Graph struct {
-	Diameter      int `mapstructure:"diameter"`       // Degree bound if the graph
-	GradingLevels int `mapstructure:"grading_levels"` // Grading levels for the graph
+	Diameter       int `mapstructure:"diameter"`        // Degree bound if the graph
+	GradingLevels  int `mapstructure:"grading_levels"`  // Grading levels for the graph
+	BuildingRounds int `mapstructure:"building_rounds"` // Number of rounds for graph building
 }
 
 type Committee struct {
@@ -121,13 +122,14 @@ type Committee struct {
 }
 
 type Synchronization struct {
-	Type                 SyncType      `mapstructure:"type"`                   // Type of synchronization (TimeSync only)
-	ExAnteRoundTimeout   time.Duration `mapstructure:"ex_ante_round_timeout"`  // Timeout for ExAnte rounds in milliseconds
-	ExPostRoundTimeout   time.Duration `mapstructure:"ex_post_round_timeout"`  // Timeout for ExPost rounds in milliseconds
-	MDAGRoundTimeout     time.Duration `mapstructure:"mdag_round_timeout"`     // Timeout for MDAG rounds in milliseconds
-	BuildingGraphTimeout time.Duration `mapstructure:"building_graph_timeout"` // Timeout for building the network graph
-	StartTime            int64         `mapstructure:"start_time"`             // Start time as Unix timestamp UTC
-	TimeServer           string        `mapstructure:"time_server"`            // NTP server for time synchronization
+	Type                      SyncType      `mapstructure:"type"`                         // Type of synchronization (TimeSync only)
+	ExAnteRoundTimeout        time.Duration `mapstructure:"ex_ante_round_timeout"`        // Timeout for ExAnte rounds in milliseconds
+	ExPostRoundTimeout        time.Duration `mapstructure:"ex_post_round_timeout"`        // Timeout for ExPost rounds in milliseconds
+	MDAGRoundTimeout          time.Duration `mapstructure:"mdag_round_timeout"`           // Timeout for MDAG rounds in milliseconds
+	GraphDiscoveryTimeout     time.Duration `mapstructure:"graph_discovery_timeout"`      // Timeout for discovering peers via DHT
+	GraphBuildingRoundTimeout time.Duration `mapstructure:"graph_building_round_timeout"` // Timeout per graph building round
+	StartTime                 int64         `mapstructure:"start_time"`                   // Start time as Unix timestamp UTC
+	TimeServer                string        `mapstructure:"time_server"`                  // NTP server for time synchronization
 }
 
 func Load(configPath string) (*Config, error) {
