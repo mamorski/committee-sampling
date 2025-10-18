@@ -127,6 +127,9 @@ func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time,
 
 	for i := 0; i < rounds+1; i++ {
 		roundStartTime := startTime.Add(time.Duration(i) * roundTimeout).Add(s.clockSkew)
+		if step == common.GraphDiscovery && i == 0 {
+			roundStartTime = startTime.Add(time.Duration(1) * roundTimeout).Add(s.clockSkew)
+		}
 		timer := time.NewTimer(time.Until(roundStartTime))
 
 		select {

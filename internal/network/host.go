@@ -632,14 +632,13 @@ func (n *P2PNode) sendProposalsToUnsent(round int) {
 func (n *P2PNode) graphBuilder() {
 	go n.handleDiscoveredPeers(n.ctx)
 
-	discoveryRound, err := n.sync.WaitForRound(common.GraphDiscovery, 1)
+	discoveryRound, err := n.sync.WaitForRound(common.GraphDiscovery, 0)
 	if err != nil {
 		n.logger.Error("Failed to wait for graph discovery completion", zap.Error(err))
 		panic(err)
 	}
 
 	<-discoveryRound
-	n.acceptingPotentialNeighbors.Store(false)
 	n.logger.Info("Discovery phase complete, starting multi-round graph building")
 
 	if n.buildingRounds%2 != 0 {
@@ -647,6 +646,7 @@ func (n *P2PNode) graphBuilder() {
 		panic(fmt.Sprintf("building rounds must be even, got %d (this should have been fixed during config loading)", n.buildingRounds))
 	}
 
+	n.acceptingPotentialNeighbors.Store(false)
 	n.shuffledPotentialNeighbors = n.shuffleCandidates(n.collectPotentialNeighbors())
 	n.logger.Info("Shuffled potential neighbors", zap.Int("count", len(n.shuffledPotentialNeighbors)))
 
