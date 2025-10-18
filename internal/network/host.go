@@ -490,9 +490,9 @@ func (n *P2PNode) GetNodeID() string {
 func (n *P2PNode) graphBuilder() {
 	go n.handleDiscoveredPeers(n.ctx)
 
-	discoveryRound, err := n.sync.WaitForRound(common.Network, 0)
+	discoveryRound, err := n.sync.WaitForRound(common.GraphDiscovery, 0)
 	if err != nil {
-		n.logger.Error("Failed to wait for Network discovery round", zap.Error(err))
+		n.logger.Error("Failed to wait for graph discovery completion", zap.Error(err))
 		panic(err)
 	}
 
@@ -501,7 +501,7 @@ func (n *P2PNode) graphBuilder() {
 	n.logger.Info("Discovery phase complete, starting multi-round graph building")
 
 	for round := 0; round < n.buildingRounds; round++ {
-		roundStart, err := n.sync.WaitForRound(common.Network, round+1)
+		roundStart, err := n.sync.WaitForRound(common.Network, round)
 		if err != nil {
 			n.logger.Error("Failed to wait for graph building round", zap.Int("round", round), zap.Error(err))
 			panic(err)
@@ -524,6 +524,13 @@ func (n *P2PNode) graphBuilder() {
 
 		n.sendProposals(round)
 	}
+
+	finalWait, err := n.sync.WaitForRound(common.Network, n.buildingRounds)
+	if err != nil {
+		n.logger.Error("Failed to wait for final graph building window", zap.Error(err))
+		panic(err)
+	}
+	<-finalWait
 
 	n.logger.Info("Network building phase completed")
 	neighbors := n.GetNeighbors()

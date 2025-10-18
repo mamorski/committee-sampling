@@ -13,14 +13,23 @@ import (
 	"github.com/mamorski/committee-sampling/pkg/config"
 )
 
-var AllSteps = []common.Step{common.Network, common.ExPostMDAG, common.ExAnteMDAG, common.ExPostVerify, common.ExAnteVerify}
+var AllSteps = []common.Step{
+	common.GraphDiscovery,
+	common.Network,
+	common.ExPostMDAG,
+	common.ExAnteMDAG,
+	common.ExPostVerify,
+	common.ExAnteVerify,
+}
 
 type StartTimes struct {
-	StartBuildingNetwork time.Time
-	ExPostMDAG           time.Time
-	ExAnteMDAG           time.Time
-	ExPostVerify         time.Time
-	ExAnteVerify         time.Time
+	GraphDiscoveryStart time.Time
+	GraphDiscoveryEnd   time.Time
+	GraphBuildingStart  time.Time
+	ExPostMDAG          time.Time
+	ExAnteMDAG          time.Time
+	ExPostVerify        time.Time
+	ExAnteVerify        time.Time
 }
 
 type Synchronizer struct {
@@ -50,9 +59,12 @@ func New(_ context.Context, cfg *config.Config, logger *zap.Logger) (*Synchroniz
 	s.rounds = cfg.Graph.Diameter * cfg.Graph.GradingLevels
 	for _, step := range AllSteps {
 		var numChannels int
-		if step == common.Network {
+		switch step {
+		case common.GraphDiscovery:
+			numChannels = 1
+		case common.Network:
 			numChannels = cfg.Graph.BuildingRounds + 1
-		} else {
+		default:
 			numChannels = s.rounds + 1
 		}
 
@@ -69,9 +81,11 @@ func (s *Synchronizer) Start() {
 }
 
 func (s *Synchronizer) Stop() {
-	s.stopOnce.Do(func() {
-		close(s.stopChan)
-	})
+	s.stopOnce.Do(
+		func() {
+			close(s.stopChan)
+		},
+	)
 }
 
 func (s *Synchronizer) Close() error {
@@ -81,9 +95,15 @@ func (s *Synchronizer) Close() error {
 
 func (s *Synchronizer) startTimeSync() {
 	startTimes := CalculateStartTimes(s.cfg, s.logger)
-	s.logger.Info("Starting time-based synchronization")
+	s.logger.Info(
+		"Starting time-based synchronization",
+		zap.Time("graphDiscoveryStart", startTimes.GraphDiscoveryStart),
+		zap.Time("graphDiscoveryEnd", startTimes.GraphDiscoveryEnd),
+		zap.Time("graphBuildingStart", startTimes.GraphBuildingStart),
+	)
 
-	go s.runTimeSyncForStep(common.Network, startTimes.StartBuildingNetwork, s.cfg.Synchronization.GraphBuildingRoundTimeout)
+	go s.runTimeSyncForStep(common.GraphDiscovery, startTimes.GraphDiscoveryEnd, s.cfg.Synchronization.GraphDiscoveryTimeout)
+	go s.runTimeSyncForStep(common.Network, startTimes.GraphBuildingStart, s.cfg.Synchronization.GraphBuildingRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostMDAG, startTimes.ExPostMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExAnteMDAG, startTimes.ExAnteMDAG, s.cfg.Synchronization.MDAGRoundTimeout)
 	go s.runTimeSyncForStep(common.ExPostVerify, startTimes.ExPostVerify, s.cfg.Synchronization.ExPostRoundTimeout)
@@ -95,9 +115,14 @@ func (s *Synchronizer) startTimeSync() {
 
 func (s *Synchronizer) runTimeSyncForStep(step common.Step, startTime time.Time, roundTimeout time.Duration) {
 	s.logger.Info("Scheduling rounds for step", zap.String("step", string(step)), zap.Time("startTime", startTime))
-	rounds := s.rounds
-	if step == common.Network {
+	var rounds int
+	switch step {
+	case common.GraphDiscovery:
+		rounds = 0
+	case common.Network:
 		rounds = s.cfg.Graph.BuildingRounds
+	default:
+		rounds = s.rounds
 	}
 
 	for i := 0; i < rounds+1; i++ {
@@ -151,7 +176,8 @@ func (s *Synchronizer) WaitForRound(step common.Step, round int) (<-chan struct{
 	}
 
 	if round >= len(stepChannels) {
-		return nil, fmt.Errorf("round %d exceeds total rounds %d", round, s.rounds)
+		maxRound := len(stepChannels) - 1
+		return nil, fmt.Errorf("round %d exceeds total rounds %d for step %s", round, maxRound, step)
 	}
 
 	return stepChannels[round], nil
@@ -168,21 +194,26 @@ func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	}
 
 	rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
-	startTime := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
+	graphDiscoveryStart := time.Unix(cfg.Synchronization.StartTime, 0).UTC().Add(clockOffset)
+	graphDiscoveryEnd := graphDiscoveryStart.Add(cfg.Synchronization.GraphDiscoveryTimeout)
+	graphBuildingStart := graphDiscoveryEnd
 
 	graphBuildingTime := cfg.Synchronization.GraphDiscoveryTimeout +
-		cfg.Synchronization.GraphBuildingRoundTimeout*time.Duration(cfg.Graph.BuildingRounds+1)
+		cfg.Synchronization.GraphBuildingRoundTimeout*time.Duration(cfg.Graph.BuildingRounds)
 
-	exPostMDAGTime := startTime.Add(graphBuildingTime + 1*time.Minute)
+	exPostMDAGTime := graphDiscoveryStart.Add(graphBuildingTime + 1*time.Minute)
 	exAnteMDAGTime := exPostMDAGTime.Add(cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + 1*time.Minute)
 	exPostVerifyTime := exAnteMDAGTime.Add(
-		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.Committee.Delay)*time.Second + 1*time.Minute)
+		cfg.Synchronization.MDAGRoundTimeout*time.Duration(rounds) + time.Duration(cfg.Committee.Delay)*time.Second + 1*time.Minute,
+	)
 
 	return &StartTimes{
-		StartBuildingNetwork: startTime,
-		ExPostMDAG:           exPostMDAGTime,
-		ExAnteMDAG:           exAnteMDAGTime,
-		ExPostVerify:         exPostVerifyTime,
-		ExAnteVerify:         exPostVerifyTime,
+		GraphDiscoveryStart: graphDiscoveryStart,
+		GraphDiscoveryEnd:   graphDiscoveryEnd,
+		GraphBuildingStart:  graphBuildingStart,
+		ExPostMDAG:          exPostMDAGTime,
+		ExAnteMDAG:          exAnteMDAGTime,
+		ExPostVerify:        exPostVerifyTime,
+		ExAnteVerify:        exPostVerifyTime,
 	}
 }

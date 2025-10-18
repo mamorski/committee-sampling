@@ -180,10 +180,13 @@ def write_committee_config(
         session_id: str,
         max_outbound_degree: int,
         diameter: int,
+        graph_building_rounds: int,
         num_nodes: int,
         bootstrap_address: str,
         log_level: str,
         verify_timeout: str,
+        graph_discovery_timeout: str,
+        graph_building_round_timeout: str,
         config_file_path: Optional[Path] = None,
         metrics_enabled: bool = False,
         pushgateway_enabled: bool = False,
@@ -225,7 +228,11 @@ def write_committee_config(
             "drop_on_send_probability": drop_on_send_probability,
             "adversary": build_adversary_dict(adversary_enabled, settings),
         },
-        "graph": {"diameter": diameter, "grading_levels": 5},
+        "graph": {
+            "diameter": diameter,
+            "grading_levels": 5,
+            "building_rounds": graph_building_rounds,
+        },
         "committee": {
             "session_id": session_id,
             "lambda": 256,
@@ -241,7 +248,8 @@ def write_committee_config(
             "ex_post_round_timeout": verify_timeout,
             "mdag_round_timeout": "10s",
             "start_time": int(time.time()) + 60,
-            "building_graph_timeout": "2m",
+            "graph_discovery_timeout": _ensure_duration(graph_discovery_timeout),
+            "graph_building_round_timeout": _ensure_duration(graph_building_round_timeout),
             "time_server": "time.google.com",
         },
         "logger": {"level": log_level},
@@ -387,6 +395,9 @@ def run_one_simulation(
         kill_probability: float,
         verify_timeout: str = "30s",
         committee_size: int = 30,
+        graph_building_rounds: int = 3,
+        graph_discovery_timeout: str = "30s",
+        graph_building_round_timeout: str = "2m",
 ) -> None:
     validate_args(
         num_nodes,
@@ -464,6 +475,9 @@ def run_one_simulation(
     print(f"- Number of nodes: {num_nodes}")
     print(f"- Max outbound degree: {max_outbound_degree}")
     print(f"- Diameter: {diameter}")
+    print(f"- Graph building rounds: {graph_building_rounds}")
+    print(f"- Graph discovery timeout: {graph_discovery_timeout}")
+    print(f"- Graph building round timeout: {graph_building_round_timeout}")
     print(f"- Log level: {log_level_status}")
     print(f"- Drop-on-send nodes: {drop_count} ({drop_on_send_percent:.2f}%)")
     print(f"- Adversary-enabled nodes: {adversary_count} ({adversary_percent:.2f}%)")
@@ -514,6 +528,7 @@ def run_one_simulation(
             session_id=session_id,
             max_outbound_degree=max_outbound_degree,
             diameter=diameter,
+            graph_building_rounds=graph_building_rounds,
             num_nodes=num_nodes,
             bootstrap_address=bootstrap_address,
             log_level=log_level,
@@ -523,6 +538,8 @@ def run_one_simulation(
             drop_on_send_enabled=drop_enabled,
             drop_on_send_probability=drop_on_send_probability if drop_enabled else 0.0,
             verify_timeout=verify_timeout,
+            graph_discovery_timeout=graph_discovery_timeout,
+            graph_building_round_timeout=graph_building_round_timeout,
             committee_size=committee_size,
             adversary_enabled=adversary_enabled,
             adversary_settings=adversary_settings,
@@ -804,6 +821,25 @@ def main() -> None:
         help="Additional inbound degree slack beyond max_outbound_degree (default: 0)",
     )
     parser.add_argument(
+        "--graph-discovery-timeout",
+        dest="graph_discovery_timeout",
+        default="30s",
+        help="Duration to continue graph discovery before starting building rounds (default: 30s)",
+    )
+    parser.add_argument(
+        "--graph-building-round-timeout",
+        dest="graph_building_round_timeout",
+        default="2m",
+        help="Duration allocated per graph building round (default: 2m)",
+    )
+    parser.add_argument(
+        "--graph-building-rounds",
+        dest="graph_building_rounds",
+        type=int,
+        default=3,
+        help="Number of graph building rounds to execute (default: 3)",
+    )
+    parser.add_argument(
         "--kill-random-up-to",
         dest="kill_random_up_to",
         type=int,
@@ -877,6 +913,25 @@ def main() -> None:
         kill_probability = float(run.get("kill_probability", args.kill_probability))
         verify_timeout = str(run.get("verify_timeout", "30s"))
         committee_size = int(run.get("committee_size", 30))
+        graph_discovery_timeout = run.get("graph_discovery_timeout")
+        if not graph_discovery_timeout:
+            graph_discovery_timeout = args.graph_discovery_timeout
+        graph_discovery_timeout = str(graph_discovery_timeout)
+
+        graph_building_round_timeout = run.get("graph_building_round_timeout")
+        if not graph_building_round_timeout:
+            graph_building_round_timeout = run.get("building_graph_timeout")
+        if not graph_building_round_timeout:
+            graph_building_round_timeout = args.graph_building_round_timeout
+        graph_building_round_timeout = str(graph_building_round_timeout)
+
+        graph_building_rounds = run.get("graph_building_rounds")
+        if graph_building_rounds is None:
+            graph_building_rounds = run.get("building_rounds")
+        if graph_building_rounds is None:
+            graph_building_rounds = args.graph_building_rounds
+        graph_building_rounds = int(graph_building_rounds)
+
         if num_nodes is None or max_deg is None or diameter is None:
             sys.exit(
                 f"Error: run #{idx} must include 'number_of_nodes' (or 'num_nodes'), 'max_outbound_degree' (or 'max_degree'), and 'diameter'"
@@ -900,6 +955,9 @@ def main() -> None:
             kill_probability=kill_probability,
             verify_timeout=verify_timeout,
             committee_size=committee_size,
+            graph_building_rounds=graph_building_rounds,
+            graph_discovery_timeout=graph_discovery_timeout,
+            graph_building_round_timeout=graph_building_round_timeout,
         )
 
         if idx < len(runs) and sleep_between > 0:
