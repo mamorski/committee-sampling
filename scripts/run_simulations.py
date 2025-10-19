@@ -119,7 +119,6 @@ def validate_args(
         drop_on_send_probability: float,
         adversary_percent: float,
         adversary_settings: AdversarySettings,
-        degree_slack: int,
 ) -> None:
     if num_nodes < 2:
         sys.exit("Error: Number of nodes must be a positive integer >= 2")
@@ -141,8 +140,6 @@ def validate_args(
         sys.exit("Error: adversary freshness mode must be one of: stale, truncate, both")
     if adversary_settings.freshness_stale_rounds < 1:
         sys.exit("Error: adversary freshness stale_rounds must be >= 1")
-    if degree_slack < 0:
-        sys.exit("Error: degree slack must be >= 0")
 
 
 def ensure_files(paths: Paths) -> None:
@@ -195,7 +192,6 @@ def write_committee_config(
         committee_size: int = 30,
         adversary_enabled: bool = False,
         adversary_settings: Optional[AdversarySettings] = None,
-        degree_slack: int = 0,
 ) -> Path:
     config_file = config_file_path or (
             paths.configs_dir / "committee-sampling-conf.json"
@@ -218,7 +214,6 @@ def write_committee_config(
         "network": {
             "listen_port": 0,
             "max_outbound_degree": max_outbound_degree,
-            "degree_slack": degree_slack,
             "discovery_config": {
                 "protocol_id": "/committee-sampling/1.0.0",
                 "interval": "5s",
@@ -389,7 +384,6 @@ def run_one_simulation(
         drop_on_send_probability: float,
         adversary_percent: float,
         adversary_settings: AdversarySettings,
-        degree_slack: int,
         kill_random_up_to: int,
         kill_random_delay_sec: int,
         kill_probability: float,
@@ -408,7 +402,6 @@ def run_one_simulation(
         drop_on_send_probability,
         adversary_percent,
         adversary_settings,
-        degree_slack,
     )
 
     # Create per-run paths (logs in a dedicated folder; bootstrap log inside logs folder)
@@ -494,8 +487,6 @@ def run_one_simulation(
         freshness_status = "enabled" if adversary_settings.freshness_enabled else "disabled"
         print(
             f"  - Freshness cheater: {freshness_status} ({adversary_settings.freshness_mode})")
-    if degree_slack > 0:
-        print(f"- Degree slack: {degree_slack}")
     print("")
 
     # Start bootstrap server
@@ -543,7 +534,6 @@ def run_one_simulation(
             committee_size=committee_size,
             adversary_enabled=adversary_enabled,
             adversary_settings=adversary_settings,
-            degree_slack=degree_slack,
         )
         config_cache[key] = conf_path
         return conf_path
@@ -589,8 +579,6 @@ def run_one_simulation(
         print(f"  - Drop-only nodes: {drop_only_count}")
     if adversary_only_count > 0:
         print(f"  - Adversary-only nodes: {adversary_only_count}")
-    if degree_slack > 0:
-        print(f"- Degree slack: {degree_slack}")
     print("- Discovery: DHT with bootstrap server")
     print(f"- Log files: {paths.logs_dir}/node-*.log")
     print(f"- Bootstrap log: {paths.bootstrap_log}")
@@ -814,13 +802,6 @@ def main() -> None:
         help="Truncate the last Merkle leaf in the freshness cheater behavior",
     )
     parser.add_argument(
-        "--degree-slack",
-        dest="degree_slack",
-        type=int,
-        default=0,
-        help="Additional inbound degree slack beyond max_outbound_degree (default: 0)",
-    )
-    parser.add_argument(
         "--graph-discovery-timeout",
         dest="graph_discovery_timeout",
         default="30s",
@@ -905,7 +886,6 @@ def main() -> None:
             run.get("drop_on_send_probability", args.drop_on_send_probability)
         )
         adversary_percent, adversary_settings = resolve_adversary_options(args, run)
-        degree_slack = int(run.get("degree_slack", args.degree_slack))
         kill_random_up_to = int(run.get("kill_random_up_to", args.kill_random_up_to))
         kill_random_delay_sec = int(
             run.get("kill_random_delay_sec", args.kill_random_delay_sec)
@@ -949,7 +929,6 @@ def main() -> None:
             drop_on_send_probability=drop_on_send_probability,
             adversary_percent=adversary_percent,
             adversary_settings=adversary_settings,
-            degree_slack=degree_slack,
             kill_random_up_to=kill_random_up_to,
             kill_random_delay_sec=kill_random_delay_sec,
             kill_probability=kill_probability,
