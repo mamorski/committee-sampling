@@ -47,16 +47,13 @@ All runtime parameters live under the top-level keys described below. Examples c
     },
     "connectivity_retries": 3,
     "drop_on_send": false,
-    "drop_on_send_probability": 0.0,
-    "adversary": {
-    }
+    "drop_on_send_probability": 0.0
   }
 }
 ```
 
 * `drop_on_send` adds a coarse random lossy link simulation using crypto-grade randomness per recipient.
 * `degree_slack` lets a node accept a limited number of inbound connections beyond `max_outbound_degree`, reducing the chance of creating supernodes while keeping the overlay connected.
-* `adversary` (documented later) unlocks deterministic, reproducible network fault injection and message tampering.
 
 ### `graph`, `committee`, `synchronization`
 
@@ -97,47 +94,6 @@ The collector always registers Prometheus counters:
 | `valid_messages` | Same as above                         | Subset that passed all validation checks.                |
 
 When `push_gateway.enabled` is true, metrics are pushed on the configured interval and optionally deleted on shutdown. The HTTP server exposes live metrics if `http_server.enabled` is set. Disable the entire block (`enabled: false`) for bare-bones runs.
-
----
-
-## Adversarial Simulation Toolkit
-
-Advanced behaviors live under `network.adversary`. They compose with drop-on-send and are deterministic once seeded:
-
-```json
-{
-  "network": {
-    "adversary": {
-      "enabled": true,
-      "seed": 1337,
-      "drop_probability": 0.05,
-      "jitter_min": "50ms",
-      "jitter_max": "250ms",
-      "clock_skew": "200ms",
-      "ex_ante": {
-        "equivocator": true
-      },
-      "ex_post": {
-        "freshness_cheater": {
-          "enabled": true,
-          "mode": "both",
-          "stale_rounds": 3,
-          "truncate_leaf": true
-        }
-      }
-    }
-  }
-}
-```
-
-* `seed` – deterministic PRNG seed. When omitted the node derives one from its peer ID hash.
-* `drop_probability` – probability the adversary behavior drops an outbound message after looking at envelope metadata (independent from `drop_on_send`).
-* `jitter_min`, `jitter_max` – delay window applied to outbound messages (Go duration strings).
-* `clock_skew` – applies to both the synchronizer and message timestamps.
-* `ex_ante.equivocator` – splits Ex-Ante timestamp streams to deliver mismatched Merkle branches to half the peers.
-* `ex_post.freshness_cheater` – replays stale challenges, truncates Merkle paths, or both depending on `mode`. `stale_rounds` chooses the lookback window; `truncate_leaf` can force/disable truncation explicitly.
-
-Inbound behaviors are evaluated too; if any behavior decides to drop a message, delivery to higher layers is skipped.
 
 ---
 
@@ -182,16 +138,14 @@ Key CLI flags:
 | Flag                                                                   | Purpose                                                                            |
 |------------------------------------------------------------------------|------------------------------------------------------------------------------------|
 | `--drop-on-send-percent`, `--drop-on-send-probability`                 | Default drop-on-send profile for nodes not overriding the value in the batch file. |
-| `--adversary-percent`, `--adversary-*`                                 | Default adversary behavior parameters; can be overridden per run.                  |
 | `--kill-random-up-to`, `--kill-random-delay-sec`, `--kill-probability` | Enable random process termination for failure injection.                           |
 
 Each run entry in the batch JSON can redefine the same fields. Run-specific config shards are written to `scripts/configs/`, logs to `scripts/logs/<run>/`. A tar archive is created after each run for post-mortem analysis.
 
-`configs/sample_simulation_plan.json` illustrates three runs:
+`configs/sample_simulation_plan.json` illustrates two runs:
 
 1. Baseline 1000-node network with no simulation.
 2. 3 % of nodes enabling drop-on-send at 1 % probability.
-3. Same drop setting plus adversary behaviors enabled for 10 % of nodes with representative parameters.
 
 ---
 
@@ -220,12 +174,11 @@ Each run entry in the batch JSON can redefine the same fields. Run-specific conf
 |-------------------------------------------------------|---------------------------------------------------------|
 | `cmd/committee-sampling`                              | Main binary.                                            |
 | `internal/boot`                                       | Protocol bootstrap wiring.                              |
-| `internal/network`                                    | libp2p host, discovery, adversary envelope handling.    |
+| `internal/network`                                    | libp2p host, discovery.                                 |
 | `internal/mdag`, `internal/exante`, `internal/expost` | Protocol sub-components.                                |
 | `internal/resourceproof`, `internal/resourcebound`    | Resource-bounded proofs.                                |
 | `internal/synchronizer`                               | Time-based round scheduler.                             |
 | `internal/metrics`                                    | Prometheus collector.                                   |
-| `internal/sim/adversary`                              | Drop/jitter/equivocator/freshness simulation behaviors. |
 | `pkg/config`                                          | Config loader.                                          |
 | `pkg/proto`                                           | Generated protobuf stubs.                               |
 | `scripts/`                                            | Automation, simulation runners, helper scripts.         |

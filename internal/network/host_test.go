@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"fmt"
 	"testing"
 	"time"
 
@@ -21,9 +20,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
-
-	"github.com/mamorski/committee-sampling/internal/hash"
-	"github.com/mamorski/committee-sampling/internal/sim/adversary"
 )
 
 type MockConn struct {
@@ -162,41 +158,6 @@ func (suite *HostTestSuite) TestClose() {
 	suite.mockHost.AssertExpectations(suite.T())
 }
 
-func (suite *HostTestSuite) TestNewMessageDataRespectsClockSkew() {
-	suite.node.clockSkew = 2 * time.Second
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Once()
-	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Once()
-
-	reference := time.Now().Add(suite.node.clockSkew).Unix()
-	data := suite.node.newMessageData(uuid.New().String(), false)
-
-	suite.InDelta(float64(reference), float64(data.Timestamp), 1)
-	suite.mockHost.AssertExpectations(suite.T())
-	suite.mockPeerstore.AssertExpectations(suite.T())
-}
-
-func selectPeerGroups(session string) (peer.ID, peer.ID) {
-	var group0, group1 peer.ID
-	for i := 0; group0 == "" || group1 == ""; i++ {
-		pid := peer.ID(fmt.Sprintf("peer-%d", i))
-		digest := hash.Sum([]byte(pid), []byte(session))
-		if len(digest) == 0 {
-			continue
-		}
-		if digest[0]&1 == 0 {
-			if group0 == "" {
-				group0 = pid
-			}
-			continue
-		}
-		if group1 == "" {
-			group1 = pid
-		}
-	}
-	return group0, group1
-}
-
 func (suite *HostTestSuite) TestCloseDiscoveryError() {
 	suite.mockDiscovery.On("Stop").Return(assert.AnError)
 
@@ -272,83 +233,6 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
 	mockStream.AssertExpectations(suite.T())
-}
-
-func (suite *HostTestSuite) TestSendProtocolMessageWithEquivocator() {
-	behavior := adversary.NewExAnteEquivocator(suite.logger)
-	suite.node.behaviors = append(suite.node.behaviors, behavior)
-
-	session := "sid"
-	group0, group1 := selectPeerGroups(session)
-
-	suite.node.neighbors = map[peer.ID]peer.AddrInfo{
-		group0: {ID: group0},
-		group1: {ID: group1},
-	}
-
-	suite.mockHost.On("ID").Return(suite.testPeerID).Maybe()
-
-	base := &pproto.TimestampMessage{
-		SessionId:       session,
-		VerificationKey: []byte("vk"),
-		Value:           []byte("value"),
-		Round:           1,
-		Id:              suite.node.GetNodeID(),
-	}
-	payload, err := proto.Marshal(base)
-	suite.Require().NoError(err)
-
-	protocolID := "/exante/1.0.0/" + session
-
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore).Maybe()
-	suite.mockPeerstore.On("PubKey", mock.Anything).Return(suite.testPubKey).Maybe()
-	suite.mockPeerstore.On("PrivKey", mock.Anything).Return(suite.testPrivKey).Maybe()
-
-	stream0 := &MockStream{}
-	stream1 := &MockStream{}
-
-	type recorded struct {
-		value []byte
-		msgID string
-	}
-	written := make(map[peer.ID]recorded)
-	decodeAndStore := func(pid peer.ID) func([]byte) int {
-		return func(p []byte) int {
-			msg := &pproto.ProtocolMessage{}
-			suite.Require().NoError(proto.Unmarshal(p, msg))
-			ts := &pproto.TimestampMessage{}
-			suite.Require().NoError(proto.Unmarshal(msg.Payload, ts))
-			written[pid] = recorded{value: ts.Value, msgID: msg.MessageData.Id}
-			return len(p)
-		}
-	}
-
-	stream0.On("Write", mock.Anything).Run(func(args mock.Arguments) {
-		_ = decodeAndStore(group0)(args.Get(0).([]byte))
-	}).Return(0, nil).Once()
-	stream0.On("Close").Return(nil).Maybe()
-
-	stream1.On("Write", mock.Anything).Run(func(args mock.Arguments) {
-		_ = decodeAndStore(group1)(args.Get(0).([]byte))
-	}).Return(0, nil).Once()
-	stream1.On("Close").Return(nil).Maybe()
-
-	suite.mockHost.On("NewStream", mock.Anything, group0, mock.Anything).Return(stream0, nil).Once()
-	suite.mockHost.On("NewStream", mock.Anything, group1, mock.Anything).Return(stream1, nil).Once()
-
-	suite.node.SendProtocolMessage(protocolID, payload)
-
-	suite.mockHost.AssertExpectations(suite.T())
-	suite.mockPeerstore.AssertExpectations(suite.T())
-	stream0.AssertExpectations(suite.T())
-	stream1.AssertExpectations(suite.T())
-
-	original := string(base.Value)
-	suite.Require().Len(written, 2)
-	suite.Equal(original, string(written[group0].value))
-
-	expectedAlt := hash.Sum(base.Value, []byte(written[group1].msgID), []byte(group1))
-	suite.Equal(string(expectedAlt), string(written[group1].value))
 }
 
 func (suite *HostTestSuite) TestRegisterHandler() {

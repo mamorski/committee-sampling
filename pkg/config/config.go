@@ -68,35 +68,8 @@ type Network struct {
 	// default: 3)
 
 	// Simulation-only options
-	DropOnSend            bool      `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
-	DropOnSendProbability float64   `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
-	Adversary             Adversary `mapstructure:"adversary"`                // Advanced adversarial simulation toggles
-}
-
-type Adversary struct {
-	Enabled         bool            `mapstructure:"enabled"`
-	Seed            int64           `mapstructure:"seed"`
-	DropProbability float64         `mapstructure:"drop_probability"`
-	JitterMin       time.Duration   `mapstructure:"jitter_min"`
-	JitterMax       time.Duration   `mapstructure:"jitter_max"`
-	ClockSkew       time.Duration   `mapstructure:"clock_skew"`
-	ExAnte          ExAnteAdversary `mapstructure:"ex_ante"`
-	ExPost          ExPostAdversary `mapstructure:"ex_post"`
-}
-
-type ExAnteAdversary struct {
-	Equivocator bool `mapstructure:"equivocator"`
-}
-
-type ExPostAdversary struct {
-	FreshnessCheater FreshnessCheaterConfig `mapstructure:"freshness_cheater"`
-}
-
-type FreshnessCheaterConfig struct {
-	Enabled      bool   `mapstructure:"enabled"`
-	Mode         string `mapstructure:"mode"`
-	StaleRounds  int    `mapstructure:"stale_rounds"`
-	TruncateLeaf bool   `mapstructure:"truncate_leaf"`
+	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
+	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
 }
 
 type Discovery struct {

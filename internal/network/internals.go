@@ -113,14 +113,10 @@ func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageD
 		ClientVersion: clientVersion,
 		NodeId:        n.host.ID().String(),
 		NodePubKey:    nodePubKey,
-		Timestamp:     n.now().Unix(),
+		Timestamp:     time.Now().UTC().Unix(),
 		Id:            messageID,
 		Gossip:        gossip,
 	}
-}
-
-func (n *P2PNode) now() time.Time {
-	return time.Now().Add(n.clockSkew)
 }
 
 // sendProtoMessage helper method - writes a proto go data object to a network stream
@@ -175,23 +171,6 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	return true
 }
 
-func (n *P2PNode) delayedSend(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message, delay time.Duration) {
-	if delay <= 0 {
-		n.send(addrInfo, p, data)
-		return
-	}
-	go func() {
-		timer := time.NewTimer(delay)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			n.send(addrInfo, p, data)
-		case <-n.ctx.Done():
-			return
-		}
-	}()
-}
-
 func (n *P2PNode) remainingOutboundCapacity() int {
 	n.mu.Lock()
 	currentNeighbors := len(n.neighbors)
@@ -200,28 +179,6 @@ func (n *P2PNode) remainingOutboundCapacity() int {
 	return n.maxOutbound - currentNeighbors
 }
 
-func (n *P2PNode) remainingInboundCapacity() int {
-	n.mu.Lock()
-	totalNeighbors := len(n.neighbors)
-	n.mu.Unlock()
-
-	limit := n.neighborLimit()
-	return limit - totalNeighbors
-}
-
 func (n *P2PNode) hasOutboundCapacity() bool {
 	return n.remainingOutboundCapacity() > 0
-}
-
-func (n *P2PNode) hasInboundCapacity() bool {
-	return n.remainingInboundCapacity() > 0
-}
-
-func (n *P2PNode) hasNeighborCapacity() bool {
-	n.mu.Lock()
-	totalNeighbors := len(n.neighbors)
-	n.mu.Unlock()
-
-	limit := n.neighborLimit()
-	return totalNeighbors < limit
 }
