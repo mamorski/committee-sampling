@@ -338,50 +338,6 @@ func (suite *InternalsTestSuite) TestNewMessageDataMarshalError() {
 	// So we'll skip this test case for now
 }
 
-func (suite *InternalsTestSuite) TestSendProtoMessagePeerNotFound() {
-	// Create a peer ID that doesn't exist in neighbors
-	_, otherPub, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-	suite.Require().NoError(err)
-	otherPeerID, err := peer.IDFromPublicKey(otherPub)
-	suite.Require().NoError(err)
-
-	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
-	}
-
-	result := suite.node.sendProtoMessage(otherPeerID, "test-protocol", testMessage)
-	suite.False(result)
-}
-
-func (suite *InternalsTestSuite) TestSendProtoMessageSuccess() {
-	// Add a neighbor first
-	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
-	addrInfo := peer.AddrInfo{
-		ID:    suite.testPeerID,
-		Addrs: []multiaddr.Multiaddr{addr},
-	}
-	suite.node.neighbors[suite.testPeerID] = addrInfo
-
-	mockStream := &MockStream{}
-	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
-	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
-	mockStream.On("Close").Return(nil).Once()
-
-	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
-	}
-
-	result := suite.node.sendProtoMessage(suite.testPeerID, "test-protocol", testMessage)
-	suite.True(result)
-
-	suite.mockHost.AssertExpectations(suite.T())
-	mockStream.AssertExpectations(suite.T())
-}
-
 func (suite *InternalsTestSuite) TestSendSuccess() {
 
 	mockStream := &MockStream{}

@@ -364,7 +364,7 @@ func (suite *HostTestSuite) TestRemainingCapacity() {
 
 	suite.Equal(2, len(suite.node.neighbors), "Should have 2 total neighbors")
 	suite.Equal(1, suite.node.remainingOutboundCapacity(), "Should have 1 remaining capacity (3 - 2)")
-	suite.True(suite.node.hasOutboundCapacity(), "Should still be able to send proposals")
+	suite.True(suite.node.remainingOutboundCapacity() > 0, "Should still be able to send proposals")
 }
 
 func (suite *HostTestSuite) TestAddNeighborTracking() {
@@ -443,8 +443,7 @@ func (suite *HostTestSuite) TestGraphDropHandler() {
 
 	suite.node.queueMu.Lock()
 	suite.node.dropQueue = append(suite.node.dropQueue, queuedDrop{
-		from:      remotePeerID,
-		timestamp: time.Now(),
+		from: remotePeerID,
 	})
 	suite.node.queueMu.Unlock()
 
@@ -468,8 +467,7 @@ func (suite *HostTestSuite) TestProcessDropQueue() {
 
 	suite.node.queueMu.Lock()
 	suite.node.dropQueue = append(suite.node.dropQueue, queuedDrop{
-		from:      peerID,
-		timestamp: time.Now(),
+		from: peerID,
 	})
 	suite.node.queueMu.Unlock()
 
