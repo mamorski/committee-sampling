@@ -119,19 +119,6 @@ func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageD
 	}
 }
 
-// sendProtoMessage helper method - writes a proto go data object to a network stream
-// data: reference of proto go data object to send (not the object itself)
-// s: network stream to write the data to
-func (n *P2PNode) sendProtoMessage(id peer.ID, p protocol.ID, data proto.Message) bool {
-	addrInfo, ok := n.getNeighbor(id)
-	if !ok {
-		n.logger.Error("Failed to find peer", zap.String("peer", id.String()))
-		return false
-	}
-
-	return n.send(addrInfo, p, data)
-}
-
 func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
 	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
@@ -177,8 +164,4 @@ func (n *P2PNode) remainingOutboundCapacity() int {
 	n.mu.Unlock()
 
 	return n.maxOutbound - currentNeighbors
-}
-
-func (n *P2PNode) hasOutboundCapacity() bool {
-	return n.remainingOutboundCapacity() > 0
 }

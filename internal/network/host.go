@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -56,14 +55,12 @@ type Host interface {
 }
 
 type queuedProposal struct {
-	from      peer.ID
-	addrInfo  peer.AddrInfo
-	timestamp time.Time
+	from     peer.ID
+	addrInfo peer.AddrInfo
 }
 
 type queuedDrop struct {
-	from      peer.ID
-	timestamp time.Time
+	from peer.ID
 }
 
 type P2PNode struct {
@@ -79,7 +76,6 @@ type P2PNode struct {
 	potentialNeighbors          sync.Map
 	sid                         string
 	maxOutbound                 int
-	degreeSlack                 int
 	buildingRounds              int
 	dropOnSendProbability       float64
 	acceptingPotentialNeighbors atomic.Bool
@@ -133,7 +129,6 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		discovery:                   d,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
-		degreeSlack:                 cfg.Network.DegreeSlack,
 		key:                         priv,
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
@@ -256,13 +251,6 @@ func (n *P2PNode) IsNeighbor(peerID peer.ID) bool {
 	defer n.mu.Unlock()
 	_, exists := n.neighbors[peerID]
 	return exists
-}
-
-func (n *P2PNode) getNeighbor(peerID peer.ID) (peer.AddrInfo, bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	info, ok := n.neighbors[peerID]
-	return info, ok
 }
 
 func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
@@ -608,7 +596,6 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	)
 }
 
-// Helper function to convert addresses to strings
 func addrsToStrings(addrs []multiaddr.Multiaddr) []string {
 	result := make([]string, len(addrs))
 	for i, addr := range addrs {
@@ -712,9 +699,8 @@ func (n *P2PNode) graphProposalHandler(s network.Stream) {
 	n.queueMu.Lock()
 	n.proposalQueue = append(
 		n.proposalQueue, queuedProposal{
-			from:      proposerID,
-			addrInfo:  addrInfo,
-			timestamp: time.Now(),
+			from:     proposerID,
+			addrInfo: addrInfo,
 		},
 	)
 	n.queueMu.Unlock()
@@ -754,8 +740,7 @@ func (n *P2PNode) graphDropHandler(s network.Stream) {
 	n.queueMu.Lock()
 	n.dropQueue = append(
 		n.dropQueue, queuedDrop{
-			from:      dropperID,
-			timestamp: time.Now(),
+			from: dropperID,
 		},
 	)
 	n.queueMu.Unlock()
