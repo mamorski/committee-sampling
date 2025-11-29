@@ -419,7 +419,9 @@ func (n *P2PNode) sendProposalsToUnsent(round int) {
 
 		msg := &pproto.GraphProposal{
 			MessageData: n.newMessageData(uuid.New().String(), false),
-			Round:       int32(round),
+			// round cannot be more than 2^31-1, disabling gosec for the linter to be happy
+			// nolint:gosec
+			Round: int32(round),
 		}
 
 		signature, err := n.signProtoMessage(msg)
@@ -476,10 +478,10 @@ func (n *P2PNode) graphBuilder() {
 	n.logger.Info("Selected neighbor target", zap.Int("target", n.selectedNeighborTarget), zap.Int("limit", limit))
 
 	for round := 0; round < n.buildingRounds; round++ {
-		roundStart, err := n.sync.WaitForRound(common.Network, round)
-		if err != nil {
-			n.logger.Error("Failed to wait for graph building round", zap.Int("round", round), zap.Error(err))
-			panic(err)
+		roundStart, waitErr := n.sync.WaitForRound(common.Network, round)
+		if waitErr != nil {
+			n.logger.Error("Failed to wait for graph building round", zap.Int("round", round), zap.Error(waitErr))
+			panic(waitErr)
 		}
 
 		<-roundStart

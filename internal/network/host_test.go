@@ -357,8 +357,10 @@ func (suite *HostTestSuite) TestRemainingCapacity() {
 
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Times(2)
 
-	suite.node.addNeighbor(peer.AddrInfo{ID: peer1, Addrs: []multiaddr.Multiaddr{addr1}})
-	suite.node.addNeighbor(peer.AddrInfo{ID: peer2, Addrs: []multiaddr.Multiaddr{addr2}})
+	err := suite.node.addNeighbor(peer.AddrInfo{ID: peer1, Addrs: []multiaddr.Multiaddr{addr1}})
+	suite.NoError(err)
+	err = suite.node.addNeighbor(peer.AddrInfo{ID: peer2, Addrs: []multiaddr.Multiaddr{addr2}})
+	suite.NoError(err)
 
 	suite.Equal(2, len(suite.node.neighbors), "Should have 2 total neighbors")
 	suite.Equal(1, suite.node.remainingOutboundCapacity(), "Should have 1 remaining capacity (3 - 2)")
@@ -372,7 +374,8 @@ func (suite *HostTestSuite) TestAddNeighborTracking() {
 
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
 
-	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	err := suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	suite.NoError(err)
 	suite.Equal(1, len(suite.node.neighbors), "Should track neighbor")
 }
 
@@ -383,7 +386,8 @@ func (suite *HostTestSuite) TestDropNeighborCleansUp() {
 
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
 
-	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	err := suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	suite.NoError(err)
 	suite.Equal(1, len(suite.node.neighbors))
 
 	suite.node.dropNeighbor(peerID)
@@ -458,7 +462,8 @@ func (suite *HostTestSuite) TestProcessDropQueue() {
 
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil).Once()
 
-	suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	err := suite.node.addNeighbor(peer.AddrInfo{ID: peerID, Addrs: []multiaddr.Multiaddr{addr}})
+	suite.NoError(err)
 	suite.Equal(1, len(suite.node.neighbors))
 
 	suite.node.queueMu.Lock()
