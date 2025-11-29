@@ -1,6 +1,54 @@
 # Committee Sampling Framework
 
-Committee Sampling is a full Go implementation of a setup-free committee election protocol that combines verifiable random functions, verifiable delay functions, and resource-bounded proofs. It forms short-lived committees out of a large population while keeping communication subquadratic and exposing rich observability and adversarial simulation hooks.
+A simulation platform for setup-free committee election protocols. This software implements the algorithms and protocols described in **Setup-Free Committee Sampling with Subquadratic Communication** (Asiacrypt 2025).
+
+## About the Paper
+
+📄 **[View on IACR CryptoDB](https://iacr.org/cryptodb/data/paper.php?pubkey=36134)**
+
+Large-scale cryptographic protocols face a fundamental challenge: communication complexity. Committee sampling addresses this by restricting communication to a small, randomly selected subset of participants, while gossip networks replace fully connected topologies with sparse graphs.
+
+Existing committee-sampling protocols either require a trusted setup (problematic in decentralized settings) or have high communication overhead. The paper by Cohen, Das, and Moran presents a setup-free protocol that achieves subquadratic communication complexity.
+
+Building on Andrychowicz and Dziembowski's work (CRYPTO'15), the protocol samples committees proportionally to resource expenditure. Key contributions include: (1) a formal framework for general resource proofs extending beyond proof-of-work, and (2) a more efficient committee-sampling protocol using VDFs and gossip techniques from Cohen, Loss, and Moran (FC'24).
+
+This implementation provides the key building blocks:
+
+- **Verifiable Random Functions (VRF)** for unpredictable sortition
+- **Verifiable Delay Functions (VDF)** for time-based fairness
+- **Resource-Bounded Proofs** for Sybil resistance
+- **Multi-Digraph Aggregation (MDAG)** for efficient message collection
+
+```bibtex
+@inproceedings{asiacrypt-2025-36134,
+  title={Setup-Free Committee Sampling with Subquadratic Communication},
+  publisher={Springer-Verlag},
+  author={Ran Cohen and Poulami Das and Tal Moran},
+  year=2025
+}
+```
+
+---
+
+## Architecture Overview
+
+The framework is organized into four layers:
+
+| Layer           | Components                                         | Purpose                                      |
+|-----------------|----------------------------------------------------|----------------------------------------------|
+| Application     | `cmd/committee-sampling`, `internal/boot`          | Entry point and protocol orchestration       |
+| Protocol        | `mdag`, `exante`, `expost`, `gce`, `resourcebound` | Committee election and timestamp protocols   |
+| Infrastructure  | `network`, `synchronizer`, `vrf`, `vdf`, `metrics` | P2P networking, time sync, cryptographic ops |
+| Configuration   | `pkg/config`                                       | Runtime parameter loading and validation     |
+
+Protocol execution follows these phases:
+
+1. **Discovery** — DHT-based peer discovery
+2. **Graph Building** — Multi-round neighbor selection with bounded degree
+3. **Initialization** — VRF key generation, resource proofs, VDF evaluation
+4. **Election** — Parallel Ex-Post/Ex-Ante verification with grade computation
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed breakdown of each module.
 
 ---
 
@@ -28,7 +76,7 @@ Shutdown is coordinated through OS signal handlers, a background error channel, 
 
 ## Configuration
 
-All runtime parameters live under the top-level keys described below. Examples can be found in `configs/dev.json` and `configs/sample_simulation_plan.json`.
+All runtime parameters live under the top-level keys described below. Examples can be found in `configs/dev.json`.
 
 ### `network`
 
@@ -123,33 +171,9 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 
 ---
 
-## Batch Simulations
-
-`scripts/run_simulations.py` orchestrates multi-node experiments. It starts a libp2p bootstrap server, spawns committee-sampling binaries, assigns generated configs, and optionally kills random nodes for liveness testing.
-
-```bash
-python scripts/run_simulations.py configs/sample_simulation_plan.json
-```
-
-Key CLI flags:
-
-| Flag                                                                   | Purpose                                                                            |
-|------------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| `--drop-on-send-percent`, `--drop-on-send-probability`                 | Default drop-on-send profile for nodes not overriding the value in the batch file. |
-| `--kill-random-up-to`, `--kill-random-delay-sec`, `--kill-probability` | Enable random process termination for failure injection.                           |
-
-Each run entry in the batch JSON can redefine the same fields. Run-specific config shards are written to `scripts/configs/`, logs to `scripts/logs/<run>/`. A tar archive is created after each run for post-mortem analysis.
-
-`configs/sample_simulation_plan.json` illustrates two runs:
-
-1. Baseline 1000-node network with no simulation.
-2. 3 % of nodes enabling drop-on-send at 1 % probability.
-
----
-
 ## Observability & Troubleshooting
 
-* **Logs** – zap outputs to stdout/stderr. For simulations, per-node logs live under `scripts/logs/<run>/node-*.log`.
+* **Logs** – zap outputs to stdout/stderr with structured JSON format.
 * **Metrics** – visit the HTTP endpoint or query the Pushgateway / Prometheus instance you configured.
 * **Neighbor Topology** – final neighbor lists are logged at the end of each run for quick sanity checks.
 * **Committee Output** – elected members are printed both to stdout and to the structured logs with grade details.
@@ -179,7 +203,6 @@ Each run entry in the batch JSON can redefine the same fields. Run-specific conf
 | `internal/metrics`                                    | Prometheus collector.                                   |
 | `pkg/config`                                          | Config loader.                                          |
 | `pkg/proto`                                           | Generated protobuf stubs.                               |
-| `scripts/`                                            | Automation, simulation runners, helper scripts.         |
 
 ---
 
