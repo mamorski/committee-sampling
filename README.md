@@ -85,7 +85,6 @@ All runtime parameters live under the top-level keys described below. Examples c
   "network": {
     "listen_port": 0,
     "max_outbound_degree": 4,
-    "degree_slack": 0,
     "discovery_config": {
       "protocol_id": "/committee-sampling/1.0.0",
       "interval": "5s",
@@ -101,7 +100,6 @@ All runtime parameters live under the top-level keys described below. Examples c
 ```
 
 * `drop_on_send` adds a coarse random lossy link simulation using crypto-grade randomness per recipient.
-* `degree_slack` lets a node accept a limited number of inbound connections beyond `max_outbound_degree`, reducing the chance of creating supernodes while keeping the overlay connected.
 
 ### `graph`, `committee`, `synchronization`
 
