@@ -76,7 +76,7 @@ Shutdown is coordinated through OS signal handlers, a background error channel, 
 
 ## Configuration
 
-All runtime parameters live under the top-level keys described below. Examples can be found in `configs/dev.json` and `configs/sample_simulation_plan.json`.
+All runtime parameters live under the top-level keys described below. Examples can be found in `configs/dev.json`.
 
 ### `network`
 
@@ -171,33 +171,9 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 
 ---
 
-## Batch Simulations
-
-`scripts/run_simulations.py` orchestrates multi-node experiments. It starts a libp2p bootstrap server, spawns committee-sampling binaries, assigns generated configs, and optionally kills random nodes for liveness testing.
-
-```bash
-python scripts/run_simulations.py configs/sample_simulation_plan.json
-```
-
-Key CLI flags:
-
-| Flag                                                                   | Purpose                                                                            |
-|------------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| `--drop-on-send-percent`, `--drop-on-send-probability`                 | Default drop-on-send profile for nodes not overriding the value in the batch file. |
-| `--kill-random-up-to`, `--kill-random-delay-sec`, `--kill-probability` | Enable random process termination for failure injection.                           |
-
-Each run entry in the batch JSON can redefine the same fields. Run-specific config shards are written to `scripts/configs/`, logs to `scripts/logs/<run>/`. A tar archive is created after each run for post-mortem analysis.
-
-`configs/sample_simulation_plan.json` illustrates two runs:
-
-1. Baseline 1000-node network with no simulation.
-2. 3 % of nodes enabling drop-on-send at 1 % probability.
-
----
-
 ## Observability & Troubleshooting
 
-* **Logs** – zap outputs to stdout/stderr. For simulations, per-node logs live under `scripts/logs/<run>/node-*.log`.
+* **Logs** – zap outputs to stdout/stderr with structured JSON format.
 * **Metrics** – visit the HTTP endpoint or query the Pushgateway / Prometheus instance you configured.
 * **Neighbor Topology** – final neighbor lists are logged at the end of each run for quick sanity checks.
 * **Committee Output** – elected members are printed both to stdout and to the structured logs with grade details.
@@ -227,7 +203,6 @@ Each run entry in the batch JSON can redefine the same fields. Run-specific conf
 | `internal/metrics`                                    | Prometheus collector.                                   |
 | `pkg/config`                                          | Config loader.                                          |
 | `pkg/proto`                                           | Generated protobuf stubs.                               |
-| `scripts/`                                            | Automation, simulation runners, helper scripts.         |
 
 ---
 
