@@ -12,11 +12,12 @@ type GradeFunc func(string, []byte, []byte, *pb.AuxKeyMessage, float64) int
 type Step string
 
 const (
-	Network      Step = "Network"
-	ExPostMDAG   Step = "ExPostMDAG"
-	ExAnteMDAG   Step = "ExAnteMDAG"
-	ExPostVerify Step = "ExPostVerify"
-	ExAnteVerify Step = "ExAnteVerify"
+	GraphDiscovery Step = "GraphDiscovery"
+	Network        Step = "Network"
+	ExPostMDAG     Step = "ExPostMDAG"
+	ExAnteMDAG     Step = "ExAnteMDAG"
+	ExPostVerify   Step = "ExPostVerify"
+	ExAnteVerify   Step = "ExAnteVerify"
 )
 
 // Synchronizer defines the interface for round synchronization across protocol modules

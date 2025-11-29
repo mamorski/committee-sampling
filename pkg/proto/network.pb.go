@@ -7,12 +7,11 @@
 package proto
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -115,27 +114,28 @@ func (x *MessageData) GetSign() []byte {
 	return nil
 }
 
-type NeighborMessage struct {
+type GraphProposal struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageData   *MessageData           `protobuf:"bytes,1,opt,name=messageData,proto3" json:"messageData,omitempty"`
+	Round         int32                  `protobuf:"varint,2,opt,name=round,proto3" json:"round,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NeighborMessage) Reset() {
-	*x = NeighborMessage{}
+func (x *GraphProposal) Reset() {
+	*x = GraphProposal{}
 	mi := &file_pkg_proto_network_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NeighborMessage) String() string {
+func (x *GraphProposal) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NeighborMessage) ProtoMessage() {}
+func (*GraphProposal) ProtoMessage() {}
 
-func (x *NeighborMessage) ProtoReflect() protoreflect.Message {
+func (x *GraphProposal) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_proto_network_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -147,40 +147,48 @@ func (x *NeighborMessage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NeighborMessage.ProtoReflect.Descriptor instead.
-func (*NeighborMessage) Descriptor() ([]byte, []int) {
+// Deprecated: Use GraphProposal.ProtoReflect.Descriptor instead.
+func (*GraphProposal) Descriptor() ([]byte, []int) {
 	return file_pkg_proto_network_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *NeighborMessage) GetMessageData() *MessageData {
+func (x *GraphProposal) GetMessageData() *MessageData {
 	if x != nil {
 		return x.MessageData
 	}
 	return nil
 }
 
-type NeighborMessageResponse struct {
+func (x *GraphProposal) GetRound() int32 {
+	if x != nil {
+		return x.Round
+	}
+	return 0
+}
+
+type GraphResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageData   *MessageData           `protobuf:"bytes,1,opt,name=messageData,proto3" json:"messageData,omitempty"`
-	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	Round         int32                  `protobuf:"varint,2,opt,name=round,proto3" json:"round,omitempty"`
+	Accepted      bool                   `protobuf:"varint,3,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NeighborMessageResponse) Reset() {
-	*x = NeighborMessageResponse{}
+func (x *GraphResponse) Reset() {
+	*x = GraphResponse{}
 	mi := &file_pkg_proto_network_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NeighborMessageResponse) String() string {
+func (x *GraphResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NeighborMessageResponse) ProtoMessage() {}
+func (*GraphResponse) ProtoMessage() {}
 
-func (x *NeighborMessageResponse) ProtoReflect() protoreflect.Message {
+func (x *GraphResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_proto_network_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -192,23 +200,74 @@ func (x *NeighborMessageResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NeighborMessageResponse.ProtoReflect.Descriptor instead.
-func (*NeighborMessageResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use GraphResponse.ProtoReflect.Descriptor instead.
+func (*GraphResponse) Descriptor() ([]byte, []int) {
 	return file_pkg_proto_network_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *NeighborMessageResponse) GetMessageData() *MessageData {
+func (x *GraphResponse) GetMessageData() *MessageData {
 	if x != nil {
 		return x.MessageData
 	}
 	return nil
 }
 
-func (x *NeighborMessageResponse) GetSuccess() bool {
+func (x *GraphResponse) GetRound() int32 {
 	if x != nil {
-		return x.Success
+		return x.Round
+	}
+	return 0
+}
+
+func (x *GraphResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
 	}
 	return false
+}
+
+type GraphDrop struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MessageData   *MessageData           `protobuf:"bytes,1,opt,name=messageData,proto3" json:"messageData,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GraphDrop) Reset() {
+	*x = GraphDrop{}
+	mi := &file_pkg_proto_network_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GraphDrop) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GraphDrop) ProtoMessage() {}
+
+func (x *GraphDrop) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_proto_network_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GraphDrop.ProtoReflect.Descriptor instead.
+func (*GraphDrop) Descriptor() ([]byte, []int) {
+	return file_pkg_proto_network_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GraphDrop) GetMessageData() *MessageData {
+	if x != nil {
+		return x.MessageData
+	}
+	return nil
 }
 
 type ProtocolMessage struct {
@@ -221,7 +280,7 @@ type ProtocolMessage struct {
 
 func (x *ProtocolMessage) Reset() {
 	*x = ProtocolMessage{}
-	mi := &file_pkg_proto_network_proto_msgTypes[3]
+	mi := &file_pkg_proto_network_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -233,7 +292,7 @@ func (x *ProtocolMessage) String() string {
 func (*ProtocolMessage) ProtoMessage() {}
 
 func (x *ProtocolMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_proto_network_proto_msgTypes[3]
+	mi := &file_pkg_proto_network_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -246,7 +305,7 @@ func (x *ProtocolMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolMessage.ProtoReflect.Descriptor instead.
 func (*ProtocolMessage) Descriptor() ([]byte, []int) {
-	return file_pkg_proto_network_proto_rawDescGZIP(), []int{3}
+	return file_pkg_proto_network_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ProtocolMessage) GetMessageData() *MessageData {
@@ -277,12 +336,16 @@ const file_pkg_proto_network_proto_rawDesc = "" +
 	"\n" +
 	"nodePubKey\x18\x06 \x01(\fR\n" +
 	"nodePubKey\x12\x12\n" +
-	"\x04sign\x18\a \x01(\fR\x04sign\"G\n" +
-	"\x0fNeighborMessage\x124\n" +
-	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\"i\n" +
-	"\x17NeighborMessageResponse\x124\n" +
-	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\x12\x18\n" +
-	"\asuccess\x18\x02 \x01(\bR\asuccess\"a\n" +
+	"\x04sign\x18\a \x01(\fR\x04sign\"[\n" +
+	"\rGraphProposal\x124\n" +
+	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\x12\x14\n" +
+	"\x05round\x18\x02 \x01(\x05R\x05round\"w\n" +
+	"\rGraphResponse\x124\n" +
+	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\x12\x14\n" +
+	"\x05round\x18\x02 \x01(\x05R\x05round\x12\x1a\n" +
+	"\baccepted\x18\x03 \x01(\bR\baccepted\"A\n" +
+	"\tGraphDrop\x124\n" +
+	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\"a\n" +
 	"\x0fProtocolMessage\x124\n" +
 	"\vmessageData\x18\x01 \x01(\v2\x12.proto.MessageDataR\vmessageData\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayloadB\x11Z\x0fcommittee/protob\x06proto3"
@@ -299,22 +362,24 @@ func file_pkg_proto_network_proto_rawDescGZIP() []byte {
 	return file_pkg_proto_network_proto_rawDescData
 }
 
-var file_pkg_proto_network_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_pkg_proto_network_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_pkg_proto_network_proto_goTypes = []any{
-	(*MessageData)(nil),             // 0: proto.MessageData
-	(*NeighborMessage)(nil),         // 1: proto.NeighborMessage
-	(*NeighborMessageResponse)(nil), // 2: proto.NeighborMessageResponse
-	(*ProtocolMessage)(nil),         // 3: proto.ProtocolMessage
+	(*MessageData)(nil),     // 0: proto.MessageData
+	(*GraphProposal)(nil),   // 1: proto.GraphProposal
+	(*GraphResponse)(nil),   // 2: proto.GraphResponse
+	(*GraphDrop)(nil),       // 3: proto.GraphDrop
+	(*ProtocolMessage)(nil), // 4: proto.ProtocolMessage
 }
 var file_pkg_proto_network_proto_depIdxs = []int32{
-	0, // 0: proto.NeighborMessage.messageData:type_name -> proto.MessageData
-	0, // 1: proto.NeighborMessageResponse.messageData:type_name -> proto.MessageData
-	0, // 2: proto.ProtocolMessage.messageData:type_name -> proto.MessageData
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	0, // 0: proto.GraphProposal.messageData:type_name -> proto.MessageData
+	0, // 1: proto.GraphResponse.messageData:type_name -> proto.MessageData
+	0, // 2: proto.GraphDrop.messageData:type_name -> proto.MessageData
+	0, // 3: proto.ProtocolMessage.messageData:type_name -> proto.MessageData
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_pkg_proto_network_proto_init() }
@@ -328,7 +393,7 @@ func file_pkg_proto_network_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_proto_network_proto_rawDesc), len(file_pkg_proto_network_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

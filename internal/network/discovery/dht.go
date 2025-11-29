@@ -26,44 +26,6 @@ type DHTDiscovery struct {
 	logger          *zap.Logger
 }
 
-func (d *DHTDiscovery) ClosestPeers(target peer.ID, peersNum int) []peer.ID {
-	if d.dht == nil {
-		return nil
-	}
-
-	peers, err := d.fetchClosestPeers(target.String())
-	if err != nil {
-		d.logger.Error("Failed to fetch closest peers", zap.String("target", target.String()), zap.Error(err))
-		return nil
-	}
-
-	// TODO: Implement a mechanism that will try to fetch more peers if the number of fetched peers is less than peersNum.
-	// For now, we just log a warning if we fetch fewer than 20 peers.
-	if len(peers) < 20 {
-		d.logger.Warn("Fetched fewer peers than expected", zap.Int("fetched", len(peers)), zap.Int("required", peersNum))
-		return peers
-	}
-
-	return peers
-}
-
-func (d *DHTDiscovery) fetchClosestPeers(target string) ([]peer.ID, error) {
-	if d.dht == nil {
-		return nil, nil
-	}
-	for i := 0; i < 3; i++ {
-		peers, err := d.dht.GetClosestPeers(d.ctx, target)
-		if err != nil {
-			d.logger.Warn("Error getting closest peers from DHT", zap.String("target", target), zap.Error(err))
-			continue
-		}
-
-		return peers, nil
-	}
-
-	return nil, errors.New("failed to get closest peers after multiple attempts")
-}
-
 func NewDHTDiscovery(h host.Host, config config.Discovery, logger *zap.Logger) *DHTDiscovery {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DHTDiscovery{
@@ -219,7 +181,7 @@ func (d *DHTDiscovery) discoverPeers(ctx context.Context, routingDiscovery *rout
 			return
 		case <-ticker.C:
 			d.logger.Debug("Searching for peers...")
-			peers, err := routingDiscovery.FindPeers(ctx, d.config.ProtocolID)
+			peers, err := routingDiscovery.FindPeers(ctx, d.config.ProtocolID, discovery.Limit(1000))
 			if err != nil {
 				d.logger.Error("Failed to find peers", zap.Error(err))
 				continue

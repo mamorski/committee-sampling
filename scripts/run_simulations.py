@@ -36,20 +36,6 @@ class Processes:
     node_procs: List[Popen]
 
 
-@dataclass(frozen=True)
-class AdversarySettings:
-    seed: Optional[int]
-    drop_probability: float
-    jitter_min: str
-    jitter_max: str
-    clock_skew: str
-    ex_ante_equivocator: bool
-    freshness_enabled: bool
-    freshness_mode: str
-    freshness_stale_rounds: int
-    freshness_truncate_leaf: bool
-
-
 def percent_to_count(total: int, percent: float) -> int:
     if percent <= 0 or total <= 0:
         return 0
@@ -60,28 +46,6 @@ def _ensure_duration(value: Optional[str]) -> str:
     if not value:
         return "0s"
     return str(value)
-
-
-def build_adversary_dict(enabled: bool, settings: AdversarySettings) -> Dict[str, object]:
-    config: Dict[str, object] = {
-        "enabled": bool(enabled),
-        "drop_probability": settings.drop_probability,
-        "jitter_min": _ensure_duration(settings.jitter_min),
-        "jitter_max": _ensure_duration(settings.jitter_max),
-        "clock_skew": _ensure_duration(settings.clock_skew),
-        "ex_ante": {"equivocator": settings.ex_ante_equivocator},
-        "ex_post": {
-            "freshness_cheater": {
-                "enabled": settings.freshness_enabled,
-                "mode": settings.freshness_mode,
-                "stale_rounds": settings.freshness_stale_rounds,
-                "truncate_leaf": settings.freshness_truncate_leaf,
-            }
-        },
-    }
-    if settings.seed is not None:
-        config["seed"] = int(settings.seed)
-    return config
 
 
 def kill_random_node(
@@ -117,9 +81,6 @@ def validate_args(
         log_level: str,
         drop_on_send_percent: float,
         drop_on_send_probability: float,
-        adversary_percent: float,
-        adversary_settings: AdversarySettings,
-        degree_slack: int,
 ) -> None:
     if num_nodes < 2:
         sys.exit("Error: Number of nodes must be a positive integer >= 2")
@@ -133,16 +94,6 @@ def validate_args(
         sys.exit("Error: drop-on-send percent must be within [0, 100]")
     if not 0.0 <= drop_on_send_probability <= 1.0:
         sys.exit("Error: drop-on-send probability must be within [0.0, 1.0]")
-    if not 0 <= adversary_percent <= 100:
-        sys.exit("Error: adversary percent must be within [0, 100]")
-    if not 0.0 <= adversary_settings.drop_probability <= 1.0:
-        sys.exit("Error: adversary drop_probability must be within [0.0, 1.0]")
-    if adversary_settings.freshness_mode.lower() not in {"stale", "truncate", "both"}:
-        sys.exit("Error: adversary freshness mode must be one of: stale, truncate, both")
-    if adversary_settings.freshness_stale_rounds < 1:
-        sys.exit("Error: adversary freshness stale_rounds must be >= 1")
-    if degree_slack < 0:
-        sys.exit("Error: degree slack must be >= 0")
 
 
 def ensure_files(paths: Paths) -> None:
@@ -180,42 +131,28 @@ def write_committee_config(
         session_id: str,
         max_outbound_degree: int,
         diameter: int,
+        graph_building_rounds: int,
         num_nodes: int,
         bootstrap_address: str,
         log_level: str,
         verify_timeout: str,
+        graph_discovery_timeout: str,
+        graph_building_round_timeout: str,
         config_file_path: Optional[Path] = None,
         metrics_enabled: bool = False,
         pushgateway_enabled: bool = False,
         drop_on_send_enabled: bool = False,
         drop_on_send_probability: float = 0.0,
         committee_size: int = 30,
-        adversary_enabled: bool = False,
-        adversary_settings: Optional[AdversarySettings] = None,
-        degree_slack: int = 0,
 ) -> Path:
     config_file = config_file_path or (
             paths.configs_dir / "committee-sampling-conf.json"
-    )
-
-    settings = adversary_settings or AdversarySettings(
-        seed=None,
-        drop_probability=0.0,
-        jitter_min="0s",
-        jitter_max="0s",
-        clock_skew="0s",
-        ex_ante_equivocator=False,
-        freshness_enabled=False,
-        freshness_mode="stale",
-        freshness_stale_rounds=1,
-        freshness_truncate_leaf=False,
     )
 
     config = {
         "network": {
             "listen_port": 0,
             "max_outbound_degree": max_outbound_degree,
-            "degree_slack": degree_slack,
             "discovery_config": {
                 "protocol_id": "/committee-sampling/1.0.0",
                 "interval": "5s",
@@ -223,9 +160,12 @@ def write_committee_config(
             },
             "drop_on_send": drop_on_send_enabled,
             "drop_on_send_probability": drop_on_send_probability,
-            "adversary": build_adversary_dict(adversary_enabled, settings),
         },
-        "graph": {"diameter": diameter, "grading_levels": 5},
+        "graph": {
+            "diameter": diameter,
+            "grading_levels": 5,
+            "building_rounds": graph_building_rounds,
+        },
         "committee": {
             "session_id": session_id,
             "lambda": 256,
@@ -241,7 +181,8 @@ def write_committee_config(
             "ex_post_round_timeout": verify_timeout,
             "mdag_round_timeout": "10s",
             "start_time": int(time.time()) + 60,
-            "building_graph_timeout": "2m",
+            "graph_discovery_timeout": _ensure_duration(graph_discovery_timeout),
+            "graph_building_round_timeout": _ensure_duration(graph_building_round_timeout),
             "time_server": "time.google.com",
         },
         "logger": {"level": log_level},
@@ -379,14 +320,14 @@ def run_one_simulation(
         run_label: str,
         drop_on_send_percent: float,
         drop_on_send_probability: float,
-        adversary_percent: float,
-        adversary_settings: AdversarySettings,
-        degree_slack: int,
         kill_random_up_to: int,
         kill_random_delay_sec: int,
         kill_probability: float,
         verify_timeout: str = "30s",
         committee_size: int = 30,
+        graph_building_rounds: int = 3,
+        graph_discovery_timeout: str = "30s",
+        graph_building_round_timeout: str = "2m",
 ) -> None:
     validate_args(
         num_nodes,
@@ -395,9 +336,6 @@ def run_one_simulation(
         log_level,
         drop_on_send_percent,
         drop_on_send_probability,
-        adversary_percent,
-        adversary_settings,
-        degree_slack,
     )
 
     # Create per-run paths (logs in a dedicated folder; bootstrap log inside logs folder)
@@ -441,11 +379,7 @@ def run_one_simulation(
     )
 
     drop_count = percent_to_count(num_nodes, drop_on_send_percent)
-    adversary_count = percent_to_count(num_nodes, adversary_percent)
-    both_count = min(drop_count, adversary_count)
-    drop_only_count = drop_count - both_count
-    adversary_only_count = adversary_count - both_count
-    base_count = num_nodes - (both_count + drop_only_count + adversary_only_count)
+    base_count = num_nodes - drop_count
     if base_count < 0:
         sys.exit("Error: configuration assigns more specialised nodes than available")
 
@@ -464,24 +398,11 @@ def run_one_simulation(
     print(f"- Number of nodes: {num_nodes}")
     print(f"- Max outbound degree: {max_outbound_degree}")
     print(f"- Diameter: {diameter}")
+    print(f"- Graph building rounds: {graph_building_rounds}")
+    print(f"- Graph discovery timeout: {graph_discovery_timeout}")
+    print(f"- Graph building round timeout: {graph_building_round_timeout}")
     print(f"- Log level: {log_level_status}")
     print(f"- Drop-on-send nodes: {drop_count} ({drop_on_send_percent:.2f}%)")
-    print(f"- Adversary-enabled nodes: {adversary_count} ({adversary_percent:.2f}%)")
-    if adversary_count > 0:
-        print("Adversary parameters:")
-        print(f"  - Seed: {adversary_settings.seed if adversary_settings.seed is not None else 'derived'}")
-        print(
-            f"  - Network drop probability: {adversary_settings.drop_probability}")
-        print(
-            f"  - Network jitter: {adversary_settings.jitter_min} - {adversary_settings.jitter_max}")
-        print(f"  - Clock skew: {adversary_settings.clock_skew}")
-        print(
-            f"  - Ex-Ante equivocator: {adversary_settings.ex_ante_equivocator}")
-        freshness_status = "enabled" if adversary_settings.freshness_enabled else "disabled"
-        print(
-            f"  - Freshness cheater: {freshness_status} ({adversary_settings.freshness_mode})")
-    if degree_slack > 0:
-        print(f"- Degree slack: {degree_slack}")
     print("")
 
     # Start bootstrap server
@@ -495,25 +416,23 @@ def run_one_simulation(
     print("")
     print("Starting nodes...")
 
-    config_cache: Dict[Tuple[bool, bool], Path] = {}
-    suffix_map: Dict[Tuple[bool, bool], str] = {
-        (False, False): "base",
-        (True, False): "drop",
-        (False, True): "adv",
-        (True, True): "drop-adv",
+    config_cache: Dict[bool, Path] = {}
+    suffix_map: Dict[bool, str] = {
+        False: "base",
+        True: "drop",
     }
 
-    def ensure_config(drop_enabled: bool, adversary_enabled: bool) -> Path:
-        key = (drop_enabled, adversary_enabled)
-        if key in config_cache:
-            return config_cache[key]
-        suffix = suffix_map[key]
+    def ensure_config(drop_enabled: bool) -> Path:
+        if drop_enabled in config_cache:
+            return config_cache[drop_enabled]
+        suffix = suffix_map[drop_enabled]
         conf_path = paths.configs_dir / f"committee-sampling-conf-{run_label}-{suffix}.json"
         write_committee_config(
             paths,
             session_id=session_id,
             max_outbound_degree=max_outbound_degree,
             diameter=diameter,
+            graph_building_rounds=graph_building_rounds,
             num_nodes=num_nodes,
             bootstrap_address=bootstrap_address,
             log_level=log_level,
@@ -523,26 +442,19 @@ def run_one_simulation(
             drop_on_send_enabled=drop_enabled,
             drop_on_send_probability=drop_on_send_probability if drop_enabled else 0.0,
             verify_timeout=verify_timeout,
+            graph_discovery_timeout=graph_discovery_timeout,
+            graph_building_round_timeout=graph_building_round_timeout,
             committee_size=committee_size,
-            adversary_enabled=adversary_enabled,
-            adversary_settings=adversary_settings,
-            degree_slack=degree_slack,
         )
-        config_cache[key] = conf_path
+        config_cache[drop_enabled] = conf_path
         return conf_path
 
     config_sequence: List[Path] = []
-    if both_count > 0:
-        cfg = ensure_config(True, True)
-        config_sequence.extend([cfg] * both_count)
-    if drop_only_count > 0:
-        cfg = ensure_config(True, False)
-        config_sequence.extend([cfg] * drop_only_count)
-    if adversary_only_count > 0:
-        cfg = ensure_config(False, True)
-        config_sequence.extend([cfg] * adversary_only_count)
+    if drop_count > 0:
+        cfg = ensure_config(True)
+        config_sequence.extend([cfg] * drop_count)
     if base_count > 0:
-        cfg = ensure_config(False, False)
+        cfg = ensure_config(False)
         config_sequence.extend([cfg] * base_count)
 
     if len(config_sequence) != num_nodes:
@@ -565,15 +477,6 @@ def run_one_simulation(
     print("- Ports: Auto-assigned by system (port 0 configured)")
     print(f"- Session ID: {session_id}")
     print(f"- Drop-on-send nodes: {drop_count} ({drop_on_send_percent:.2f}%)")
-    print(f"- Adversary-enabled nodes: {adversary_count} ({adversary_percent:.2f}%)")
-    if both_count > 0:
-        print(f"  - Nodes with both enabled: {both_count}")
-    if drop_only_count > 0:
-        print(f"  - Drop-only nodes: {drop_only_count}")
-    if adversary_only_count > 0:
-        print(f"  - Adversary-only nodes: {adversary_only_count}")
-    if degree_slack > 0:
-        print(f"- Degree slack: {degree_slack}")
     print("- Discovery: DHT with bootstrap server")
     print(f"- Log files: {paths.logs_dir}/node-*.log")
     print(f"- Bootstrap log: {paths.bootstrap_log}")
@@ -623,73 +526,6 @@ def run_one_simulation(
     cleanup(paths, procs, session_id)
 
 
-def resolve_adversary_options(args: argparse.Namespace, run_config: Dict[str, object]) -> Tuple[float, AdversarySettings]:
-    adversary_cfg = run_config.get("adversary", {}) if run_config else {}
-    if not isinstance(adversary_cfg, dict):
-        adversary_cfg = {}
-
-    percent = float(run_config.get("adversary_percent", args.adversary_percent))
-    enabled_flag = adversary_cfg.get("enabled", args.adversary_enabled)
-
-    # If enabled explicitly but percent not provided, default to all nodes.
-    if enabled_flag and percent <= 0:
-        percent = 100.0
-    # If percent provided but enabled flag omitted/false, treat as enabled.
-    if percent > 0 and not enabled_flag:
-        enabled_flag = True
-
-    seed_value = adversary_cfg.get("seed", args.adversary_seed)
-    seed = int(seed_value) if seed_value is not None else None
-
-    drop_probability = float(
-        adversary_cfg.get("drop_probability", args.adversary_drop_probability)
-    )
-    jitter_min = str(adversary_cfg.get("jitter_min", args.adversary_jitter_min or "0s"))
-    jitter_max = str(adversary_cfg.get("jitter_max", args.adversary_jitter_max or "0s"))
-    clock_skew = str(adversary_cfg.get("clock_skew", args.adversary_clock_skew or "0s"))
-
-    ex_ante_cfg = adversary_cfg.get("ex_ante", {})
-    if not isinstance(ex_ante_cfg, dict):
-        ex_ante_cfg = {}
-    ex_ante_equivocator = bool(
-        ex_ante_cfg.get("equivocator", args.adversary_ex_ante_equivocator)
-    )
-
-    ex_post_cfg = adversary_cfg.get("ex_post", {})
-    if not isinstance(ex_post_cfg, dict):
-        ex_post_cfg = {}
-    freshness_cfg = ex_post_cfg.get("freshness_cheater", adversary_cfg.get("freshness_cheater", {}))
-    if not isinstance(freshness_cfg, dict):
-        freshness_cfg = {}
-    freshness_enabled = bool(
-        freshness_cfg.get("enabled", args.adversary_ex_post_freshness_enabled)
-    )
-    freshness_mode = str(
-        freshness_cfg.get("mode", args.adversary_ex_post_freshness_mode)
-    ).lower()
-    freshness_stale_rounds = int(
-        freshness_cfg.get("stale_rounds", args.adversary_ex_post_freshness_stale_rounds)
-    )
-    freshness_truncate_leaf = bool(
-        freshness_cfg.get("truncate_leaf", args.adversary_ex_post_freshness_truncate)
-    )
-
-    settings = AdversarySettings(
-        seed=seed,
-        drop_probability=drop_probability,
-        jitter_min=jitter_min,
-        jitter_max=jitter_max,
-        clock_skew=clock_skew,
-        ex_ante_equivocator=ex_ante_equivocator,
-        freshness_enabled=freshness_enabled,
-        freshness_mode=freshness_mode,
-        freshness_stale_rounds=freshness_stale_rounds,
-        freshness_truncate_leaf=freshness_truncate_leaf,
-    )
-
-    return percent if enabled_flag else 0.0, settings
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run committee-sampling simulations from a JSON config file"
@@ -720,88 +556,23 @@ def main() -> None:
         help="Probability [0-1] used when drop-on-send is enabled for a node (default: 0.1)",
     )
     parser.add_argument(
-        "--adversary-percent",
-        dest="adversary_percent",
-        type=float,
-        default=0.0,
-        help="Percentage [0-100] of nodes per run that enable adversary behaviors (default: 0)",
+        "--graph-discovery-timeout",
+        dest="graph_discovery_timeout",
+        default="30s",
+        help="Duration to continue graph discovery before starting building rounds (default: 30s)",
     )
     parser.add_argument(
-        "--adversary-enabled",
-        dest="adversary_enabled",
-        action="store_true",
-        help="Enable adversary behaviors for all nodes when not overridden by the batch config",
+        "--graph-building-round-timeout",
+        dest="graph_building_round_timeout",
+        default="2m",
+        help="Duration allocated per graph building round (default: 2m)",
     )
     parser.add_argument(
-        "--adversary-seed",
-        dest="adversary_seed",
+        "--graph-building-rounds",
+        dest="graph_building_rounds",
         type=int,
-        default=None,
-        help="Seed for deterministic adversary simulations (default: None)",
-    )
-    parser.add_argument(
-        "--adversary-drop-probability",
-        dest="adversary_drop_probability",
-        type=float,
-        default=0.0,
-        help="Drop probability [0-1] for adversarial network unreliability behavior (default: 0)",
-    )
-    parser.add_argument(
-        "--adversary-jitter-min",
-        dest="adversary_jitter_min",
-        default="0s",
-        help="Minimum adversarial jitter duration (default: 0s)",
-    )
-    parser.add_argument(
-        "--adversary-jitter-max",
-        dest="adversary_jitter_max",
-        default="0s",
-        help="Maximum adversarial jitter duration (default: 0s)",
-    )
-    parser.add_argument(
-        "--adversary-clock-skew",
-        dest="adversary_clock_skew",
-        default="0s",
-        help="Clock skew applied by adversary behaviors (default: 0s)",
-    )
-    parser.add_argument(
-        "--adversary-ex-ante-equivocator",
-        dest="adversary_ex_ante_equivocator",
-        action="store_true",
-        help="Enable the Ex-Ante equivocator adversary behavior",
-    )
-    parser.add_argument(
-        "--adversary-ex-post-freshness-enabled",
-        dest="adversary_ex_post_freshness_enabled",
-        action="store_true",
-        help="Enable the Ex-Post freshness cheater behavior",
-    )
-    parser.add_argument(
-        "--adversary-ex-post-freshness-mode",
-        dest="adversary_ex_post_freshness_mode",
-        default="stale",
-        choices=["stale", "truncate", "both"],
-        help="Mode for the Ex-Post freshness cheater (default: stale)",
-    )
-    parser.add_argument(
-        "--adversary-ex-post-freshness-stale-rounds",
-        dest="adversary_ex_post_freshness_stale_rounds",
-        type=int,
-        default=1,
-        help="Number of rounds to look back when replaying stale Ex-Post values (default: 1)",
-    )
-    parser.add_argument(
-        "--adversary-ex-post-freshness-truncate",
-        dest="adversary_ex_post_freshness_truncate",
-        action="store_true",
-        help="Truncate the last Merkle leaf in the freshness cheater behavior",
-    )
-    parser.add_argument(
-        "--degree-slack",
-        dest="degree_slack",
-        type=int,
-        default=0,
-        help="Additional inbound degree slack beyond max_outbound_degree (default: 0)",
+        default=4,
+        help="Number of graph building rounds to execute (must be even, default: 4)",
     )
     parser.add_argument(
         "--kill-random-up-to",
@@ -868,8 +639,6 @@ def main() -> None:
         drop_on_send_probability = float(
             run.get("drop_on_send_probability", args.drop_on_send_probability)
         )
-        adversary_percent, adversary_settings = resolve_adversary_options(args, run)
-        degree_slack = int(run.get("degree_slack", args.degree_slack))
         kill_random_up_to = int(run.get("kill_random_up_to", args.kill_random_up_to))
         kill_random_delay_sec = int(
             run.get("kill_random_delay_sec", args.kill_random_delay_sec)
@@ -877,6 +646,25 @@ def main() -> None:
         kill_probability = float(run.get("kill_probability", args.kill_probability))
         verify_timeout = str(run.get("verify_timeout", "30s"))
         committee_size = int(run.get("committee_size", 30))
+        graph_discovery_timeout = run.get("graph_discovery_timeout")
+        if not graph_discovery_timeout:
+            graph_discovery_timeout = args.graph_discovery_timeout
+        graph_discovery_timeout = str(graph_discovery_timeout)
+
+        graph_building_round_timeout = run.get("graph_building_round_timeout")
+        if not graph_building_round_timeout:
+            graph_building_round_timeout = run.get("building_graph_timeout")
+        if not graph_building_round_timeout:
+            graph_building_round_timeout = args.graph_building_round_timeout
+        graph_building_round_timeout = str(graph_building_round_timeout)
+
+        graph_building_rounds = run.get("graph_building_rounds")
+        if graph_building_rounds is None:
+            graph_building_rounds = run.get("building_rounds")
+        if graph_building_rounds is None:
+            graph_building_rounds = args.graph_building_rounds
+        graph_building_rounds = int(graph_building_rounds)
+
         if num_nodes is None or max_deg is None or diameter is None:
             sys.exit(
                 f"Error: run #{idx} must include 'number_of_nodes' (or 'num_nodes'), 'max_outbound_degree' (or 'max_degree'), and 'diameter'"
@@ -892,14 +680,14 @@ def main() -> None:
             run_label=run_label,
             drop_on_send_percent=drop_on_send_percent,
             drop_on_send_probability=drop_on_send_probability,
-            adversary_percent=adversary_percent,
-            adversary_settings=adversary_settings,
-            degree_slack=degree_slack,
             kill_random_up_to=kill_random_up_to,
             kill_random_delay_sec=kill_random_delay_sec,
             kill_probability=kill_probability,
             verify_timeout=verify_timeout,
             committee_size=committee_size,
+            graph_building_rounds=graph_building_rounds,
+            graph_discovery_timeout=graph_discovery_timeout,
+            graph_building_round_timeout=graph_building_round_timeout,
         )
 
         if idx < len(runs) and sleep_between > 0:

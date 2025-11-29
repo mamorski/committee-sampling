@@ -427,6 +427,8 @@ func (e *ExPost) validateMerklePath(merklePath []*pb.State, round int) bool {
 	for i := 1; i < round; i++ {
 		// Hash the previous layer (i-1) and check if it's in the current layer (i)
 		prevLayerHash := e.mdag.Oracle(merklePath[i-1].Row...)
+		// The length is checked earlier, so we can directly access merklePath[i]
+		// nolint:gosec
 		if !isValueInState(prevLayerHash, merklePath[i].Row) {
 			e.logger.Warn("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
 			return false

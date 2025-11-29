@@ -82,7 +82,7 @@ func (suite *InternalsTestSuite) TestSignData() {
 }
 
 func (suite *InternalsTestSuite) TestSignProtoMessage() {
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			ClientVersion: clientVersion,
 			NodeId:        suite.testPeerID.String(),
@@ -106,7 +106,7 @@ func (suite *InternalsTestSuite) TestSignProtoMessage() {
 
 func (suite *InternalsTestSuite) TestSignProtoMessageMarshalError() {
 	// Create a message that will fail to marshal
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: nil, // This should cause marshal to succeed but with empty data
 	}
 
@@ -134,7 +134,7 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageSuccess() {
 		Gossip:        false,
 	}
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: messageData,
 	}
 
@@ -162,7 +162,7 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageInvalidSignature() {
 		Sign:          []byte("invalid-signature"),
 	}
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: messageData,
 	}
 
@@ -182,7 +182,7 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageInvalidNodeID() {
 		Gossip:        false,
 	}
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: messageData,
 	}
 
@@ -208,7 +208,7 @@ func (suite *InternalsTestSuite) TestAuthenticateMessagePeerIDMismatch() {
 		Gossip:        false,
 	}
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: messageData,
 	}
 
@@ -237,7 +237,7 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageMarshalError() {
 		Sign:          []byte("some-signature"),
 	}
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: messageData,
 	}
 
@@ -345,7 +345,7 @@ func (suite *InternalsTestSuite) TestSendProtoMessagePeerNotFound() {
 	otherPeerID, err := peer.IDFromPublicKey(otherPub)
 	suite.Require().NoError(err)
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -369,7 +369,7 @@ func (suite *InternalsTestSuite) TestSendProtoMessageSuccess() {
 	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
 	mockStream.On("Close").Return(nil).Once()
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -389,7 +389,7 @@ func (suite *InternalsTestSuite) TestSendSuccess() {
 	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
 	mockStream.On("Close").Return(nil).Once()
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -414,7 +414,7 @@ func (suite *InternalsTestSuite) TestSendConnectionFailure() {
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(errors.New("connection failed")).Once()
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -438,7 +438,7 @@ func (suite *InternalsTestSuite) TestSendStreamCreationFailure() {
 	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(nil)
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("stream creation failed"))
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -465,7 +465,7 @@ func (suite *InternalsTestSuite) TestSendMarshalFailure() {
 	mockStream.On("Write", mock.Anything).Return(100, nil)
 	mockStream.On("Close").Return(nil)
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},
@@ -494,7 +494,7 @@ func (suite *InternalsTestSuite) TestSendWriteFailure() {
 	mockStream.On("Reset").Return(nil).Once()
 	mockStream.On("Close").Return(nil).Once()
 
-	testMessage := &pproto.NeighborMessage{
+	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
 			Id: uuid.New().String(),
 		},

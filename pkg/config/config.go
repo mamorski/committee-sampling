@@ -68,35 +68,8 @@ type Network struct {
 	// default: 3)
 
 	// Simulation-only options
-	DropOnSend            bool      `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
-	DropOnSendProbability float64   `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
-	Adversary             Adversary `mapstructure:"adversary"`                // Advanced adversarial simulation toggles
-}
-
-type Adversary struct {
-	Enabled         bool            `mapstructure:"enabled"`
-	Seed            int64           `mapstructure:"seed"`
-	DropProbability float64         `mapstructure:"drop_probability"`
-	JitterMin       time.Duration   `mapstructure:"jitter_min"`
-	JitterMax       time.Duration   `mapstructure:"jitter_max"`
-	ClockSkew       time.Duration   `mapstructure:"clock_skew"`
-	ExAnte          ExAnteAdversary `mapstructure:"ex_ante"`
-	ExPost          ExPostAdversary `mapstructure:"ex_post"`
-}
-
-type ExAnteAdversary struct {
-	Equivocator bool `mapstructure:"equivocator"`
-}
-
-type ExPostAdversary struct {
-	FreshnessCheater FreshnessCheaterConfig `mapstructure:"freshness_cheater"`
-}
-
-type FreshnessCheaterConfig struct {
-	Enabled      bool   `mapstructure:"enabled"`
-	Mode         string `mapstructure:"mode"`
-	StaleRounds  int    `mapstructure:"stale_rounds"`
-	TruncateLeaf bool   `mapstructure:"truncate_leaf"`
+	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
+	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
 }
 
 type Discovery struct {
@@ -106,8 +79,9 @@ type Discovery struct {
 }
 
 type Graph struct {
-	Diameter      int `mapstructure:"diameter"`       // Degree bound if the graph
-	GradingLevels int `mapstructure:"grading_levels"` // Grading levels for the graph
+	Diameter       int `mapstructure:"diameter"`        // Degree bound if the graph
+	GradingLevels  int `mapstructure:"grading_levels"`  // Grading levels for the graph
+	BuildingRounds int `mapstructure:"building_rounds"` // Number of rounds for graph building
 }
 
 type Committee struct {
@@ -121,13 +95,14 @@ type Committee struct {
 }
 
 type Synchronization struct {
-	Type                 SyncType      `mapstructure:"type"`                   // Type of synchronization (TimeSync only)
-	ExAnteRoundTimeout   time.Duration `mapstructure:"ex_ante_round_timeout"`  // Timeout for ExAnte rounds in milliseconds
-	ExPostRoundTimeout   time.Duration `mapstructure:"ex_post_round_timeout"`  // Timeout for ExPost rounds in milliseconds
-	MDAGRoundTimeout     time.Duration `mapstructure:"mdag_round_timeout"`     // Timeout for MDAG rounds in milliseconds
-	BuildingGraphTimeout time.Duration `mapstructure:"building_graph_timeout"` // Timeout for building the network graph
-	StartTime            int64         `mapstructure:"start_time"`             // Start time as Unix timestamp UTC
-	TimeServer           string        `mapstructure:"time_server"`            // NTP server for time synchronization
+	Type                      SyncType      `mapstructure:"type"`                         // Type of synchronization (TimeSync only)
+	ExAnteRoundTimeout        time.Duration `mapstructure:"ex_ante_round_timeout"`        // Timeout for ExAnte rounds in milliseconds
+	ExPostRoundTimeout        time.Duration `mapstructure:"ex_post_round_timeout"`        // Timeout for ExPost rounds in milliseconds
+	MDAGRoundTimeout          time.Duration `mapstructure:"mdag_round_timeout"`           // Timeout for MDAG rounds in milliseconds
+	GraphDiscoveryTimeout     time.Duration `mapstructure:"graph_discovery_timeout"`      // Timeout for discovering peers via DHT
+	GraphBuildingRoundTimeout time.Duration `mapstructure:"graph_building_round_timeout"` // Timeout per graph building round
+	StartTime                 int64         `mapstructure:"start_time"`                   // Start time as Unix timestamp UTC
+	TimeServer                string        `mapstructure:"time_server"`                  // NTP server for time synchronization
 }
 
 func Load(configPath string) (*Config, error) {
@@ -167,6 +142,10 @@ func Load(configPath string) (*Config, error) {
 
 	if err := decoder.Decode(viper.AllSettings()); err != nil {
 		panic(fmt.Sprintf("Error unmarshalling config: %s", err))
+	}
+
+	if cfg.Graph.BuildingRounds%2 != 0 {
+		cfg.Graph.BuildingRounds++
 	}
 
 	return cfg, nil
