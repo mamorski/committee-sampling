@@ -159,11 +159,11 @@ Implements Kademlia DHT-based peer discovery:
 - Continuous peer discovery stream
 - Graceful degradation on bootstrap failure
 
-### 3.3 MDAG (Multi-Digraph Aggregation) Module
+### 3.3 MDAG (Merkle Directed Acyclic Graph) Module
 
 **Location**: `internal/mdag/mdag.go`
 
-**Purpose**: Implements the foundational message aggregation protocol used by both Ex-Ante and Ex-Post timestamp protocols.
+**Purpose**: Implements the Merkle DAG construction used by both Ex-Ante and Ex-Post timestamp protocols for distributed timestamp generation.
 
 **Algorithm**:
 
