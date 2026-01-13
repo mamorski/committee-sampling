@@ -30,7 +30,7 @@
 
 **Initialization Sequence:**
 
-"""
+```
 1. Parse command-line flags (-config)
 2. Load configuration via config.Load()
 3. Create zap logger with production config
@@ -42,7 +42,7 @@
 9. Execute bootstrap.Run() in goroutine
 10. Block on completion or signal
 11. Graceful shutdown sequence
-"""
+```
 
 **Logger Configuration:**
 
@@ -64,7 +64,8 @@
 
 **Struct Definition:**
 
-"""go
+```
+go
 type Bootstrap struct {
     id         string              // Node identifier (peer ID)
     MDagExAnte exante.MDAG         // MDAG for Ex-Ante protocol
@@ -81,11 +82,11 @@ type Bootstrap struct {
     Logger     *zap.Logger
     Context    context.Context
 }
-"""
+```
 
 **Filter Function Specification:**
 
-"""
+```
 Input:
   - sid: string (session identifier)
   - id: string (sender node ID)
@@ -103,11 +104,11 @@ Algorithm:
   5. If !vdfResult: return false
   6. vrfResult ← VRF.Verify(vrfInput, auxKey.PhiVrf, auxKey.PiVrf, vk)
   7. Return vrfResult
-"""
+```
 
 **Grade Function Specification:**
 
-"""
+```
 Input:
   - sid: string
   - vk: []byte
@@ -127,7 +128,7 @@ Algorithm:
   7. term ← sub / ΔW
   8. g ← (d + 1) - term
   9. Return min(d+1, floor(g))
-"""
+```
 
 ---
 
@@ -146,7 +147,7 @@ Algorithm:
 
 **P2PNode Struct:**
 
-"""go
+```go
 type P2PNode struct {
     host                        Host
     ctx                         context.Context
@@ -172,11 +173,11 @@ type P2PNode struct {
     selectedNeighborTarget      int
     sentProposalsTo             map[peer.ID]bool
 }
-"""
+```
 
 **Graph Building Algorithm:**
 
-"""
+```
 Phase 1: Discovery
   1. Start DHT-based peer discovery
   2. Collect discovered peers into potentialNeighbors map
@@ -208,11 +209,11 @@ Phase 3: Finalization
   2. Process remaining drop queue
   3. Clear queues
   4. Freeze neighbor set
-"""
+```
 
 **Target Degree Selection:**
 
-"""
+```
 Input: limit (maxOutbound)
 Output: target ∈ [2×limit, 3×limit]
 
@@ -222,7 +223,7 @@ Algorithm:
   3. range ← maximum - minimum + 1
   4. n ← crypto/rand.Int(range)
   5. Return minimum + n
-"""
+```
 
 ---
 
@@ -232,7 +233,7 @@ Algorithm:
 
 **Struct Definition:**
 
-"""go
+```go
 type MDAG struct {
     rounds         int                 // R = d × D
     oracle         HashOracle          // H: {0,1}* → {0,1}^256
@@ -251,11 +252,11 @@ type MDAG struct {
     totalMessages  []int               // Per-round total count
     isRunning      bool
 }
-"""
+```
 
 **Generate Algorithm:**
 
-"""
+```
 Input:
   - sid: session ID
   - vki: verification key
@@ -282,11 +283,11 @@ Algorithm:
     14. If r < R: Broadcast(r, L_r)
   
   15. Return state
-"""
+```
 
 **Message Handler:**
 
-"""
+```
 Input: from (peer.ID), payload ([]byte)
 Output: error
 
@@ -300,7 +301,7 @@ Validation:
 Action:
   6. Append label to messages[round]
   7. Increment metrics
-"""
+```
 
 ---
 
@@ -310,18 +311,18 @@ Action:
 
 **Object Pools:**
 
-"""go
+```go
 var (
     timestampMessagePool = sync.Pool{New: func() interface{} { return &pb.TimestampMessage{} }}
     auxPool              = sync.Pool{New: func() interface{} { return &pb.Aux{} }}
     auxKeyMessagePool    = sync.Pool{New: func() interface{} { return &pb.AuxKeyMessage{} }}
     statePool            = sync.Pool{New: func() interface{} { return &pb.State{} }}
 )
-"""
+```
 
 **Struct Definition:**
 
-"""go
+```go
 type ExPost struct {
     network      network.Network
     logger       *zap.Logger
@@ -344,11 +345,11 @@ type ExPost struct {
     R            int     // d × D
     isRunning    bool
 }
-"""
+```
 
 **Generate Phase:**
 
-"""
+```
 Input: session (string), vk ([]byte)
 Output: σ ([][][]byte), challenge ([]byte), error
 
@@ -357,11 +358,11 @@ Algorithm:
   2. σ, err ← MDAG.Generate(session, vk, r_i)
   3. ℓ_R ← MDAG.GetComputedLabel(R)
   4. Return (σ, ℓ_R, nil)
-"""
+```
 
 **Verify Phase:**
 
-"""
+```
 Input:
   - session: string
   - vk: []byte
@@ -393,11 +394,11 @@ Algorithm:
     9. Wait for threadpool completion
   
   10. Return results
-"""
+```
 
 **Message Validation:**
 
-"""
+```
 Input: msg, auxLocal, filterFn, r
 Output: bool
 
@@ -408,11 +409,11 @@ Checks:
   4. gradeFunc(...) > 0
   5. msg.Value == H(merklePath[last].Row)
   6. validateMerklePath(merklePath, r) == true
-"""
+```
 
 **Merkle Path Validation:**
 
-"""
+```
 Input: merklePath ([]*pb.State), round (int)
 Output: bool
 
@@ -426,7 +427,7 @@ Algorithm:
     5. If prevHash ∉ merklePath[i].Row: return false
   
   6. Return true
-"""
+```
 
 ---
 
@@ -436,7 +437,7 @@ Algorithm:
 
 **Struct Definition:**
 
-"""go
+```go
 type ExAnte struct {
     network       network.Network
     logger        *zap.Logger
@@ -458,11 +459,11 @@ type ExAnte struct {
     R             int
     isRunning     bool
 }
-"""
+```
 
 **Generate Phase:**
 
-"""
+```
 Input:
   - session: string
   - vk: []byte
@@ -475,11 +476,11 @@ Algorithm:
   1. σ, err ← MDAG.Generate(session, vk, challenge, piRP)
   2. Store challenge for verification
   3. Return σ
-"""
+```
 
 **Merkle Path Validation (Ex-Ante specific):**
 
-"""
+```
 Input: merklePath ([][][]byte), round (int)
 Output: bool
 
@@ -492,13 +493,13 @@ Algorithm:
        Return false
   
   Return true
-"""
+```
 
 **Initial Label Validation:**
 
-"""
+```
 Check: H(sid || vk || value || PiRP) ∈ merklePath[0]
-"""
+```
 
 ---
 
@@ -508,7 +509,7 @@ Check: H(sid || vk || value || PiRP) ∈ merklePath[0]
 
 **Struct Definition:**
 
-"""go
+```go
 type RbExp struct {
     rp      ResourceProof
     exp     ExPost
@@ -517,11 +518,11 @@ type RbExp struct {
     ffilter common.FilterF
     logger  *zap.Logger
 }
-"""
+```
 
 **Generate Phase:**
 
-"""
+```
 Input: sid (string), vk ([]byte)
 Output: challenge ([]byte), proof (*RBExpProof), error
 
@@ -532,11 +533,11 @@ Algorithm:
   4. sigmaExa, err ← exa.Generate(sid, vk, challenge, piRP)
   5. proof ← {PiRP: piRP, SigmaExp: sigmaExp, SigmaExa: sigmaExa}
   6. Return (challenge, proof, nil)
-"""
+```
 
 **Verify Phase:**
 
-"""
+```
 Input:
   - sid, vk, ch: identifiers
   - proof: *RBExpProof
@@ -562,7 +563,7 @@ Algorithm:
          outputs.append({ID, VK, grade})
   
   8. Return outputs
-"""
+```
 
 ---
 
@@ -572,7 +573,7 @@ Algorithm:
 
 **LocalState Struct:**
 
-"""go
+```go
 type LocalState struct {
     VRFSecret  []byte    // sk_vrf
     VRFPublic  []byte    // vk_vrf
@@ -581,11 +582,11 @@ type LocalState struct {
     PhiVDF     []byte    // φ_vdf
     PiVDF      []byte    // π_vdf
 }
-"""
+```
 
 **Initialize Phase:**
 
-"""
+```
 Input: id, sid, vrf, rbexp, vdf, delay, lambda
 Output: *LocalState, error
 
@@ -595,11 +596,11 @@ Algorithm:
   3. vdfInput ← H(id || vk || challenge)
   4. φ_vdf, π_vdf ← VDF.Eval(vdfInput, vk, delay)
   5. Return LocalState{sk, vk, challenge, rbExpProof, φ_vdf, π_vdf}
-"""
+```
 
 **Committee Election Phase:**
 
-"""
+```
 Input: sid, state, weight, vrf, rbexp
 Output: []*CommitteeOutput, error
 
@@ -610,7 +611,7 @@ Algorithm:
   4. outputs ← RBExp.Verify(sid, state.VRFPublic, state.Challenge, 
                             state.RBExpProof, auxKey, weight)
   5. Return outputs
-"""
+```
 
 ---
 
@@ -620,7 +621,7 @@ Algorithm:
 
 **Struct Definition:**
 
-"""go
+```go
 type Synchronizer struct {
     cfg           *config.Config
     logger        *zap.Logger
@@ -630,7 +631,7 @@ type Synchronizer struct {
     mu            sync.Mutex
     stopOnce      sync.Once
 }
-"""
+```
 
 **Channel Allocation:**
 
@@ -645,7 +646,7 @@ type Synchronizer struct {
 
 **Start Time Calculation:**
 
-"""
+```
 Input: cfg (*Config), logger
 Output: *StartTimes
 
@@ -659,18 +660,18 @@ Algorithm:
   7. exAnteMDAG ← exPostMDAG + (MDAGRoundTimeout × R) + 1min
   8. exPostVerify ← exAnteMDAG + (MDAGRoundTimeout × R) + delay + 1min
   9. exAnteVerify ← exPostVerify
-"""
+```
 
 **Round Triggering:**
 
-"""
+```
 For each step:
   For round ∈ [0, numRounds]:
     1. roundStartTime ← stepStartTime + (round × roundTimeout)
     2. timer ← time.NewTimer(until(roundStartTime))
     3. Wait on timer.C or stopChan
     4. Close roundChannels[step][round]
-"""
+```
 
 ---
 
@@ -690,7 +691,7 @@ For each step:
 
 **Generate:**
 
-"""
+```
 Input: λ
 Output: sk ([]byte), vk ([]byte), error
 
@@ -701,11 +702,11 @@ Algorithm:
   4. sk ← x509.MarshalECPrivateKey(secretKey)
   5. vk ← x509.MarshalPKIXPublicKey(&secretKey.PublicKey)
   6. Return (sk, vk, nil)
-"""
+```
 
 **Eval:**
 
-"""
+```
 Input: x ([]byte), sk ([]byte)
 Output: φ ([]byte), π ([]byte), error
 
@@ -713,11 +714,11 @@ Algorithm:
   1. secretKey ← x509.ParseECPrivateKey(sk)
   2. φ, π ← ecvrf.Prove(secretKey, x)
   3. Return (φ, π, nil)
-"""
+```
 
 **Verify:**
 
-"""
+```
 Input: x, φ, π, vk (all []byte)
 Output: bool, error
 
@@ -725,7 +726,7 @@ Algorithm:
   1. pk ← x509.ParsePKIXPublicKey(vk)
   2. beta ← ecvrf.Verify(pk, x, π)
   3. Return (beta == φ), nil
-"""
+```
 
 #### 1.10.2 VDF Module
 
@@ -735,7 +736,7 @@ Algorithm:
 
 **Eval:**
 
-"""
+```
 Input: x ([]byte), vk ([]byte), delta (int seconds)
 Output: φ ([]byte), π ([]byte), error
 
@@ -745,11 +746,11 @@ Algorithm:
   3. φ ← hash[:]
   4. π ← SHA256(φ)[:]
   5. Return (φ, π, nil)
-"""
+```
 
 **Verify:**
 
-"""
+```
 Input: x, φ, π, vk (all []byte)
 Output: bool, error
 
@@ -758,7 +759,7 @@ Algorithm:
   2. If φ ≠ expectedPhi: return false
   3. expectedPi ← SHA256(φ)
   4. Return (π == expectedPi), nil
-"""
+```
 
 #### 1.10.3 Resource Proof Module
 
@@ -766,7 +767,7 @@ Algorithm:
 
 **Prove (Proof of Work):**
 
-"""
+```
 Input: challenge ([]byte), difficulty (int)
 Output: proof ([]byte), error
 
@@ -778,22 +779,22 @@ Algorithm:
         Return uint64ToBytes(nonce)
      c. nonce++
      d. If overflow: return error
-"""
+```
 
 **Verify:**
 
-"""
+```
 Input: challenge ([]byte), difficulty (int), proof ([]byte)
 Output: bool
 
 Algorithm:
   1. hash ← BLAKE2b(challenge || proof)
   2. Return hasLeadingZeros(hash, difficulty)
-"""
+```
 
 **hasLeadingZeros:**
 
-"""
+```
 Input: hash ([]byte), required (int)
 Output: bool
 
@@ -805,13 +806,13 @@ Algorithm:
         Return (bits ≥ required)
       bits++
   Return (bits ≥ required)
-"""
+```
 
 #### 1.10.4 Hash Module
 
 **File:** `internal/hash/hash.go`
 
-"""go
+```go
 // Sum concatenates inputs and returns BLAKE2b-256 hash
 func Sum(data ...[]byte) []byte {
     hasher, _ := blake2b.New256(nil)
@@ -826,7 +827,7 @@ func Oracle(data []byte) []byte {
     hash := blake2b.Sum256(data)
     return hash[:]
 }
-"""
+```
 
 ---
 
@@ -836,7 +837,7 @@ func Oracle(data []byte) []byte {
 
 **File:** `internal/common/structs.go`
 
-"""go
+```go
 // RBExpProof contains proof data from RB-ExP generation
 type RBExpProof struct {
     PiRP     []byte      // Resource proof
@@ -870,19 +871,19 @@ type CommitteeOutput struct {
     VK    string  // Base64-encoded verification key
     Grade int     // Grade ∈ [0, d+1]
 }
-"""
+```
 
 ### 2.2 Committee Structure
 
 **Thread-Safe Map Implementation:**
 
-"""go
+```go
 type Committee struct {
     mu        sync.RWMutex
     committee map[string]O  // key = vk + "\x00" + ch
     len       int
 }
-"""
+```
 
 **Key Format:** `base64(vk) + "\x00" + base64(ch)`
 
@@ -893,7 +894,7 @@ type Committee struct {
 
 ### 2.3 Synchronization Steps
 
-"""go
+```go
 const (
     GraphDiscovery Step = "GraphDiscovery"
     Network        Step = "Network"
@@ -902,7 +903,7 @@ const (
     ExPostVerify   Step = "ExPostVerify"
     ExAnteVerify   Step = "ExAnteVerify"
 )
-"""
+```
 
 ---
 
@@ -910,7 +911,7 @@ const (
 
 ### 3.1 Network Interface
 
-"""go
+```go
 type Network interface {
     RegisterHandler(protocolID string, handler MessageHandler)
     SendProtocolMessage(protocolID string, data []byte)
@@ -921,46 +922,46 @@ type Network interface {
 }
 
 type MessageHandler func(from peer.ID, payload []byte) error
-"""
+```
 
 ### 3.2 Synchronizer Interface
 
-"""go
+```go
 type Synchronizer interface {
     WaitForRound(step Step, round int) (<-chan struct{}, error)
 }
-"""
+```
 
 ### 3.3 VRF Interface
 
-"""go
+```go
 type VRF interface {
     Generate(lambda int) (sk []byte, vk []byte, err error)
     Eval(message, sk []byte) (output []byte, proof []byte, err error)
 }
-"""
+```
 
 ### 3.4 VDF Interface
 
-"""go
+```go
 type VDF interface {
     Eval(message, vk []byte, delay int) (phiVDF []byte, piVDF []byte, err error)
 }
-"""
+```
 
 ### 3.5 RBExp Interface
 
-"""go
+```go
 type RBExp interface {
     Generate(sid string, vk []byte) (challenge []byte, proof *common.RBExpProof, err error)
     Verify(sid string, vk, ch []byte, proof *common.RBExpProof, 
            auxKey *common.AuxKey, auxLocal float64) ([]*common.CommitteeOutput, error)
 }
-"""
+```
 
 ### 3.6 Filter Functions
 
-"""go
+```go
 // FilterF validates VRF/VDF proofs
 type FilterF func(sid string, id string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage) bool
 
@@ -969,7 +970,7 @@ type FilterTagF func(sid string, id string, vk []byte, ch []byte, aux *pb.Aux) b
 
 // GradeFunc computes participant grade
 type GradeFunc func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, weight float64) int
-"""
+```
 
 ---
 
@@ -979,14 +980,14 @@ type GradeFunc func(sid string, vk []byte, ch []byte, auxKey *pb.AuxKeyMessage, 
 
 **File:** `pkg/proto/mdag.proto`
 
-"""protobuf
+```protobuf
 message MDAGMessage {
   string session_id = 1;  // Protocol session identifier
   uint32 round = 2;       // Round number [0, R]
   bytes label = 3;        // Computed label (32 bytes)
   string id = 4;          // Sender node ID
 }
-"""
+```
 
 **Size Estimate:** ~100-200 bytes per message
 
@@ -994,7 +995,7 @@ message MDAGMessage {
 
 **File:** `pkg/proto/timestamp.proto`
 
-"""protobuf
+```protobuf
 message TimestampMessage {
   string session_id = 1;
   bytes verification_key = 2;  // X.509 encoded public key (~90 bytes)
@@ -1020,7 +1021,7 @@ message AuxKeyMessage {
   bytes phi_vdf = 3;  // VDF output (32 bytes)
   bytes pi_vdf = 4;   // VDF proof (32 bytes)
 }
-"""
+```
 
 **Size Estimate:** Varies by merkle path depth, typically 500 bytes - 10KB
 
@@ -1028,7 +1029,7 @@ message AuxKeyMessage {
 
 **File:** `pkg/proto/network.proto`
 
-"""protobuf
+```protobuf
 message MessageData {
   string clientVersion = 1;
   int64 timestamp = 2;
@@ -1052,7 +1053,7 @@ message ProtocolMessage {
   MessageData messageData = 1;
   bytes payload = 2;  // Nested serialized message
 }
-"""
+```
 
 ---
 
@@ -1060,7 +1061,7 @@ message ProtocolMessage {
 
 ### 5.1 Complete Protocol Flow
 
-"""
+```
 INITIALIZATION PHASE:
 ┌────────────────────────────────────────┐
 │ 1. VRF.Generate(λ) → (sk, vk)          │
@@ -1082,11 +1083,11 @@ COMMITTEE ELECTION PHASE:
 │    └─ ExAnte.Verify (R rounds)         │
 │ 6. Intersect results → Committee       │
 └────────────────────────────────────────┘
-"""
+```
 
 ### 5.2 Message Processing Pipeline
 
-"""
+```
 INCOMING MESSAGE:
   ↓
 ┌─────────────────┐
@@ -1122,11 +1123,11 @@ INCOMING MESSAGE:
 ┌─────────────────┐
 │ Queue Message   │ Store for processing
 └─────────────────┘
-"""
+```
 
 ### 5.3 Grade Computation Details
 
-"""
+```
 Parameters:
   d = grading levels
   n = committee size
@@ -1144,7 +1145,7 @@ Precision Handling:
   3. Compute ratio as big.Float for precision
   4. Convert to float64 for final calculation
   5. Floor and clamp to [0, d+1]
-"""
+```
 
 ---
 
@@ -1152,7 +1153,7 @@ Precision Handling:
 
 ### 6.1 Main Goroutine Hierarchy
 
-"""
+```
 main()
 ├── synchronizer.Start()
 │   ├── runTimeSyncForStep(GraphDiscovery)
@@ -1182,11 +1183,11 @@ main()
             │   └── threadpool workers [per round]
             └── ExAnte.Verify() [goroutine]
                 └── threadpool workers [per round]
-"""
+```
 
 ### 6.2 ThreadPool Lifecycle
 
-"""
+```
 Creation:
   pool := threadpool.New(numWorkers)
   → Creates numWorkers goroutines
@@ -1207,11 +1208,11 @@ Worker Loop:
       return
     }
   }
-"""
+```
 
 ### 6.3 Synchronizer Channel Lifecycle
 
-"""
+```
 Initialization:
   For each step:
     channels[step] = make([]chan struct{}, numRounds)
@@ -1229,7 +1230,7 @@ Triggering:
 Waiting:
   ch := channels[step][round]
   <-ch  // Blocks until channel closed
-"""
+```
 
 ---
 
@@ -1245,7 +1246,7 @@ Waiting:
 
 **Pool Usage Pattern:**
 
-"""go
+```go
 // Acquire from pool
 msg := getTimestampMessage()
 defer putTimestampMessage(msg)
@@ -1258,21 +1259,21 @@ msg.VerificationKey = vk
 // Use object
 data, _ := proto.Marshal(msg)
 network.SendProtocolMessage(protocolID, data)
-"""
+```
 
 **Reset Behavior:**
 
-"""go
+```go
 func getTimestampMessage() *pb.TimestampMessage {
     msg := timestampMessagePool.Get().(*pb.TimestampMessage)
     msg.Reset()  // Clear all fields
     return msg
 }
-"""
+```
 
 ### 7.2 Slice Preallocation
 
-"""go
+```go
 // Committee output preallocation
 outputs := make([]*CommitteeOutput, 0, c.len)
 
@@ -1281,11 +1282,11 @@ messages[round] = make([][]byte, 0, 16)
 
 // Candidate list preallocation
 candidates := make([]peer.AddrInfo, 0, expectedCount)
-"""
+```
 
 ### 7.3 Buffer Management
 
-"""go
+```go
 // MDAG label concatenation
 var buffer bytes.Buffer
 buffer.WriteString(sid)
@@ -1294,7 +1295,7 @@ for _, v := range vi {
     buffer.Write(v)
 }
 hash := oracle(buffer.Bytes())
-"""
+```
 
 ---
 
@@ -1312,7 +1313,7 @@ hash := oracle(buffer.Bytes())
 
 ### 8.2 Error Propagation Pattern
 
-"""go
+```go
 // Wrap errors with context
 if err := operation(); err != nil {
     return fmt.Errorf("operation failed: %w", err)
@@ -1322,11 +1323,11 @@ if err := operation(); err != nil {
 if errors.Is(err, ErrSessionMismatch) {
     // Handle specifically
 }
-"""
+```
 
 ### 8.3 Graceful Degradation
 
-"""go
+```go
 // NTP fallback
 response, err := ntp.Query(timeServer)
 if err != nil {
@@ -1341,7 +1342,7 @@ if !network.IsNeighbor(from) {
     logger.Warn("Received message from unknown neighbor")
     return errNotNeighbor  // Message dropped, protocol continues
 }
-"""
+```
 
 ---
 
@@ -1349,7 +1350,7 @@ if !network.IsNeighbor(from) {
 
 ### 9.1 Full Configuration Structure
 
-"""json
+```json
 {
   "network": {
     "listen_port": 0,
@@ -1407,11 +1408,11 @@ if !network.IsNeighbor(from) {
     "push_interval": "10s"
   }
 }
-"""
+```
 
 ### 9.2 Configuration Validation
 
-"""go
+```go
 // Ensure even building rounds
 if cfg.Graph.BuildingRounds%2 != 0 {
     cfg.Graph.BuildingRounds++
@@ -1423,7 +1424,7 @@ if p > 1 { p = 1 }
 
 // Duration parsing
 // Supported formats: "5s", "500ms", "1m", "100µs"
-"""
+```
 
 ---
 
@@ -1433,7 +1434,7 @@ if p > 1 { p = 1 }
 
 **Counter: total_messages**
 
-"""
+```
 Name: total_messages
 Help: Total number of messages processed
 Labels:
@@ -1441,11 +1442,11 @@ Labels:
   - protocol: Protocol type (mdag/expost/exante)
   - node_id: Node identifier
   - sid: Session identifier
-"""
+```
 
 **Counter: valid_messages**
 
-"""
+```
 Name: valid_messages
 Help: Number of valid messages processed
 Labels:
@@ -1453,11 +1454,11 @@ Labels:
   - protocol: Protocol type (mdag/expost/exante)
   - node_id: Node identifier
   - sid: Session identifier
-"""
+```
 
 ### 10.2 Internal Tracking
 
-"""go
+```go
 // Per-module message tracking
 type ExPost struct {
     validMessages []int  // validMessages[round] = count
@@ -1468,11 +1469,11 @@ type ExPost struct {
 logger.Info("Message counts", 
     zap.Ints("valid_messages", e.validMessages),
     zap.Ints("total_messages", e.totalMessages))
-"""
+```
 
 ### 10.3 Timing Measurements
 
-"""go
+```go
 // Function-level timing
 start := time.Now()
 defer func() {
@@ -1483,7 +1484,7 @@ defer func() {
 // Phase-level timing in logs
 // Example output:
 // {"level":"INFO","timestamp":"...","msg":"Generate completed","elapsed":"2.5s"}
-"""
+```
 
 ---
 
@@ -1526,7 +1527,7 @@ defer func() {
 
 ## Appendix D: File Structure
 
-"""
+```
 committee-sampling/
 ├── cmd/committee-sampling/
 │   └── main.go                    # Entry point
@@ -1564,4 +1565,4 @@ committee-sampling/
     ├── dev.json
     ├── stg.json
     └── prod.json
-"""
+```
