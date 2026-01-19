@@ -163,7 +163,7 @@ Implements Kademlia DHT-based peer discovery:
 
 **Location**: `internal/mdag/mdag.go`
 
-**Purpose**: Implements the Merkle DAG construction used by both Ex-Ante and Ex-Post timestamp protocols for distributed timestamp generation.
+**Purpose**: Implements the Merkle DAG construction used by both Ex-Ante and Ex-Post timestamp protocols for communication-efficient distributed timestamping.
 
 **Algorithm**:
 

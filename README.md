@@ -16,8 +16,8 @@ This implementation provides the key building blocks:
 
 - **Verifiable Random Functions (VRF)** for unpredictable sortition
 - **Verifiable Delay Functions (VDF)** for time-based fairness
-- **Resource-Bounded Proofs** for Sybil resistance
-- **Multi-Digraph Aggregation (MDAG)** for efficient message collection
+- **Resource-Bounded Proofs** for proportional committee sampling
+- **Merkle DAG (MDAG)** for communication-efficient distributed timestamping
 
 ```bibtex
 @inproceedings{asiacrypt-2025-36134,
@@ -64,7 +64,7 @@ The binary entry point is `cmd/committee-sampling/main.go`. At startup the follo
 6. **Protocol Bootstrapping** – `internal/boot` wires together the building blocks:
    - `internal/resourceproof` provides proof-of-work based resource certificates.
    - `internal/resourcebound` runs Ex-Post and Ex-Ante timestamp protocols in parallel and intersects their outputs.
-   - `internal/mdag` runs the Multi-Digraph aggregation gadget for message collection.
+   - `internal/mdag` runs the Merkle DAG protocol for communication-efficient distributed timestamping.
    - `internal/expost` and `internal/exante` orchestrate their respective timestamp rounds using the synchronizer.
    - `internal/vdf` and `internal/vrf` wrap the VDF/VRF implementations.
    - `internal/gce` drives the two-phase Graded Committee Election.
