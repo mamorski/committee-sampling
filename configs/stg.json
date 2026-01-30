@@ -17,7 +17,7 @@
     "session_id": "aef07cc6-b08c-48b0-9dbf-6043f593c1d6",
     "lambda": 256,
     "weight": 10,
-    "total_wight": 1000,
+    "total_weight": 1000,
     "delta_w": 2.0,
     "committee_size": 5,
     "delay": 20
