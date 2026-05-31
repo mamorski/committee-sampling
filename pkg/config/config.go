@@ -69,6 +69,7 @@ type Network struct {
 	// Simulation-only options
 	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
 	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
+	PeerDropEnabled       bool    `mapstructure:"peer_drop_enabled"`        // If true, this node drops one neighbor edge after graph building
 }
 
 type Discovery struct {

@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -80,6 +81,8 @@ type P2PNode struct {
 	dropOnSendProbability       float64
 	acceptingPotentialNeighbors atomic.Bool
 	dropOnSend                  bool
+	peerDropEnabled             bool
+	peerDropMaxDelay            time.Duration
 	proposalQueue               []queuedProposal
 	dropQueue                   []queuedDrop
 	queueMu                     sync.Mutex
@@ -135,6 +138,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		sid:                         sid,
 		buildingRounds:              cfg.Graph.BuildingRounds,
 		dropOnSend:                  cfg.Network.DropOnSend,
+		peerDropEnabled:             cfg.Network.PeerDropEnabled,
+		peerDropMaxDelay: func() time.Duration {
+			// span the active MDAG phases so the drop lands during consensus, not after
+			rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
+			return time.Duration(rounds) * cfg.Synchronization.MDAGRoundTimeout
+		}(),
 		dropOnSendProbability: func() float64 {
 			p := cfg.Network.DropOnSendProbability
 			if p < 0 {
@@ -154,6 +163,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	if node.dropOnSend {
 		node.logger.Info(
 			"Simulation: drop-on-send enabled", zap.Float64("probability", node.dropOnSendProbability),
+		)
+	}
+	if node.peerDropEnabled {
+		node.logger.Info(
+			"Simulation: peer-drop enabled", zap.Duration("max_delay", node.peerDropMaxDelay),
 		)
 	}
 
@@ -516,6 +530,10 @@ func (n *P2PNode) graphBuilder() {
 	n.logger.Info(
 		"Final neighbor list", zap.Int("count", len(neighbors)), zap.Strings("neighbors", neighbors),
 	)
+
+	if n.peerDropEnabled {
+		go n.simulatePeerDrop()
+	}
 }
 
 func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
@@ -593,6 +611,51 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	delete(n.neighbors, peerID)
 	n.logger.Info(
 		"Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)),
+	)
+}
+
+func (n *P2PNode) simulatePeerDrop() {
+	f, err := cryptoFloat64()
+	if err != nil {
+		n.logger.Warn("Simulation: peer-drop: crypto RNG failed for delay, dropping immediately", zap.Error(err))
+		f = 0
+	}
+	delay := time.Duration(float64(n.peerDropMaxDelay) * f)
+
+	select {
+	case <-time.After(delay):
+	case <-n.ctx.Done():
+		return
+	}
+
+	n.mu.Lock()
+	candidates := make([]peer.ID, 0, len(n.neighbors))
+	for id := range n.neighbors {
+		candidates = append(candidates, id)
+	}
+	n.mu.Unlock()
+
+	if len(candidates) == 0 {
+		n.logger.Warn("Simulation: peer-drop: no neighbors available to drop")
+		return
+	}
+
+	f2, err := cryptoFloat64()
+	if err != nil {
+		n.logger.Warn("Simulation: peer-drop: crypto RNG failed for selection, using first neighbor", zap.Error(err))
+		f2 = 0
+	}
+	idx := int(f2 * float64(len(candidates)))
+	if idx >= len(candidates) {
+		idx = len(candidates) - 1
+	}
+	victim := candidates[idx]
+
+	n.dropNeighbor(victim)
+	n.logger.Info(
+		"Simulation: peer-drop",
+		zap.String("peer_id", victim.String()),
+		zap.Duration("delay", delay),
 	)
 }
 
