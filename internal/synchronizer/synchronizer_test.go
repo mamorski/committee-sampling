@@ -133,6 +133,30 @@ func (suite *SynchronizerTestSuite) TestWaitForRound() {
 	suite.EqualError(err, "round 1 exceeds total rounds 0 for step GraphDiscovery")
 }
 
+func (suite *SynchronizerTestSuite) TestTotalRounds() {
+	rounds := suite.cfg.Graph.Diameter * suite.cfg.Graph.GradingLevels
+
+	for _, step := range AllSteps {
+		var want int
+		switch step {
+		case common.GraphDiscovery:
+			want = 1
+		case common.Network:
+			want = suite.cfg.Graph.BuildingRounds + 1
+		default:
+			want = rounds + 1
+		}
+
+		got, err := suite.s.TotalRounds(step)
+		suite.NoErrorf(err, "TotalRounds should succeed for step %s", step)
+		suite.Equalf(want, got, "TotalRounds mismatch for step %s", step)
+	}
+
+	// Error: unknown step
+	_, err := suite.s.TotalRounds("UnknownStep")
+	suite.EqualError(err, "unknown step: UnknownStep")
+}
+
 func (suite *SynchronizerTestSuite) TestTriggerRound() {
 	round := 3
 	step := common.ExAnteMDAG
