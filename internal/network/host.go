@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	lp2pmetrics "github.com/libp2p/go-libp2p/core/metrics"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
@@ -70,6 +71,12 @@ type algoPhase struct {
 	timeout time.Duration
 }
 
+// ByteStats holds cumulative in/out byte counts for a protocol.
+type ByteStats struct {
+	In  int64
+	Out int64
+}
+
 type P2PNode struct {
 	host                        Host
 	ctx                         context.Context
@@ -79,6 +86,9 @@ type P2PNode struct {
 	sync                        common.Synchronizer
 	mu                          sync.Mutex
 	key                         crypto.PrivKey
+	bwc                         *lp2pmetrics.BandwidthCounter
+	bwWG                        sync.WaitGroup
+	nodeID                      string
 	neighbors                   map[peer.ID]peer.AddrInfo
 	potentialNeighbors          sync.Map
 	sid                         string
@@ -118,9 +128,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 
 	logger.Info("Listening on address", zap.String("address", listenAddr.String()))
 
+	bwc := lp2pmetrics.NewBandwidthCounter()
+
 	// Create libp2p h
 	h, err := libp2p.New(
 		libp2p.ListenAddrs(listenAddr), libp2p.Identity(priv),
+		libp2p.BandwidthReporter(bwc),
 	)
 	if err != nil {
 		cancel()
@@ -140,6 +153,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
 		key:                         priv,
+		bwc:                         bwc,
+		nodeID:                      h.ID().String(),
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
 		sid:                         sid,
@@ -194,12 +209,17 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		return nil, fmt.Errorf("failed to start d: %w", err)
 	}
 	go node.graphBuilder()
+	// Synchronous: registers all bwWG.Add before New returns, so a fast Close
+	// cannot Wait() on a zero counter while watcher goroutines spawn later.
+	node.startByteWatcher()
 
 	return node, nil
 }
 
 func (n *P2PNode) Close() error {
 	n.cancel()
+	n.bwWG.Wait()
+	n.logFinalBreakdown()
 	if err := n.discovery.Stop(); err != nil {
 		return fmt.Errorf("failed to stop discovery: %w", err)
 	}
@@ -315,6 +335,22 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 
 func (n *P2PNode) GetNodeID() string {
 	return n.host.ID().String()
+}
+
+// bytesByProtocol returns cumulative in/out bytes keyed by protocol-ID string.
+func (n *P2PNode) bytesByProtocol() map[string]ByteStats {
+	raw := n.bwc.GetBandwidthByProtocol()
+	out := make(map[string]ByteStats, len(raw))
+	for pid, s := range raw {
+		out[string(pid)] = ByteStats{In: s.TotalIn, Out: s.TotalOut}
+	}
+	return out
+}
+
+// bytesTotal returns cumulative in/out bytes across all protocols.
+func (n *P2PNode) bytesTotal() (in, out int64) {
+	s := n.bwc.GetBandwidthTotals()
+	return s.TotalIn, s.TotalOut
 }
 
 func generateSelectedTarget(limit int) (int, error) {

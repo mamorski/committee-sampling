@@ -177,6 +177,19 @@ func (s *Synchronizer) WaitForRound(step common.Step, round int) (<-chan struct{
 	return stepChannels[round], nil
 }
 
+// TotalRounds returns the number of scheduled ticks for a step, reusing the
+// channels built in New so the count has a single source of truth.
+func (s *Synchronizer) TotalRounds(step common.Step) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stepChannels, ok := s.roundChannels[step]
+	if !ok {
+		return 0, fmt.Errorf("unknown step: %s", step)
+	}
+	return len(stepChannels), nil
+}
+
 func CalculateStartTimes(cfg *config.Config, logger *zap.Logger) *StartTimes {
 	response, err := ntp.Query(cfg.Synchronization.TimeServer)
 	var clockOffset time.Duration

@@ -20,3 +20,7 @@ func (s delayedSync) WaitForRound(_ common.Step, _ int) (<-chan struct{}, error)
 	}()
 	return ch, nil
 }
+
+func (s delayedSync) TotalRounds(_ common.Step) (int, error) {
+	return 1, nil
+}

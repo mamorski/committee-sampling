@@ -23,4 +23,6 @@ const (
 // Synchronizer defines the interface for round synchronization across protocol modules
 type Synchronizer interface {
 	WaitForRound(step Step, round int) (<-chan struct{}, error)
+	// TotalRounds returns the number of scheduled ticks for a step.
+	TotalRounds(step Step) (int, error)
 }
