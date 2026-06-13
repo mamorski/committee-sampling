@@ -31,6 +31,7 @@ import (
 const (
 	graphProposal         = "/graph/proposal/1.0.0"
 	graphDrop             = "/graph/drop/1.0.0"
+	peerDrop              = "/peer/drop/1.0.0"
 	clientVersion         = "go-p2p-node/0.0.1"
 	maxInboundMessageSize = 1 << 20 // 1 MiB safety cap on inbound payloads
 )
@@ -64,6 +65,11 @@ type queuedDrop struct {
 	from peer.ID
 }
 
+type algoPhase struct {
+	step    common.Step
+	timeout time.Duration
+}
+
 type P2PNode struct {
 	host                        Host
 	ctx                         context.Context
@@ -82,7 +88,8 @@ type P2PNode struct {
 	acceptingPotentialNeighbors atomic.Bool
 	dropOnSend                  bool
 	peerDropEnabled             bool
-	peerDropMaxDelay            time.Duration
+	peerDropPhases              []algoPhase
+	peerDropRounds              int
 	proposalQueue               []queuedProposal
 	dropQueue                   []queuedDrop
 	queueMu                     sync.Mutex
@@ -138,12 +145,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		sid:                         sid,
 		buildingRounds:              cfg.Graph.BuildingRounds,
 		dropOnSend:                  cfg.Network.DropOnSend,
-		peerDropEnabled:             cfg.Network.PeerDropEnabled,
-		peerDropMaxDelay: func() time.Duration {
-			// span the active MDAG phases so the drop lands during consensus, not after
-			rounds := cfg.Graph.Diameter * cfg.Graph.GradingLevels
-			return time.Duration(rounds) * cfg.Synchronization.MDAGRoundTimeout
-		}(),
+		peerDropEnabled: cfg.Network.PeerDropEnabled,
+		peerDropRounds:  cfg.Graph.Diameter * cfg.Graph.GradingLevels,
+		peerDropPhases: []algoPhase{
+			{common.ExPostMDAG, cfg.Synchronization.MDAGRoundTimeout},
+			{common.ExAnteMDAG, cfg.Synchronization.MDAGRoundTimeout},
+			{common.ExPostVerify, cfg.Synchronization.ExPostRoundTimeout},
+			{common.ExAnteVerify, cfg.Synchronization.ExAnteRoundTimeout},
+		},
 		dropOnSendProbability: func() float64 {
 			p := cfg.Network.DropOnSendProbability
 			if p < 0 {
@@ -167,7 +176,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	}
 	if node.peerDropEnabled {
 		node.logger.Info(
-			"Simulation: peer-drop enabled", zap.Duration("max_delay", node.peerDropMaxDelay),
+			"Simulation: peer-drop enabled",
+			zap.Int("phases", len(node.peerDropPhases)),
+			zap.Int("rounds_per_phase", node.peerDropRounds+1),
 		)
 	}
 
@@ -175,6 +186,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	node.acceptingGraphMessages.Store(true)
 	h.SetStreamHandler(protocol.ID(graphProposal+"/"+sid), node.graphProposalHandler)
 	h.SetStreamHandler(protocol.ID(graphDrop+"/"+sid), node.graphDropHandler)
+	h.SetStreamHandler(protocol.ID(peerDrop+"/"+sid), node.peerDropHandler)
 
 	// Start d
 	if err := d.Start(c); err != nil {
@@ -615,15 +627,40 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 }
 
 func (n *P2PNode) simulatePeerDrop() {
+	// pick a uniformly random scheduled round across all post-build protocol
+	// phases so the drop lands during the actual algorithm, not in the
+	// pre-algorithm gap between graph building and ExPostMDAG.
+	total := len(n.peerDropPhases) * (n.peerDropRounds + 1)
 	f, err := cryptoFloat64()
 	if err != nil {
-		n.logger.Warn("Simulation: peer-drop: crypto RNG failed for delay, dropping immediately", zap.Error(err))
+		n.logger.Warn("Simulation: peer-drop: crypto RNG failed for slot, using slot 0", zap.Error(err))
 		f = 0
 	}
-	delay := time.Duration(float64(n.peerDropMaxDelay) * f)
+	slot := int(f * float64(total))
+	if slot >= total {
+		slot = total - 1
+	}
+	phase := n.peerDropPhases[slot/(n.peerDropRounds+1)]
+	round := slot % (n.peerDropRounds + 1)
 
+	waitChan, err := n.sync.WaitForRound(phase.step, round)
+	if err != nil {
+		n.logger.Warn("Simulation: peer-drop: failed to get round channel", zap.Error(err))
+		return
+	}
 	select {
-	case <-time.After(delay):
+	case <-waitChan:
+	case <-n.ctx.Done():
+		return
+	}
+
+	// intra-round jitter so nodes that picked the same round still spread out
+	fj, err := cryptoFloat64()
+	if err != nil {
+		fj = 0
+	}
+	select {
+	case <-time.After(time.Duration(float64(phase.timeout) * fj)):
 	case <-n.ctx.Done():
 		return
 	}
@@ -651,12 +688,20 @@ func (n *P2PNode) simulatePeerDrop() {
 	}
 	victim := candidates[idx]
 
+	// Drop locally first, then best-effort notify the victim. If the
+	// notification fails to send (peer unreachable, message dropped), the
+	// neighbor relation becomes asymmetric: we no longer list the victim, but
+	// the victim may still list us until it observes the loss independently.
+	// This asymmetry is intentional for the simulation — it models real churn
+	// where a departing peer cannot guarantee delivery of its goodbye.
 	n.dropNeighbor(victim)
 	n.logger.Info(
 		"Simulation: peer-drop",
 		zap.String("peer_id", victim.String()),
-		zap.Duration("delay", delay),
+		zap.String("phase", string(phase.step)),
+		zap.Int("round", round),
 	)
+	n.sendPeerDropMessage(victim)
 }
 
 func addrsToStrings(addrs []multiaddr.Multiaddr) []string {
@@ -809,4 +854,55 @@ func (n *P2PNode) graphDropHandler(s network.Stream) {
 	n.queueMu.Unlock()
 
 	n.logger.Debug("Queued graph drop", zap.String("from", dropperID.String()))
+}
+
+func (n *P2PNode) sendPeerDropMessage(peerID peer.ID) {
+	addrInfo := peer.AddrInfo{
+		ID:    peerID,
+		Addrs: n.host.Peerstore().Addrs(peerID),
+	}
+
+	msg := &pproto.GraphDrop{
+		MessageData: n.newMessageData(uuid.New().String(), false),
+	}
+
+	signature, err := n.signProtoMessage(msg)
+	if err != nil {
+		n.logger.Error("Failed to sign peer drop notification", zap.Error(err))
+		return
+	}
+
+	msg.MessageData.Sign = signature
+
+	if ok := n.send(addrInfo, protocol.ID(peerDrop+"/"+n.sid), msg); !ok {
+		n.logger.Warn("Failed to send peer drop notification", zap.String("to", peerID.String()))
+	} else {
+		n.logger.Debug("Sent peer drop notification", zap.String("to", peerID.String()))
+	}
+}
+
+func (n *P2PNode) peerDropHandler(s network.Stream) {
+	data := &pproto.GraphDrop{}
+	buf, err := readStreamWithLimit(s, int64(maxInboundMessageSize))
+	if err != nil {
+		n.logger.Error("Failed to read peer drop notification", zap.Error(err))
+		_ = s.Reset()
+		return
+	}
+	if err := s.Close(); err != nil {
+		n.logger.Debug("Failed to close stream", zap.Error(err))
+	}
+
+	if err := proto.Unmarshal(buf, data); err != nil {
+		n.logger.Error("Failed to unmarshal peer drop notification", zap.Error(err))
+		return
+	}
+
+	if !n.authenticateMessage(data, data.MessageData) {
+		n.logger.Error("Failed to authenticate peer drop notification")
+		return
+	}
+
+	dropperID := s.Conn().RemotePeer()
+	n.dropNeighbor(dropperID)
 }
