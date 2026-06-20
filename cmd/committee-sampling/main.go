@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/mamorski/committee-sampling/internal/boot"
@@ -28,6 +29,15 @@ func main() {
 
 	ctx := context.Background()
 	logger := createLogger(cfg)
+
+	gomaxprocs := cfg.Runtime.GOMAXPROCS
+	if gomaxprocs == 0 {
+		gomaxprocs = 2 // default cap; set a negative value in config for all host cores
+	}
+	if gomaxprocs > 0 {
+		runtime.GOMAXPROCS(gomaxprocs)
+		logger.Info("Pinned GOMAXPROCS", zap.Int("gomaxprocs", gomaxprocs))
+	}
 
 	// Create a synchronizer instance
 	sync, err := synchronizer.New(ctx, cfg, logger)
