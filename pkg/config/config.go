@@ -32,10 +32,18 @@ type Config struct {
 	Synchronization Synchronization `mapstructure:"synchronization"` // Configuration for the synchronization protocol
 	Logger          Logger          `mapstructure:"logger"`          // Configuration for the logger
 	Metrics         Metrics         `mapstructure:"metrics"`         // Configuration for metrics collection
+	Runtime         Runtime         `mapstructure:"runtime"`         // Go runtime tuning
 }
 
 type Logger struct {
 	Level string `mapstructure:"level"`
+}
+
+type Runtime struct {
+	// GOMAXPROCS caps Go runtime threads. absent/0 => default 2 (co-located simulation,
+	// many nodes per host). >0 pins to that value. <0 => no override (Go default = all
+	// host cores, for production single-node-per-host).
+	GOMAXPROCS int `mapstructure:"gomaxprocs"`
 }
 
 type Metrics struct {

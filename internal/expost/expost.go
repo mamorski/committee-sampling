@@ -118,6 +118,7 @@ type ExPost struct {
 	synchronizer common.Synchronizer
 	mu           sync.Mutex
 	messages     map[int][]*pb.TimestampMessage
+	lastArrival  map[int]time.Time
 	state        [][][]byte
 
 	gradeFunc  common.GradeFunc
@@ -164,6 +165,7 @@ func New(
 		lambda:       lambda,
 		gradeFunc:    gradeFunc,
 		messages:     make(map[int][]*pb.TimestampMessage, gradeLevels*diameterBound),
+		lastArrival:  make(map[int]time.Time),
 		sid:          sid,
 		vk:           vk,
 		isRunning:    true,
@@ -322,6 +324,10 @@ func (e *ExPost) Verify(
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
+	// prevTick is the start of the round whose messages we process next iteration
+	// (round 0 here); used to measure how long into the window the last message arrived.
+	prevTick := time.Now()
+
 	for r := 1; r < e.R; r++ {
 		// Wait for round r synchronization
 		waitChan, err := e.synchronizer.WaitForRound(common.ExPostVerify, r)
@@ -330,16 +336,30 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tick := time.Now() // round r start (deadline for round r-1 messages)
 		e.logger.Info(
 			"ExPost verification round", zap.Int("round", r), zap.String("node_id", e.nodeID),
 		)
 		e.mu.Lock()
 		msgs := e.messages[r-1]
+		last := e.lastArrival[r-1]
 		e.mu.Unlock()
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
+		} else {
+			// arrival_lag: how long into the round-(r-1) window the last message landed.
+			// arrival_slack: margin left before the round-r deadline; small/negative means
+			// cutting verify_timeout would drop late messages.
+			e.logger.Info(
+				"Round arrival lag",
+				zap.Int("round", r-1),
+				zap.Int("messages", len(msgs)),
+				zap.Duration("arrival_lag", last.Sub(prevTick)),
+				zap.Duration("arrival_slack", tick.Sub(last)),
+			)
 		}
+		prevTick = tick
 
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
@@ -595,6 +615,7 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 	e.validMessages[round]++
 
 	e.messages[round] = append(e.messages[round], &msg)
+	e.lastArrival[round] = time.Now()
 	return nil
 }
 
