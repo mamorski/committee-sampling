@@ -1,13 +1,52 @@
 package resourcebound
 
 import (
+	"encoding/binary"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 	"go.uber.org/zap"
 )
+
+// fTagCacheKey builds the memoization key for a single fTag verification. It
+// concatenates every input that determines the verification outcome (rp.Ver +
+// VDF.Verify + VRF.Verify). The proof bytes are included so a tampered message
+// (e.g. a valid member's vk with forged proof bytes) maps to a distinct key and
+// is still verified, never reading a cached result for a different input.
+//
+// Each field is length-prefixed so the concatenation is injective even though
+// vk/proofs are binary and may contain any byte (a plain separator would be
+// ambiguous and could let a crafted message shift field boundaries to collide
+// with a valid entry). The bytes are used verbatim (no hashing): the map hashes
+// the key internally and compares full keys on collision, so this is cheaper
+// than a SHA pass and free of digest-collision risk.
+func fTagCacheKey(id string, vk, ch []byte, aux *pb.Aux) string {
+	ak := aux.AuxKey
+	var b strings.Builder
+	b.Grow(len(id) + len(vk) + len(ch) + len(aux.PiRP) +
+		len(ak.PhiVdf) + len(ak.PiVdf) + len(ak.PhiVrf) + len(ak.PiVrf) + 8*4)
+	var lenBuf [4]byte
+	writeField := func(p []byte) {
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
+		b.Write(lenBuf[:])
+		b.Write(p)
+	}
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
+	b.Write(lenBuf[:])
+	b.WriteString(id)
+	writeField(vk)
+	writeField(ch)
+	writeField(aux.PiRP)
+	writeField(ak.PhiVdf)
+	writeField(ak.PiVdf)
+	writeField(ak.PhiVrf)
+	writeField(ak.PiVrf)
+	return b.String()
+}
 
 type ResourceProof interface {
 	Setup(vk []byte) ([]byte, error)
@@ -119,13 +158,33 @@ func (r *RbExp) Verify(
 		)
 	}()
 
+	// fTagCache memoizes verification results for the run. The same member's
+	// proof is gossiped across the network and re-verified hundreds of thousands
+	// of times; verification (ECVRF + x509 parse + resource proof) is pure in its
+	// inputs, so caching by those inputs collapses the redundant crypto work to
+	// ~one verify per distinct member. Shared by both Verify goroutines below;
+	// sync.Map fits the write-once / read-many / stable-key pattern.
+	var fTagCache sync.Map // map[string]bool
+
 	fTag := func(sid, id string, vk []byte, ch []byte, aux *pb.Aux) bool {
 		r.logger.Debug("Filter tag function called",
 			zap.String("sender_id", id),
 			zap.Binary("vk", vk),
 		)
 
-		return r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
+		// A nil aux/AuxKey carries no proof and can never verify; reject without
+		// caching (mirrors ffilter, which returns false on a nil AuxKey).
+		if aux == nil || aux.AuxKey == nil {
+			return false
+		}
+
+		key := fTagCacheKey(id, vk, ch, aux)
+		if v, ok := fTagCache.Load(key); ok {
+			return v.(bool)
+		}
+		res := r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
+		fTagCache.Store(key, res)
+		return res
 	}
 	auxTag := &common.AuxTag{
 		PiRP:   proof.PiRP,
