@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -113,19 +111,16 @@ type ExAnte struct {
 	synchronizer common.Synchronizer
 	mu           sync.Mutex
 	messages     map[int][]*pb.TimestampMessage
-	lastArrival  map[int]time.Time
 	state        [][][]byte
 	threadPool   *threadpool.ThreadPool
 
 	gradeFunction common.GradeFunc
+	stats         common.StatsRecorder
 
 	protocolID string
 	nodeID     string
 	sid        string
 	challenge  []byte
-
-	validMessages []int
-	totalMessages []int
 
 	d         int
 	D         int
@@ -143,10 +138,15 @@ func New(
 	D int,
 	gradeFunction common.GradeFunc,
 	logger *zap.Logger,
+	statsRec common.StatsRecorder,
 ) *ExAnte {
 
 	// Register message handler
 	protocolID := fmt.Sprintf("%s/%s", exanteProtocolID, sid)
+
+	if statsRec == nil {
+		statsRec = common.NoopRecorder{}
+	}
 
 	e := &ExAnte{
 		network:       net,
@@ -156,15 +156,13 @@ func New(
 		d:             d,
 		D:             D,
 		gradeFunction: gradeFunction,
+		stats:         statsRec,
 		messages:      make(map[int][]*pb.TimestampMessage),
-		lastArrival:   make(map[int]time.Time),
 		sid:           sid,
 		isRunning:     true,
 		protocolID:    protocolID,
 		nodeID:        net.GetNodeID(),
 		R:             d * D,
-		validMessages: make([]int, d*D),
-		totalMessages: make([]int, d*D),
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -224,7 +222,6 @@ func (e *ExAnte) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
-		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -306,10 +303,6 @@ func (e *ExAnte) Verify(
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
-	// prevTick is the start of the round whose messages we process next iteration
-	// (round 0 here); used to measure how long into the window the last message arrived.
-	prevTick := time.Now()
-
 	for r := 1; r < e.R; r++ {
 		// Wait for round r synchronization
 		waitChan, err := e.synchronizer.WaitForRound(common.ExAnteVerify, r)
@@ -318,29 +311,15 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
-		tick := time.Now() // round r start (deadline for round r-1 messages)
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
 
 		e.mu.Lock()
 		msgs := e.messages[r-1]
-		last := e.lastArrival[r-1]
 		e.mu.Unlock()
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
-		} else {
-			// arrival_lag: how long into the round-(r-1) window the last message landed.
-			// arrival_slack: margin left before the round-r deadline; small/negative means
-			// cutting verify_timeout would drop late messages.
-			e.logger.Info(
-				"Round arrival lag",
-				zap.Int("round", r-1),
-				zap.Int("messages", len(msgs)),
-				zap.Duration("arrival_lag", last.Sub(prevTick)),
-				zap.Duration("arrival_slack", tick.Sub(last)),
-			)
 		}
-		prevTick = tick
 
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
@@ -395,9 +374,8 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
-	e.totalMessages[round]++
+	// Record total message received, stamping arrival time for lag/late detection
+	e.stats.RecordReceived("exante", common.ExAnteVerify, round, time.Now())
 
 	if msg.SessionId != e.sid {
 		err := errors.New("session id mismatch")
@@ -429,12 +407,10 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
-	e.validMessages[round]++
+	// Record valid message - passed all validation checks
+	e.stats.RecordValid("exante", common.ExAnteVerify, round)
 
 	e.messages[round] = append(e.messages[round], &msg)
-	e.lastArrival[round] = time.Now()
 
 	return nil
 }

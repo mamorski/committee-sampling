@@ -1,9 +1,9 @@
 package vdf
 
 import (
-	"crypto/sha256"
 	"time"
 
+	"github.com/mamorski/committee-sampling/internal/hash"
 	"go.uber.org/zap"
 )
 
@@ -28,12 +28,11 @@ func (v *Vdf) Eval(x, vk []byte, delta int) ([]byte, []byte, error) {
 	}()
 
 	time.Sleep(time.Duration(delta) * time.Second)
-	hash := sha256.Sum256(append(x, vk...))
-	phi := hash[:]
+	phi := hash.Sum(x, vk)
 
-	proof := sha256.Sum256(phi)
+	proof := hash.Sum(phi)
 
-	return phi, proof[:], nil
+	return phi, proof, nil
 }
 
 func (v *Vdf) Verify(x, phi, pi, vk []byte) (bool, error) {
@@ -46,15 +45,14 @@ func (v *Vdf) Verify(x, phi, pi, vk []byte) (bool, error) {
 		)
 	}()
 
-	hash := sha256.Sum256(append(x, vk...))
-	expectedPhi := hash[:]
+	expectedPhi := hash.Sum(x, vk)
 
 	if string(phi) != string(expectedPhi) {
 		return false, nil
 	}
 
-	proof := sha256.Sum256(phi)
-	if string(proof[:]) != string(pi) {
+	proof := hash.Sum(phi)
+	if string(proof) != string(pi) {
 		return false, nil
 	}
 

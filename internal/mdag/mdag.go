@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 
@@ -39,9 +37,8 @@ type MDAG struct {
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
 	step           common.Step      // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
-	validMessages []int
-	totalMessages []int
-	isRunning     bool // flag indicating if the protocol is running
+	stats     common.StatsRecorder // sink for message/round statistics
+	isRunning bool                 // flag indicating if the protocol is running
 }
 
 // New creates a new MDAG instance with the specified parameters.
@@ -65,7 +62,12 @@ func New(
 	logger *zap.Logger,
 	step common.Step,
 	protocolType string,
+	statsRec common.StatsRecorder,
 ) *MDAG {
+
+	if statsRec == nil {
+		statsRec = common.NoopRecorder{}
+	}
 
 	m := &MDAG{
 		rounds:         rounds,
@@ -80,8 +82,7 @@ func New(
 		sessionID:      sid,
 		step:           step,
 		protocolType:   protocolType,
-		validMessages:  make([]int, rounds+1),
-		totalMessages:  make([]int, rounds+1),
+		stats:          statsRec,
 	}
 
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
@@ -112,7 +113,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.logger.Info(
 			"Generate completed", zap.Duration("elapsed", elapsed),
 		)
-		m.logger.Info("Message counts", zap.Ints("valid_messages", m.validMessages), zap.Ints("total_messages", m.totalMessages))
 	}()
 
 	m.mu.Lock()
@@ -251,9 +251,8 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
-	m.totalMessages[round]++
+	// Record total message received
+	m.stats.RecordReceived(m.protocolType, m.step, round, time.Now())
 
 	if !m.network.IsNeighbor(from) {
 		err := errors.New("message from unknown neighbor")
@@ -278,9 +277,8 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.messages[round] = append(m.messages[round], pbMsg.Label)
 	m.mu.Unlock()
 
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
-	m.validMessages[round]++
+	// Record valid message - passed all validation checks
+	m.stats.RecordValid(m.protocolType, m.step, round)
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {
 		m.logger.Debug(

@@ -6,12 +6,10 @@ import (
 	"math/big"
 	"runtime"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -118,19 +116,17 @@ type ExPost struct {
 	synchronizer common.Synchronizer
 	mu           sync.Mutex
 	messages     map[int][]*pb.TimestampMessage
-	lastArrival  map[int]time.Time
 	state        [][][]byte
 
 	gradeFunc  common.GradeFunc
 	threadPool *threadpool.ThreadPool
 
+	stats common.StatsRecorder
+
 	protocolID string
 	nodeID     string
 	sid        string
 	vk         []byte
-
-	validMessages []int
-	totalMessages []int
 
 	d         int
 	D         int
@@ -151,9 +147,14 @@ func New(
 	lambda int,
 	gradeFunc common.GradeFunc,
 	logger *zap.Logger,
+	statsRec common.StatsRecorder,
 ) *ExPost {
 
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
+
+	if statsRec == nil {
+		statsRec = common.NoopRecorder{}
+	}
 
 	e := &ExPost{
 		network:      net,
@@ -165,7 +166,7 @@ func New(
 		lambda:       lambda,
 		gradeFunc:    gradeFunc,
 		messages:     make(map[int][]*pb.TimestampMessage, gradeLevels*diameterBound),
-		lastArrival:  make(map[int]time.Time),
+		stats:        statsRec,
 		sid:          sid,
 		vk:           vk,
 		isRunning:    true,
@@ -173,9 +174,6 @@ func New(
 		protocolID: protocolID,
 		nodeID:     net.GetNodeID(),
 		R:          gradeLevels * diameterBound,
-
-		validMessages: make([]int, gradeLevels*diameterBound),
-		totalMessages: make([]int, gradeLevels*diameterBound),
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -235,7 +233,6 @@ func (e *ExPost) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
-		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -324,10 +321,6 @@ func (e *ExPost) Verify(
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
-	// prevTick is the start of the round whose messages we process next iteration
-	// (round 0 here); used to measure how long into the window the last message arrived.
-	prevTick := time.Now()
-
 	for r := 1; r < e.R; r++ {
 		// Wait for round r synchronization
 		waitChan, err := e.synchronizer.WaitForRound(common.ExPostVerify, r)
@@ -336,30 +329,16 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
-		tick := time.Now() // round r start (deadline for round r-1 messages)
 		e.logger.Info(
 			"ExPost verification round", zap.Int("round", r), zap.String("node_id", e.nodeID),
 		)
 		e.mu.Lock()
 		msgs := e.messages[r-1]
-		last := e.lastArrival[r-1]
 		e.mu.Unlock()
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
-		} else {
-			// arrival_lag: how long into the round-(r-1) window the last message landed.
-			// arrival_slack: margin left before the round-r deadline; small/negative means
-			// cutting verify_timeout would drop late messages.
-			e.logger.Info(
-				"Round arrival lag",
-				zap.Int("round", r-1),
-				zap.Int("messages", len(msgs)),
-				zap.Duration("arrival_lag", last.Sub(prevTick)),
-				zap.Duration("arrival_slack", tick.Sub(last)),
-			)
 		}
-		prevTick = tick
 
 		loopStart := time.Now()
 		// Process messages in parallel using a threadpool
@@ -562,9 +541,8 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
-	e.totalMessages[round]++
+	// Record total message received, stamping arrival time for lag/late detection
+	e.stats.RecordReceived("expost", common.ExPostVerify, round, time.Now())
 
 	if msg.SessionId != e.sid {
 		err := fmt.Errorf("session id mismatch")
@@ -610,12 +588,10 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
-	e.validMessages[round]++
+	// Record valid message - passed all validation checks
+	e.stats.RecordValid("expost", common.ExPostVerify, round)
 
 	e.messages[round] = append(e.messages[round], &msg)
-	e.lastArrival[round] = time.Now()
 	return nil
 }
 

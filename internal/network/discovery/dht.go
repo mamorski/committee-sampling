@@ -83,7 +83,7 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 			continue
 		}
 
-		if err = d.host.Connect(ctx, *p2pAddr); err != nil {
+		if err = d.connectBootstrapPeer(ctx, *p2pAddr); err != nil {
 			d.logger.Error(
 				"Failed to connect to bootstrap peer",
 				zap.String("address", addr),
@@ -132,6 +132,37 @@ func (d *DHTDiscovery) Start(ctx context.Context) error {
 	go d.discoverPeers(ctx, routingDiscovery)
 
 	return nil
+}
+
+// connectBootstrapPeer dials a bootstrap peer with bounded retries. The
+// bootstrap node can transiently refuse a dial when many nodes connect at once
+// (the dial is closed mid-handshake, surfacing as "EOF"); a single attempt then
+// leaves the node with no bootstrap peer and it panics. Retry with backoff so a
+// momentary refusal does not kill the node.
+func (d *DHTDiscovery) connectBootstrapPeer(ctx context.Context, p2pAddr peer.AddrInfo) error {
+	const maxAttempts = 5
+
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err = d.host.Connect(ctx, p2pAddr); err == nil {
+			return nil
+		}
+
+		d.logger.Warn(
+			"Bootstrap peer dial attempt failed",
+			zap.Int("attempt", attempt),
+			zap.String("peer_id", p2pAddr.ID.String()),
+			zap.Error(err),
+		)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		}
+	}
+
+	return err
 }
 
 func (d *DHTDiscovery) advertise(ctx context.Context, routingDiscovery *routing.RoutingDiscovery) error {

@@ -33,6 +33,12 @@ type Config struct {
 	Logger          Logger          `mapstructure:"logger"`          // Configuration for the logger
 	Metrics         Metrics         `mapstructure:"metrics"`         // Configuration for metrics collection
 	Runtime         Runtime         `mapstructure:"runtime"`         // Go runtime tuning
+	Stats           Stats           `mapstructure:"stats"`           // Stats daemon output
+}
+
+// Stats configures the per-node statistics daemon.
+type Stats struct {
+	OutputDir string `mapstructure:"output_dir"` // Directory for per-node stats JSON (default: current dir)
 }
 
 type Logger struct {
