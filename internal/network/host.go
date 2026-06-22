@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	lp2pmetrics "github.com/libp2p/go-libp2p/core/metrics"
@@ -34,7 +33,6 @@ const (
 	graphProposal         = "/graph/proposal/1.0.0"
 	graphDrop             = "/graph/drop/1.0.0"
 	peerDrop              = "/peer/drop/1.0.0"
-	clientVersion         = "go-p2p-node/0.0.1"
 	maxInboundMessageSize = 1 << 20 // 1 MiB safety cap on inbound payloads
 )
 
@@ -238,8 +236,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		sid:                         sid,
 		buildingRounds:              cfg.Graph.BuildingRounds,
 		dropOnSend:                  cfg.Network.DropOnSend,
-		peerDropEnabled: cfg.Network.PeerDropEnabled,
-		peerDropRounds:  cfg.Graph.Diameter * cfg.Graph.GradingLevels,
+		peerDropEnabled:             cfg.Network.PeerDropEnabled,
+		peerDropRounds:              cfg.Graph.Diameter * cfg.Graph.GradingLevels,
 		peerDropPhases: []algoPhase{
 			{common.ExPostMDAG, cfg.Synchronization.MDAGRoundTimeout},
 			{common.ExAnteMDAG, cfg.Synchronization.MDAGRoundTimeout},
@@ -360,7 +358,7 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		payloadCopy := append([]byte(nil), data...)
 		m := &pproto.ProtocolMessage{
 			Payload:     payloadCopy,
-			MessageData: n.newMessageData(uuid.New().String(), false),
+			MessageData: n.newMessageData(),
 		}
 
 		signature, err := n.signProtoMessage(m)
@@ -528,7 +526,7 @@ func (n *P2PNode) sendDropMessage(peerID peer.ID) {
 	}
 
 	msg := &pproto.GraphDrop{
-		MessageData: n.newMessageData(uuid.New().String(), false),
+		MessageData: n.newMessageData(),
 	}
 
 	signature, err := n.signProtoMessage(msg)
@@ -577,7 +575,7 @@ func (n *P2PNode) sendProposalsToUnsent(round int) {
 		}
 
 		msg := &pproto.GraphProposal{
-			MessageData: n.newMessageData(uuid.New().String(), false),
+			MessageData: n.newMessageData(),
 			// round cannot be more than 2^31-1, disabling gosec for the linter to be happy
 			// nolint:gosec
 			Round: int32(round),
@@ -1010,7 +1008,7 @@ func (n *P2PNode) sendPeerDropMessage(peerID peer.ID) {
 	}
 
 	msg := &pproto.GraphDrop{
-		MessageData: n.newMessageData(uuid.New().String(), false),
+		MessageData: n.newMessageData(),
 	}
 
 	signature, err := n.signProtoMessage(msg)
