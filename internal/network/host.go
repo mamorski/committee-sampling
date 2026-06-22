@@ -78,6 +78,77 @@ type ByteStats struct {
 	Out int64
 }
 
+// AppByteStats holds cumulative app-layer byte counts for a protocol: Payload* is
+// the protocol's own message size (the bytes handed to/from the handler), Env* the
+// marshaled ProtocolMessage (payload + signature + MessageData). Counted at the
+// application boundary, parallel to the libp2p wire bytes from BandwidthCounter.
+type AppByteStats struct {
+	PayloadIn, PayloadOut int64
+	EnvIn, EnvOut         int64
+}
+
+// appByteCounts is the per-protocol accumulator. Counts use atomics so the send
+// fan-out and concurrent inbound stream handlers need no shared lock on the hot path.
+type appByteCounts struct {
+	payloadIn, payloadOut atomic.Int64
+	envIn, envOut         atomic.Int64
+}
+
+// appByteTracker accumulates app-layer byte counts keyed by protocol ID. The mutex
+// guards only first-seen map insertion; per-counter updates are lock-free atomics.
+type appByteTracker struct {
+	mu sync.RWMutex
+	m  map[string]*appByteCounts
+}
+
+func newAppByteTracker() *appByteTracker {
+	return &appByteTracker{m: make(map[string]*appByteCounts)}
+}
+
+func (t *appByteTracker) counts(pid string) *appByteCounts {
+	t.mu.RLock()
+	c := t.m[pid]
+	t.mu.RUnlock()
+	if c != nil {
+		return c
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c = t.m[pid]; c == nil {
+		c = &appByteCounts{}
+		t.m[pid] = c
+	}
+	return c
+}
+
+func (t *appByteTracker) addOut(pid string, payload, envelope int64) {
+	c := t.counts(pid)
+	c.payloadOut.Add(payload)
+	c.envOut.Add(envelope)
+}
+
+func (t *appByteTracker) addIn(pid string, payload, envelope int64) {
+	c := t.counts(pid)
+	c.payloadIn.Add(payload)
+	c.envIn.Add(envelope)
+}
+
+// snapshot returns the cumulative app-layer counts keyed by protocol ID.
+func (t *appByteTracker) snapshot() map[string]AppByteStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]AppByteStats, len(t.m))
+	for pid, c := range t.m {
+		out[pid] = AppByteStats{
+			PayloadIn:  c.payloadIn.Load(),
+			PayloadOut: c.payloadOut.Load(),
+			EnvIn:      c.envIn.Load(),
+			EnvOut:     c.envOut.Load(),
+		}
+	}
+	return out
+}
+
 type P2PNode struct {
 	host                        Host
 	ctx                         context.Context
@@ -88,6 +159,7 @@ type P2PNode struct {
 	mu                          sync.Mutex
 	key                         crypto.PrivKey
 	bwc                         *lp2pmetrics.BandwidthCounter
+	appBytes                    *appByteTracker
 	bwWG                        sync.WaitGroup
 	statsd                      *stats.Daemon
 	nodeID                      string
@@ -159,6 +231,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
 		key:                         priv,
 		bwc:                         bwc,
+		appBytes:                    newAppByteTracker(),
 		nodeID:                      h.ID().String(),
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
@@ -297,7 +370,12 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 		}
 
 		m.MessageData.Sign = signature
-		n.send(addrInfo, protocol.ID(protocolID), m)
+		// envelope = full marshaled ProtocolMessage (payload + signature + metadata);
+		// count both only on a successful send to align with the wire counter.
+		envSize := int64(proto.Size(m))
+		if n.send(addrInfo, protocol.ID(protocolID), m) {
+			n.appBytes.addOut(protocolID, int64(len(data)), envSize)
+		}
 	}
 }
 
@@ -347,6 +425,9 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 			}
 
 			from := s.Conn().RemotePeer()
+			// payload = the protocol's own message; envelope = full marshaled
+			// ProtocolMessage read off the stream (buf).
+			n.appBytes.addIn(string(s.Protocol()), int64(len(data.Payload)), int64(len(buf)))
 			payload := append([]byte(nil), data.Payload...)
 			if err := handler(from, payload); err != nil {
 				n.logger.Error("Failed to handle message", zap.Error(err))
@@ -373,6 +454,12 @@ func (n *P2PNode) bytesByProtocol() map[string]ByteStats {
 func (n *P2PNode) bytesTotal() (in, out int64) {
 	s := n.bwc.GetBandwidthTotals()
 	return s.TotalIn, s.TotalOut
+}
+
+// appBytesByProtocol returns cumulative app-layer payload/envelope bytes keyed by
+// protocol-ID string (same key space as bytesByProtocol's wire counts).
+func (n *P2PNode) appBytesByProtocol() map[string]AppByteStats {
+	return n.appBytes.snapshot()
 }
 
 func generateSelectedTarget(limit int) (int, error) {

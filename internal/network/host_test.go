@@ -139,6 +139,7 @@ func (suite *HostTestSuite) SetupTest() {
 		maxOutbound: 5,
 		key:         suite.testPrivKey,
 		neighbors:   make(map[peer.ID]peer.AddrInfo),
+		appBytes:    newAppByteTracker(),
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }

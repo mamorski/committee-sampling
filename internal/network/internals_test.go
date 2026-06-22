@@ -56,6 +56,7 @@ func (suite *InternalsTestSuite) SetupTest() {
 		logger:    suite.logger,
 		key:       suite.testPrivKey,
 		neighbors: make(map[peer.ID]peer.AddrInfo),
+		appBytes:  newAppByteTracker(),
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }

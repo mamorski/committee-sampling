@@ -32,13 +32,38 @@ type Synchronizer interface {
 }
 
 // ByteSummary is the end-of-run application-vs-overhead byte breakdown for a node.
+// App*/Overhead*/Total* are libp2p wire bytes (App* = app-protocol streams,
+// Overhead* = discovery/connection protocols). Payload*/Envelope* are summed across
+// app-protocol streams only: Payload* is the protocol's own message size, Envelope*
+// the marshaled ProtocolMessage (payload + signature + MessageData). Thus
+// Envelope-Payload = app wrapping overhead, App(wire)-Envelope = libp2p stream framing.
 type ByteSummary struct {
-	AppIn       int64
-	AppOut      int64
-	OverheadIn  int64
-	OverheadOut int64
-	TotalIn     int64
-	TotalOut    int64
+	AppIn       int64 `json:"app_in"`
+	AppOut      int64 `json:"app_out"`
+	OverheadIn  int64 `json:"overhead_in"`
+	OverheadOut int64 `json:"overhead_out"`
+	TotalIn     int64 `json:"total_in"`
+	TotalOut    int64 `json:"total_out"`
+	PayloadIn   int64 `json:"payload_in"`
+	PayloadOut  int64 `json:"payload_out"`
+	EnvelopeIn  int64 `json:"envelope_in"`
+	EnvelopeOut int64 `json:"envelope_out"`
+}
+
+// RoundByteDelta carries one protocol's byte deltas accrued within a round window.
+// Wire* are libp2p BandwidthCounter deltas; Env* are marshaled ProtocolMessage sizes;
+// Payload* are the protocol's own message sizes. Per direction Payload <= Env <= Wire.
+type RoundByteDelta struct {
+	WireIn, WireOut       int64
+	EnvIn, EnvOut         int64
+	PayloadIn, PayloadOut int64
+}
+
+// ProtoByteTotals is the cumulative wire/envelope/payload totals for one protocol.
+type ProtoByteTotals struct {
+	WireIn, WireOut       int64
+	EnvIn, EnvOut         int64
+	PayloadIn, PayloadOut int64
 }
 
 // StatsRecorder is the sink every protocol/component reports statistics to. The
@@ -52,9 +77,9 @@ type StatsRecorder interface {
 	// RecordValid counts a message that passed all validation for (proto, step, round).
 	RecordValid(proto string, step Step, round int)
 	// RecordBytesPerRound records the per-protocol byte delta accrued in a round window.
-	RecordBytesPerRound(step Step, round int, protocolID string, inDelta, outDelta int64)
+	RecordBytesPerRound(step Step, round int, protocolID string, d RoundByteDelta)
 	// RecordBytesFinal records the end-of-run byte totals and per-protocol breakdown.
-	RecordBytesFinal(summary ByteSummary, perProtocol map[string][2]int64)
+	RecordBytesFinal(summary ByteSummary, perProtocol map[string]ProtoByteTotals)
 	// RecordNeighbors records this node's final neighbor list.
 	RecordNeighbors(neighbors []string)
 	// RecordCommittee records the elected committee.
@@ -70,8 +95,8 @@ type NoopRecorder struct{}
 
 func (NoopRecorder) RecordReceived(string, Step, int, time.Time)        {}
 func (NoopRecorder) RecordValid(string, Step, int)                      {}
-func (NoopRecorder) RecordBytesPerRound(Step, int, string, int64, int64) {}
-func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string][2]int64)  {}
+func (NoopRecorder) RecordBytesPerRound(Step, int, string, RoundByteDelta) {}
+func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string]ProtoByteTotals) {}
 func (NoopRecorder) RecordNeighbors([]string)                          {}
 func (NoopRecorder) RecordCommittee([]*CommitteeOutput)                {}
 func (NoopRecorder) RecordPeerDrop(string, string, int)                {}

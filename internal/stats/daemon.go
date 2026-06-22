@@ -56,9 +56,9 @@ type event struct {
 	round    int
 	arrival  time.Time
 	pid      string
-	in, out  int64
+	delta    common.RoundByteDelta
 	summary  common.ByteSummary
-	perProto map[string][2]int64
+	perProto map[string]common.ProtoByteTotals
 	strs     []string
 	members  []CommitteeMember
 	peerID   string
@@ -175,11 +175,11 @@ func (d *Daemon) RecordValid(proto string, step common.Step, round int) {
 	d.emit(event{kind: evtValid, proto: proto, step: step, round: round})
 }
 
-func (d *Daemon) RecordBytesPerRound(step common.Step, round int, protocolID string, inDelta, outDelta int64) {
-	d.emit(event{kind: evtBytesRound, step: step, round: round, pid: protocolID, in: inDelta, out: outDelta})
+func (d *Daemon) RecordBytesPerRound(step common.Step, round int, protocolID string, delta common.RoundByteDelta) {
+	d.emit(event{kind: evtBytesRound, step: step, round: round, pid: protocolID, delta: delta})
 }
 
-func (d *Daemon) RecordBytesFinal(summary common.ByteSummary, perProtocol map[string][2]int64) {
+func (d *Daemon) RecordBytesFinal(summary common.ByteSummary, perProtocol map[string]common.ProtoByteTotals) {
 	d.emit(event{kind: evtBytesFinal, summary: summary, perProto: perProtocol})
 }
 
@@ -269,13 +269,19 @@ func (d *Daemon) handle(ev event) {
 	case evtBytesRound:
 		d.bytes.PerRound = append(d.bytes.PerRound, ByteRound{
 			Step: string(ev.step), Round: ev.round, ProtocolID: ev.pid,
-			InDelta: ev.in, OutDelta: ev.out,
+			InDelta: ev.delta.WireIn, OutDelta: ev.delta.WireOut,
+			PayloadInDelta: ev.delta.PayloadIn, PayloadOutDelta: ev.delta.PayloadOut,
+			EnvelopeInDelta: ev.delta.EnvIn, EnvelopeOutDelta: ev.delta.EnvOut,
 		})
 
 	case evtBytesFinal:
 		d.bytes.Summary = ev.summary
 		for pid, c := range ev.perProto {
-			d.bytes.ByProtocol[pid] = ByteCounts{In: c[0], Out: c[1]}
+			d.bytes.ByProtocol[pid] = ByteCounts{
+				In: c.WireIn, Out: c.WireOut,
+				PayloadIn: c.PayloadIn, PayloadOut: c.PayloadOut,
+				EnvelopeIn: c.EnvIn, EnvelopeOut: c.EnvOut,
+			}
 		}
 
 	case evtNeighbors:
