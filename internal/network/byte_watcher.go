@@ -67,6 +67,7 @@ func (n *P2PNode) watchStep(step common.Step, ticks int) {
 		return
 	}
 	prev := n.bytesByProtocol()
+	prevApp := n.appBytesByProtocol()
 
 	// Round r spans [tick(r), tick(r+1)); the final tick closes the last round.
 	for r := 0; r < ticks-1; r++ {
@@ -74,8 +75,10 @@ func (n *P2PNode) watchStep(step common.Step, ticks int) {
 			return
 		}
 		cur := n.bytesByProtocol()
-		n.logDelta(step, r, prev, cur)
+		curApp := n.appBytesByProtocol()
+		n.logDelta(step, r, prev, cur, prevApp, curApp)
 		prev = cur
+		prevApp = curApp
 	}
 }
 
@@ -96,8 +99,8 @@ func (n *P2PNode) waitForTick(step common.Step, round int) bool {
 	}
 }
 
-func (n *P2PNode) logDelta(step common.Step, round int, prev, cur map[string]ByteStats) {
-	// union of all protocol IDs seen in either snapshot
+func (n *P2PNode) logDelta(step common.Step, round int, prev, cur map[string]ByteStats, prevApp, curApp map[string]AppByteStats) {
+	// union of all protocol IDs seen in any snapshot
 	seen := make(map[string]struct{}, len(cur))
 	for pid := range prev {
 		seen[pid] = struct{}{}
@@ -105,15 +108,24 @@ func (n *P2PNode) logDelta(step common.Step, round int, prev, cur map[string]Byt
 	for pid := range cur {
 		seen[pid] = struct{}{}
 	}
+	for pid := range curApp {
+		seen[pid] = struct{}{}
+	}
 
 	for pid := range seen {
-		inDelta := cur[pid].In - prev[pid].In
-		outDelta := cur[pid].Out - prev[pid].Out
-		if inDelta == 0 && outDelta == 0 {
+		d := common.RoundByteDelta{
+			WireIn:     cur[pid].In - prev[pid].In,
+			WireOut:    cur[pid].Out - prev[pid].Out,
+			PayloadIn:  curApp[pid].PayloadIn - prevApp[pid].PayloadIn,
+			PayloadOut: curApp[pid].PayloadOut - prevApp[pid].PayloadOut,
+			EnvIn:      curApp[pid].EnvIn - prevApp[pid].EnvIn,
+			EnvOut:     curApp[pid].EnvOut - prevApp[pid].EnvOut,
+		}
+		if d == (common.RoundByteDelta{}) {
 			continue
 		}
 
-		n.statsd.RecordBytesPerRound(step, round, pid, inDelta, outDelta)
+		n.statsd.RecordBytesPerRound(step, round, pid, d)
 	}
 }
 
@@ -124,19 +136,30 @@ func (n *P2PNode) recordFinalBytes() {
 		return
 	}
 	all := n.bytesByProtocol()
+	app := n.appBytesByProtocol()
 	totalIn, totalOut := n.bytesTotal()
 
-	perProto := make(map[string][2]int64, len(all))
+	perProto := make(map[string]common.ProtoByteTotals, len(all))
 	var appIn, appOut, overheadIn, overheadOut int64
+	var payloadIn, payloadOut, envIn, envOut int64
 	for pid, s := range all {
+		a := app[pid] // zero value if this protocol carried no app payload
 		if isAppProtocol(pid) {
 			appIn += s.In
 			appOut += s.Out
+			payloadIn += a.PayloadIn
+			payloadOut += a.PayloadOut
+			envIn += a.EnvIn
+			envOut += a.EnvOut
 		} else {
 			overheadIn += s.In
 			overheadOut += s.Out
 		}
-		perProto[pid] = [2]int64{s.In, s.Out}
+		perProto[pid] = common.ProtoByteTotals{
+			WireIn: s.In, WireOut: s.Out,
+			PayloadIn: a.PayloadIn, PayloadOut: a.PayloadOut,
+			EnvIn: a.EnvIn, EnvOut: a.EnvOut,
+		}
 	}
 
 	n.statsd.RecordBytesFinal(common.ByteSummary{
@@ -146,6 +169,10 @@ func (n *P2PNode) recordFinalBytes() {
 		OverheadOut: overheadOut,
 		TotalIn:     totalIn,
 		TotalOut:    totalOut,
+		PayloadIn:   payloadIn,
+		PayloadOut:  payloadOut,
+		EnvelopeIn:  envIn,
+		EnvelopeOut: envOut,
 	}, perProto)
 }
 

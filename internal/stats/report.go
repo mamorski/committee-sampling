@@ -53,19 +53,30 @@ type ByteReport struct {
 	PerRound   []ByteRound           `json:"per_round"`
 }
 
-// ByteCounts is cumulative in/out bytes for one protocol.
+// ByteCounts is cumulative in/out bytes for one protocol. In/Out are libp2p wire
+// bytes; Payload*/Envelope* decompose them (Payload = protocol message size,
+// Envelope = marshaled ProtocolMessage with signature + metadata).
 type ByteCounts struct {
-	In  int64 `json:"in"`
-	Out int64 `json:"out"`
+	In          int64 `json:"in"`
+	Out         int64 `json:"out"`
+	PayloadIn   int64 `json:"payload_in"`
+	PayloadOut  int64 `json:"payload_out"`
+	EnvelopeIn  int64 `json:"envelope_in"`
+	EnvelopeOut int64 `json:"envelope_out"`
 }
 
 // ByteRound is the per-protocol byte delta accrued within one round window.
+// InDelta/OutDelta are wire bytes; Payload*/Envelope* decompose them.
 type ByteRound struct {
-	Step       string `json:"step"`
-	Round      int    `json:"round"`
-	ProtocolID string `json:"protocol_id"`
-	InDelta    int64  `json:"in_delta"`
-	OutDelta   int64  `json:"out_delta"`
+	Step             string `json:"step"`
+	Round            int    `json:"round"`
+	ProtocolID       string `json:"protocol_id"`
+	InDelta          int64  `json:"in_delta"`
+	OutDelta         int64  `json:"out_delta"`
+	PayloadInDelta   int64  `json:"payload_in_delta"`
+	PayloadOutDelta  int64  `json:"payload_out_delta"`
+	EnvelopeInDelta  int64  `json:"envelope_in_delta"`
+	EnvelopeOutDelta int64  `json:"envelope_out_delta"`
 }
 
 // CommitteeMember is one elected committee member.
