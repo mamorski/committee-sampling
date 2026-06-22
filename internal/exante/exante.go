@@ -459,15 +459,18 @@ func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 		)
 		return false
 	}
+	// Convert once: this is O(path length) and was previously recomputed for both
+	// the value check and the merkle-path check below.
+	mp := convertTimestampToBytes(msg)
 	if !isValueInState(
-		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), convertTimestampToBytes(msg)[0],
+		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), mp[0],
 	) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-	if !e.validateMerklePath(convertTimestampToBytes(msg), r) {
+	if !e.validateMerklePath(mp, r) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
@@ -536,9 +539,11 @@ func (e *ExAnte) processMessage(
 		aux.AuxKey = auxKey
 		pMsg.Aux = aux
 		pMsg.MerklePath = make([]*pb.State, r+1)
+		// Convert once instead of rebuilding the whole [][][]byte each iteration (was O(r²)).
+		mp := convertTimestampToBytes(msg)
 		for i := 0; i < r; i++ {
 			state := getExAnteState()
-			state.Row = convertTimestampToBytes(msg)[i]
+			state.Row = mp[i]
 			pMsg.MerklePath[i] = state
 		}
 		lastState := getExAnteState()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	stdsync "sync" // aliased: the New() param `sync common.Synchronizer` shadows the package name
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/exante"
@@ -101,6 +102,14 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		return true
 	}
 
+	// gradeCache memoizes computeGrade for the run. The same member's φ(vrf) is
+	// gossiped and re-graded hundreds of thousands of times, and grading is pure in
+	// φ(vrf) given the run-fixed parameters and weight (big.Int/big.Float math, no
+	// crypto but allocation-heavy). Caching by those inputs collapses the redundant
+	// work to ~one compute per distinct member. The closure is shared by both ExPost
+	// and ExAnte; sync.Map fits the write-once / read-many / stable-key pattern.
+	var gradeCache stdsync.Map // map[string]int
+
 	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf), ϕ(vrf), π(vrf) ), Wi),
 	// parameterized by a "weight disagreement" bound ∆W computes gi ← d + 1 − (Wi − n · 2^λ/ ϕ(vrf)+1) · 1 / ∆W
 	// and returns grade min {d + 1, ⌊g⌋}.
@@ -108,6 +117,15 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		if auxKey == nil {
 			logger.Warn("Grade function received nil auxKey")
 			return 0
+		}
+
+		// Grade depends only on φ(vrf) among per-message inputs: the grading params
+		// are run-fixed config and weight is the run-fixed cfg.Committee.TotalW (this
+		// closure is only ever called with that single value), so φ(vrf) alone keys
+		// the cache.
+		cacheKey := string(auxKey.PhiVrf)
+		if v, ok := gradeCache.Load(cacheKey); ok {
+			return v.(int)
 		}
 
 		g, err := computeGrade(
@@ -123,7 +141,8 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			logger.Warn(
 				"Failed to compute grade", zap.String("sid", sid), zap.Error(err),
 			)
-			return 0 // Return 0 if there's an error in grade calculation
+			gradeCache.Store(cacheKey, 0) // memoize the rejection too
+			return 0                      // Return 0 if there's an error in grade calculation
 		}
 
 		if logger.Core().Enabled(zap.DebugLevel) {
@@ -137,6 +156,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			)
 		}
 
+		gradeCache.Store(cacheKey, g)
 		return g
 	}
 
