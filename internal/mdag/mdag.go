@@ -337,11 +337,23 @@ func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
 	return nil
 }
 
+// oracleBufPool reuses concat buffers for Oracle, which is called per merkle layer
+// per gossiped message. The previous per-call bytes.Buffer allocation was pure GC
+// churn. m.oracle copies its input into a fresh digest slice, so the buffer can be
+// returned to the pool immediately after.
+var oracleBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
 func (m *MDAG) Oracle(h ...[]byte) []byte {
-	var buffer bytes.Buffer
+	buf := oracleBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
 	for _, v := range h {
-		buffer.Write(v)
+		buf.Write(v)
 	}
 
-	return m.oracle(buffer.Bytes())
+	out := m.oracle(buf.Bytes())
+	oracleBufPool.Put(buf)
+
+	return out
 }
