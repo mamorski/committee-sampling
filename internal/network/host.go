@@ -369,9 +369,9 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 
 		m.MessageData.Sign = signature
 		// envelope = full marshaled ProtocolMessage (payload + signature + metadata);
-		// count both only on a successful send to align with the wire counter.
-		envSize := int64(proto.Size(m))
-		if n.send(addrInfo, protocol.ID(protocolID), m) {
+		// count both only on a successful send to align with the wire counter;
+		// envSize is the marshaled envelope length returned by send (no re-marshal).
+		if envSize, ok := n.send(addrInfo, protocol.ID(protocolID), m); ok {
 			n.appBytes.addOut(protocolID, int64(len(data)), envSize)
 		}
 	}
@@ -537,7 +537,7 @@ func (n *P2PNode) sendDropMessage(peerID peer.ID) {
 
 	msg.MessageData.Sign = signature
 
-	if ok := n.send(addrInfo, protocol.ID(graphDrop+"/"+n.sid), msg); !ok {
+	if _, ok := n.send(addrInfo, protocol.ID(graphDrop+"/"+n.sid), msg); !ok {
 		n.logger.Warn("Failed to send graph drop", zap.String("to", peerID.String()))
 	} else {
 		n.logger.Debug("Sent graph drop", zap.String("to", peerID.String()))
@@ -589,7 +589,7 @@ func (n *P2PNode) sendProposalsToUnsent(round int) {
 
 		msg.MessageData.Sign = signature
 
-		if ok := n.send(candidate, protocol.ID(graphProposal+"/"+n.sid), msg); ok {
+		if _, ok := n.send(candidate, protocol.ID(graphProposal+"/"+n.sid), msg); ok {
 			n.sentProposalsTo[candidate.ID] = true
 			sent++
 			n.logger.Debug("Sent graph proposal", zap.String("to", candidate.ID.String()), zap.Int("round", round))
@@ -1019,7 +1019,7 @@ func (n *P2PNode) sendPeerDropMessage(peerID peer.ID) {
 
 	msg.MessageData.Sign = signature
 
-	if ok := n.send(addrInfo, protocol.ID(peerDrop+"/"+n.sid), msg); !ok {
+	if _, ok := n.send(addrInfo, protocol.ID(peerDrop+"/"+n.sid), msg); !ok {
 		n.logger.Warn("Failed to send peer drop notification", zap.String("to", peerID.String()))
 	} else {
 		n.logger.Debug("Sent peer drop notification", zap.String("to", peerID.String()))

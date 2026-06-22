@@ -113,19 +113,22 @@ func (n *P2PNode) newMessageData() *pproto.MessageData {
 	}
 }
 
-func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
+// send marshals and writes data to peer over protocol p. It returns the number of
+// bytes written (the marshaled envelope size) and true on success, or 0 and false
+// on any failure.
+func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) (int64, bool) {
 	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
 	if err != nil {
 		// Attempt to establish a connection and retry once
 		if errConn := n.host.Connect(context.Background(), addrInfo); errConn != nil {
 			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
-			return false
+			return 0, false
 		}
 
 		s, err = n.host.NewStream(context.Background(), addrInfo.ID, p)
 		if err != nil {
 			n.logger.Error("Failed to create stream", zap.Error(err))
-			return false
+			return 0, false
 		}
 	}
 
@@ -139,17 +142,17 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 		n.logger.Error("Failed to marshal proto message", zap.Error(err))
 		_ = s.Reset()
 		// no connectivity check for marshal failure
-		return false
+		return 0, false
 	}
 
 	_, err = s.Write(buf)
 	if err != nil {
 		n.logger.Error("Failed to write message to stream", zap.Error(err))
 		_ = s.Reset()
-		return false
+		return 0, false
 	}
 
-	return true
+	return int64(len(buf)), true
 }
 
 func (n *P2PNode) remainingOutboundCapacity() int {

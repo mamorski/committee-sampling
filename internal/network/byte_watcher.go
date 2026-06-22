@@ -147,14 +147,16 @@ func (n *P2PNode) recordFinalBytes() {
 		if isAppProtocol(pid) {
 			appIn += s.In
 			appOut += s.Out
-			payloadIn += a.PayloadIn
-			payloadOut += a.PayloadOut
-			envIn += a.EnvIn
-			envOut += a.EnvOut
 		} else {
 			overheadIn += s.In
 			overheadOut += s.Out
 		}
+		// payload/envelope are zero for overhead protocols (never tracked), so they
+		// can be summed unconditionally without the isAppProtocol guard.
+		payloadIn += a.PayloadIn
+		payloadOut += a.PayloadOut
+		envIn += a.EnvIn
+		envOut += a.EnvOut
 		perProto[pid] = common.ProtoByteTotals{
 			WireIn: s.In, WireOut: s.Out,
 			PayloadIn: a.PayloadIn, PayloadOut: a.PayloadOut,
