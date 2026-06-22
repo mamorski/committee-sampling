@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -99,8 +98,7 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerID peer.ID, pubK
 }
 
 // newMessageData helper method - generate message data shared between all node's p2p protocols
-// messageId: unique for requests, copied from request for responses
-func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageData {
+func (n *P2PNode) newMessageData() *pproto.MessageData {
 	// Add proto bin data for a message author public key
 	// this is useful for authenticating messages forwarded by a node authored by another node
 	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
@@ -110,12 +108,8 @@ func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageD
 	}
 
 	return &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        n.host.ID().String(),
-		NodePubKey:    nodePubKey,
-		Timestamp:     time.Now().UTC().Unix(),
-		Id:            messageID,
-		Gossip:        gossip,
+		NodeId:     n.host.ID().String(),
+		NodePubKey: nodePubKey,
 	}
 }
 

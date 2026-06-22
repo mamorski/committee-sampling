@@ -51,12 +51,9 @@ func TestEnvelopeExceedsPayload(t *testing.T) {
 	m := &pproto.ProtocolMessage{
 		Payload: payload,
 		MessageData: &pproto.MessageData{
-			ClientVersion: "go-p2p-node/0.0.1",
-			Timestamp:     1_700_000_000,
-			Id:            "f47ac10b-58cc-4372-a567-0e02b2c3d479", // uuid-sized
-			NodeId:        "12D3KooWBmwXbxv2cBmDxNXAyqgr1WvVZc8oWfhT1Qof9aaa",
-			NodePubKey:    make([]byte, 36),
-			Sign:          make([]byte, 64),
+			NodeId:     "12D3KooWBmwXbxv2cBmDxNXAyqgr1WvVZc8oWfhT1Qof9aaa",
+			NodePubKey: make([]byte, 36),
+			Sign:       make([]byte, 64),
 		},
 	}
 

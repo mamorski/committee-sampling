@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -414,7 +413,7 @@ func (suite *HostTestSuite) TestGraphDropHandler() {
 	mockStream.On("Conn").Return(mockConn)
 
 	dropMsg := &pproto.GraphDrop{
-		MessageData: suite.node.newMessageData(uuid.New().String(), false),
+		MessageData: suite.node.newMessageData(),
 	}
 
 	signature, err := suite.node.signProtoMessage(dropMsg)
