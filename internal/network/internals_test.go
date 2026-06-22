@@ -328,7 +328,7 @@ func (suite *InternalsTestSuite) TestSendSuccess() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	result := suite.node.send(addrInfo, "test-protocol", testMessage)
+	_, result := suite.node.send(addrInfo, "test-protocol", testMessage)
 	suite.True(result)
 
 	suite.mockHost.AssertExpectations(suite.T())
@@ -351,7 +351,7 @@ func (suite *InternalsTestSuite) TestSendConnectionFailure() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	result := suite.node.send(addrInfo, "test-protocol", testMessage)
+	_, result := suite.node.send(addrInfo, "test-protocol", testMessage)
 	suite.False(result)
 
 	suite.mockHost.AssertExpectations(suite.T())
@@ -373,7 +373,7 @@ func (suite *InternalsTestSuite) TestSendStreamCreationFailure() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	result := suite.node.send(addrInfo, "test-protocol", testMessage)
+	_, result := suite.node.send(addrInfo, "test-protocol", testMessage)
 	suite.False(result)
 
 	suite.mockHost.AssertExpectations(suite.T())
@@ -398,7 +398,7 @@ func (suite *InternalsTestSuite) TestSendMarshalFailure() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	result := suite.node.send(addrInfo, "test-protocol", testMessage)
+	_, result := suite.node.send(addrInfo, "test-protocol", testMessage)
 	suite.True(result) // Should succeed with valid message
 
 	suite.mockHost.AssertExpectations(suite.T())
@@ -425,7 +425,7 @@ func (suite *InternalsTestSuite) TestSendWriteFailure() {
 		Addrs: []multiaddr.Multiaddr{addr},
 	}
 
-	result := suite.node.send(addrInfo, "test-protocol", testMessage)
+	_, result := suite.node.send(addrInfo, "test-protocol", testMessage)
 	suite.False(result)
 
 	suite.mockHost.AssertExpectations(suite.T())
