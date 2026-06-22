@@ -120,6 +120,7 @@ func (suite *ExPostTestSuite) SetupTest() {
 		D:            5,
 		lambda:       32,
 		gradeFunc:    mockGradeFunc,
+		stats:        common.NoopRecorder{},
 		messages:     make(map[int][]*pb.TimestampMessage, 3*5),
 		sid:          suite.sid,
 		vk:           suite.vk,
@@ -127,9 +128,6 @@ func (suite *ExPostTestSuite) SetupTest() {
 		protocolID:   "/expost/1.0.0/" + suite.sid,
 		nodeID:       "test-node",
 		R:            3 * 5,
-
-		validMessages: make([]int, 15),
-		totalMessages: make([]int, 15),
 	}
 }
 
@@ -155,7 +153,7 @@ func (suite *ExPostTestSuite) TestNew() {
 
 	// Call the New function
 	expost := New(
-		mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond), testDiameter, testD, testLambda, testGradeFunc, testLogger,
+		mockNet, mockMDAG, testSid, testVk, newDelayedSync(50*time.Millisecond), testDiameter, testD, testLambda, testGradeFunc, testLogger, nil,
 	)
 
 	// Verify the instance is created correctly
@@ -205,7 +203,7 @@ func (suite *ExPostTestSuite) TestNewProtocolIDGeneration() {
 	collector := &CollectorMock{}
 	collector.On("AddCustomMetric", mock.Anything).Return(nil)
 
-	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger)
+	expost := New(mockNet, mockMDAG, testSid, testVk, newDelayedSync(10*time.Millisecond), 3, 5, 32, mockGradeFunc, testLogger, nil)
 
 	suite.NotNil(expost)
 	suite.Equal(testSid, expost.sid)

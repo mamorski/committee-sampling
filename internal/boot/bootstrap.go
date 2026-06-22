@@ -43,10 +43,14 @@ type Bootstrap struct {
 	Network    network.Network
 	Logger     *zap.Logger
 	Context    context.Context
+	Stats      common.StatsRecorder
 }
 
 //nolint:funlen
-func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer) (*Bootstrap, error) {
+func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer, statsRec common.StatsRecorder) (*Bootstrap, error) {
+	if statsRec == nil {
+		statsRec = common.NoopRecorder{}
+	}
 
 	vdFunc := vdf.New(logger)
 	vrFunc := vrf.New(logger)
@@ -145,6 +149,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		logger,
 		common.ExAnteMDAG,
 		"exanteMDAG",
+		statsRec,
 	)
 
 	mdagExPost := mdag.New(
@@ -156,9 +161,10 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		logger,
 		common.ExPostMDAG,
 		"expostMDAG",
+		statsRec,
 	)
 
-	exAnte := exante.New(node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger)
+	exAnte := exante.New(node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger, statsRec)
 
 	exPost := expost.New(
 		node,
@@ -171,6 +177,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		cfg.Committee.Lambda,
 		gradeF,
 		logger,
+		statsRec,
 	)
 
 	rp := resourceproof.New(logger)
@@ -193,6 +200,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		Config:     cfg,
 		Logger:     logger,
 		Context:    ctx,
+		Stats:      statsRec,
 	}, nil
 
 }
@@ -211,13 +219,13 @@ func (b *Bootstrap) Run() error {
 	}
 
 	b.Logger.Info("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
+	b.Stats.RecordCommittee(committee)
 	for _, member := range committee {
 		fmt.Printf("ID:    %s\n", member.ID)
 		fmt.Printf("VK:    %s\n", member.VK)
 		fmt.Printf("Grade: %d\n", member.Grade)
 		fmt.Println("--------------------------------")
 	}
-	b.Logger.Info("Final Neighbors", zap.Strings("neighbors", b.Network.GetNeighbors()))
 
 	return nil
 }

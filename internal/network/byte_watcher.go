@@ -113,26 +113,20 @@ func (n *P2PNode) logDelta(step common.Step, round int, prev, cur map[string]Byt
 			continue
 		}
 
-		n.logger.Info("bytes_per_round",
-			zap.String("step", string(step)),
-			zap.Int("round", round),
-			zap.String("protocol_id", pid),
-			zap.Int64("in_delta", inDelta),
-			zap.Int64("out_delta", outDelta),
-			zap.String("node_id", n.nodeID),
-			zap.String("sid", n.sid),
-		)
+		n.statsd.RecordBytesPerRound(step, round, pid, inDelta, outDelta)
 	}
 }
 
-// logFinalBreakdown logs the full end-of-run byte breakdown (called from Close).
-func (n *P2PNode) logFinalBreakdown() {
-	if n.bwc == nil {
+// recordFinalBytes feeds the end-of-run byte breakdown into the stats daemon
+// (called from Close, after the byte watchers have stopped).
+func (n *P2PNode) recordFinalBytes() {
+	if n.bwc == nil || n.statsd == nil {
 		return
 	}
 	all := n.bytesByProtocol()
 	totalIn, totalOut := n.bytesTotal()
 
+	perProto := make(map[string][2]int64, len(all))
 	var appIn, appOut, overheadIn, overheadOut int64
 	for pid, s := range all {
 		if isAppProtocol(pid) {
@@ -142,25 +136,16 @@ func (n *P2PNode) logFinalBreakdown() {
 			overheadIn += s.In
 			overheadOut += s.Out
 		}
-
-		n.logger.Info("bytes_by_protocol_final",
-			zap.String("protocol_id", pid),
-			zap.Int64("total_in", s.In),
-			zap.Int64("total_out", s.Out),
-			zap.String("node_id", n.nodeID),
-			zap.String("sid", n.sid),
-		)
+		perProto[pid] = [2]int64{s.In, s.Out}
 	}
 
-	n.logger.Info("bytes_summary_final",
-		zap.Int64("app_in", appIn),
-		zap.Int64("app_out", appOut),
-		zap.Int64("libp2p_overhead_in", overheadIn),
-		zap.Int64("libp2p_overhead_out", overheadOut),
-		zap.Int64("total_in", totalIn),
-		zap.Int64("total_out", totalOut),
-		zap.String("node_id", n.nodeID),
-		zap.String("sid", n.sid),
-	)
+	n.statsd.RecordBytesFinal(common.ByteSummary{
+		AppIn:       appIn,
+		AppOut:      appOut,
+		OverheadIn:  overheadIn,
+		OverheadOut: overheadOut,
+		TotalIn:     totalIn,
+		TotalOut:    totalOut,
+	}, perProto)
 }
 

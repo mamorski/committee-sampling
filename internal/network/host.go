@@ -25,6 +25,7 @@ import (
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/network/discovery"
+	"github.com/mamorski/committee-sampling/internal/stats"
 	"github.com/mamorski/committee-sampling/pkg/config"
 	pproto "github.com/mamorski/committee-sampling/pkg/proto"
 )
@@ -88,6 +89,7 @@ type P2PNode struct {
 	key                         crypto.PrivKey
 	bwc                         *lp2pmetrics.BandwidthCounter
 	bwWG                        sync.WaitGroup
+	statsd                      *stats.Daemon
 	nodeID                      string
 	neighbors                   map[peer.ID]peer.AddrInfo
 	potentialNeighbors          sync.Map
@@ -144,12 +146,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	d := discovery.NewDHTDiscovery(h, cfg.Network.DiscoveryConfig, logger)
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
+	statsd := stats.New(cfg, logger, synchronizer, h.ID().String(), sid)
+
 	node := &P2PNode{
 		host:                        h,
 		ctx:                         c,
 		cancel:                      cancel,
 		maxOutbound:                 cfg.Network.MaxOutboundDegree,
 		discovery:                   d,
+		statsd:                      statsd,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
 		key:                         priv,
@@ -208,6 +213,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		_ = node.Close()
 		return nil, fmt.Errorf("failed to start d: %w", err)
 	}
+	// Start the stats daemon before the byte watcher so its tick watchers are
+	// running by the time any round fires.
+	statsd.Start()
+
 	go node.graphBuilder()
 	// Synchronous: registers all bwWG.Add before New returns, so a fast Close
 	// cannot Wait() on a zero counter while watcher goroutines spawn later.
@@ -216,10 +225,23 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	return node, nil
 }
 
+// Stats returns the node's statistics recorder so the bootstrap and protocols
+// can report into the same daemon.
+func (n *P2PNode) Stats() common.StatsRecorder {
+	return n.statsd
+}
+
 func (n *P2PNode) Close() error {
 	n.cancel()
 	n.bwWG.Wait()
-	n.logFinalBreakdown()
+	// Feed the final byte breakdown into the daemon, then close it so it drains
+	// every queued event and writes the report before the host goes away.
+	n.recordFinalBytes()
+	if n.statsd != nil {
+		if err := n.statsd.Close(); err != nil {
+			n.logger.Error("Failed to close stats daemon", zap.Error(err))
+		}
+	}
 	if err := n.discovery.Stop(); err != nil {
 		return fmt.Errorf("failed to stop discovery: %w", err)
 	}
@@ -578,6 +600,7 @@ func (n *P2PNode) graphBuilder() {
 	n.logger.Info(
 		"Final neighbor list", zap.Int("count", len(neighbors)), zap.Strings("neighbors", neighbors),
 	)
+	n.statsd.RecordNeighbors(neighbors)
 
 	if n.peerDropEnabled {
 		go n.simulatePeerDrop()
@@ -737,6 +760,7 @@ func (n *P2PNode) simulatePeerDrop() {
 		zap.String("phase", string(phase.step)),
 		zap.Int("round", round),
 	)
+	n.statsd.RecordPeerDrop(victim.String(), string(phase.step), round)
 	n.sendPeerDropMessage(victim)
 }
 
