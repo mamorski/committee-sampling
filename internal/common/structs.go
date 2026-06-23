@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/base64"
-	"strings"
 	"sync"
 
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -62,26 +61,16 @@ type CommitteeOutput struct {
 	Grade int
 }
 
+type committeeKey struct {
+	vk string
+	ch string
+}
+
 // Committee holds the committee members' information.
-// It maps a flattened key (vkStr + "\x00" + chStr) to their outputs (O).
 type Committee struct {
 	mu        sync.RWMutex // Protects concurrent access to committee map
-	committee map[string]O
+	committee map[committeeKey]O
 	len       int
-}
-
-// makeKey creates a flattened key from vk and ch strings.
-func makeKey(vkStr, chStr string) string {
-	return vkStr + "\x00" + chStr
-}
-
-// splitKey splits a flattened key back into vk and ch strings.
-func splitKey(key string) (vkStr, chStr string) {
-	parts := strings.SplitN(key, "\x00", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return key, ""
 }
 
 // Add adds a new member to the committee.
@@ -95,12 +84,14 @@ func (c *Committee) Add(vk, ch []byte, id string, grade int) bool {
 	defer c.mu.Unlock()
 
 	if c.committee == nil {
-		c.committee = make(map[string]O)
+		c.committee = make(map[committeeKey]O)
 		c.len = 0
 	}
-	vkStr := base64.StdEncoding.EncodeToString(vk)
-	chStr := base64.StdEncoding.EncodeToString(ch)
-	key := makeKey(vkStr, chStr)
+	
+	key := committeeKey{
+		vk: string(vk),
+		ch: string(ch),
+	}
 
 	existing, exists := c.committee[key]
 	if exists && existing.Grade >= grade {
@@ -124,14 +115,13 @@ func (c *Committee) ToCommitteeOutput() []*CommitteeOutput {
 		return nil
 	}
 
-	// Pre-allocate slice with exact capacity to avoid reallocations
 	outputs := make([]*CommitteeOutput, 0, c.len)
 
 	for key, member := range c.committee {
-		vk, _ := splitKey(key)
+		vkStr := base64.StdEncoding.EncodeToString([]byte(key.vk))
 		outputs = append(outputs, &CommitteeOutput{
 			ID:    member.ID,
-			VK:    vk,
+			VK:    vkStr,
 			Grade: member.Grade,
 		})
 	}
@@ -146,8 +136,7 @@ func (c *Committee) Range(fn func(vk, ch string, val O)) {
 	defer c.mu.RUnlock()
 
 	for key, val := range c.committee {
-		vk, ch := splitKey(key)
-		fn(vk, ch, val)
+		fn(key.vk, key.ch, val)
 	}
 }
 
@@ -161,7 +150,7 @@ func (c *Committee) Get(vk, ch string) (O, bool) {
 		return O{}, false
 	}
 
-	key := makeKey(vk, ch)
+	key := committeeKey{vk: vk, ch: ch}
 	if member, exists := c.committee[key]; exists {
 		return member, true
 	}
