@@ -1,6 +1,7 @@
 package exante
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -415,7 +416,7 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 	return nil
 }
 
-func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
+func (e *ExAnte) validateMerklePath(merklePath []*pb.State, round int) bool {
 
 	if len(merklePath) < round {
 		e.logger.Warn(
@@ -431,10 +432,10 @@ func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 	}
 
 	for i := 0; i < round; i++ {
-		h := e.mdag.Oracle(merklePath[i]...)
+		h := e.mdag.Oracle(merklePath[i].Row...)
 		if i == round-1 {
 			return isValueInState(h, e.state[round])
-		} else if !isValueInState(h, merklePath[i+1]) {
+		} else if !isValueInState(h, merklePath[i+1].Row) {
 			return false
 		}
 	}
@@ -459,18 +460,15 @@ func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 		)
 		return false
 	}
-	// Convert once: this is O(path length) and was previously recomputed for both
-	// the value check and the merkle-path check below.
-	mp := convertTimestampToBytes(msg)
 	if !isValueInState(
-		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), mp[0],
+		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), msg.MerklePath[0].Row,
 	) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-	if !e.validateMerklePath(mp, r) {
+	if !e.validateMerklePath(msg.MerklePath, r) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
@@ -539,11 +537,9 @@ func (e *ExAnte) processMessage(
 		aux.AuxKey = auxKey
 		pMsg.Aux = aux
 		pMsg.MerklePath = make([]*pb.State, r+1)
-		// Convert once instead of rebuilding the whole [][][]byte each iteration (was O(r²)).
-		mp := convertTimestampToBytes(msg)
 		for i := 0; i < r; i++ {
 			state := getExAnteState()
-			state.Row = mp[i]
+			state.Row = msg.MerklePath[i].Row
 			pMsg.MerklePath[i] = state
 		}
 		lastState := getExAnteState()
@@ -566,34 +562,10 @@ func (e *ExAnte) processMessage(
 }
 
 func isValueInState(value []byte, state [][]byte) bool {
-
-	for _, state := range state {
-		if string(state) == string(value) {
+	for _, s := range state {
+		if bytes.Equal(s, value) {
 			return true
 		}
 	}
-
 	return false
-}
-
-func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
-
-	result := make([][][]byte, len(msg.MerklePath))
-
-	for i, state := range msg.MerklePath {
-		if state == nil {
-			result[i] = nil
-			continue
-		}
-
-		if state.Row == nil {
-			result[i] = [][]byte{}
-			continue
-		}
-
-		result[i] = make([][]byte, len(state.Row))
-		copy(result[i], state.Row)
-	}
-
-	return result
 }

@@ -281,27 +281,23 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 		return 0, fmt.Errorf("phi must be > 0")
 	}
 
-	// 3) Compute φ + 1 as big.Int
-	phiPlusOne := new(big.Int).Add(phiInt, big.NewInt(1))
+	// 3) Convert phi to float64, add 1.0
+	phiFloat, _ := phiInt.Float64()
+	phiPlusOneF := phiFloat + 1.0
 
-	// 4) Compute 2^λ as big.Int
-	twoToLambdaInt := new(big.Int).Lsh(big.NewInt(1), uint(lambda)) //nolint:gosec
+	// 4) Compute 2^lambda as float64
+	twoToLambda := math.Ldexp(1.0, lambda)
 
-	// 5) Convert numerator (2^λ) and denominator (φ+1) to big.Float
-	numerator := new(big.Float).SetInt(twoToLambdaInt)
-	denominator := new(big.Float).SetInt(phiPlusOne)
+	// 5) Compute a ratio = 2^λ / (φ + 1) as float64
+	ratioF := twoToLambda / phiPlusOneF
 
-	// 6) Compute a ratio = 2^λ / (φ + 1) as big.Float, then to float64
-	ratioF, _ := new(big.Float).Quo(numerator, denominator).Float64()
-	//    ratioF ≈ 2^λ/(φ+1)
-
-	// 7) Compute the subterm: (Wᵢ − n·ratioF)
+	// 6) Compute the subterm: (Wᵢ − n·ratioF)
 	sub := Wi - float64(n)*ratioF
 
-	// 8) Multiply by (1/ΔW)
+	// 7) Multiply by (1/ΔW)
 	term := sub / deltaW
 
-	// 9) Compute gᵢ = (d + 1) − term
+	// 8) Compute gᵢ = (d + 1) − term
 	g := float64(d+1) - term
 
 	// Log the computed values for debugging
@@ -316,12 +312,11 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 			zap.Float64("term", term),
 			zap.Float64("g", g),
 			zap.String("phi", phiInt.String()),
-			zap.String("phi_plus_one", phiPlusOne.String()),
-			zap.String("twoToLambdaInt", twoToLambdaInt.String()),
+			zap.Float64("phi_float", phiFloat),
 			zap.Int("lambda", lambda),
 		)
 	}
-	// 10) Take floor(gᵢ)
+	// 9) Take floor(gᵢ)
 	floorG := math.Floor(g)
 
 	finalGrade := math.Min(float64(d+1), floorG)

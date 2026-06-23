@@ -1,9 +1,9 @@
 package resourcebound
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -12,40 +12,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// fTagCacheKey builds the memoization key for a single fTag verification. It
-// concatenates every input that determines the verification outcome (rp.Ver +
-// VDF.Verify + VRF.Verify). The proof bytes are included so a tampered message
-// (e.g. a valid member's vk with forged proof bytes) maps to a distinct key and
-// is still verified, never reading a cached result for a different input.
-//
-// Each field is length-prefixed so the concatenation is injective even though
-// vk/proofs are binary and may contain any byte (a plain separator would be
-// ambiguous and could let a crafted message shift field boundaries to collide
-// with a valid entry). The bytes are used verbatim (no hashing): the map hashes
-// the key internally and compares full keys on collision, so this is cheaper
-// than a SHA pass and free of digest-collision risk.
-func fTagCacheKey(id string, vk, ch []byte, aux *pb.Aux) string {
-	ak := aux.AuxKey
-	var b strings.Builder
-	b.Grow(len(id) + len(vk) + len(ch) + len(aux.PiRP) +
-		len(ak.PhiVdf) + len(ak.PiVdf) + len(ak.PhiVrf) + len(ak.PiVrf) + 8*4)
-	var lenBuf [4]byte
-	writeField := func(p []byte) {
-		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
-		b.Write(lenBuf[:])
-		b.Write(p)
-	}
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
-	b.Write(lenBuf[:])
-	b.WriteString(id)
-	writeField(vk)
-	writeField(ch)
-	writeField(aux.PiRP)
-	writeField(ak.PhiVdf)
-	writeField(ak.PiVdf)
-	writeField(ak.PhiVrf)
-	writeField(ak.PiVrf)
-	return b.String()
+var fTagBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 2048)
+		return &b
+	},
 }
 
 type ResourceProof interface {
@@ -163,8 +134,8 @@ func (r *RbExp) Verify(
 	// of times; verification (ECVRF + x509 parse + resource proof) is pure in its
 	// inputs, so caching by those inputs collapses the redundant crypto work to
 	// ~one verify per distinct member. Shared by both Verify goroutines below;
-	// sync.Map fits the write-once / read-many / stable-key pattern.
-	var fTagCache sync.Map // map[string]bool
+	var fTagCacheMu sync.RWMutex
+	fTagCache := make(map[string]bool)
 
 	fTag := func(sid, id string, vk []byte, ch []byte, aux *pb.Aux) bool {
 		r.logger.Debug("Filter tag function called",
@@ -178,12 +149,42 @@ func (r *RbExp) Verify(
 			return false
 		}
 
-		key := fTagCacheKey(id, vk, ch, aux)
-		if v, ok := fTagCache.Load(key); ok {
-			return v.(bool)
+		bPtr := fTagBufPool.Get().(*[]byte)
+		buf := (*bPtr)[:0] // Reset length to 0
+
+		ak := aux.AuxKey
+		var lenBuf [4]byte
+		writeField := func(p []byte) {
+			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
+			buf = append(buf, lenBuf[:]...)
+			buf = append(buf, p...)
 		}
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
+		buf = append(buf, lenBuf[:]...)
+		buf = append(buf, id...)
+		writeField(vk)
+		writeField(ch)
+		writeField(aux.PiRP)
+		writeField(ak.PhiVdf)
+		writeField(ak.PiVdf)
+		writeField(ak.PhiVrf)
+		writeField(ak.PiVrf)
+
+		fTagCacheMu.RLock()
+		if v, ok := fTagCache[string(buf)]; ok {
+			fTagCacheMu.RUnlock()
+			fTagBufPool.Put(bPtr)
+			return v
+		}
+		fTagCacheMu.RUnlock()
+
 		res := r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
-		fTagCache.Store(key, res)
+
+		fTagCacheMu.Lock()
+		fTagCache[string(buf)] = res
+		fTagCacheMu.Unlock()
+		
+		fTagBufPool.Put(bPtr)
 		return res
 	}
 	auxTag := &common.AuxTag{
@@ -243,7 +244,7 @@ func (r *RbExp) Verify(
 			g := min(val.Grade, exAnteValue.Grade)
 			outputs = append(outputs, &common.CommitteeOutput{
 				ID:    val.ID,
-				VK:    key,
+				VK:    base64.StdEncoding.EncodeToString([]byte(key)),
 				Grade: g,
 			})
 		} else {

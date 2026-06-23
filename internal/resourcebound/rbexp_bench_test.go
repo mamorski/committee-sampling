@@ -1,7 +1,6 @@
 package resourcebound
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -104,19 +103,4 @@ func BenchmarkFTagCompute(b *testing.B) {
 	}
 }
 
-// BenchmarkFTagCacheHit measures the replacement: build the key + sync.Map hit.
-func BenchmarkFTagCacheHit(b *testing.B) {
-	f := newFTagFixture(b)
-	var cache sync.Map
-	cache.Store(fTagCacheKey(f.id, f.vk, f.ch, f.aux), true)
-	b.ReportAllocs()
-	b.ResetTimer()
-	var ok bool
-	for i := 0; i < b.N; i++ {
-		v, found := cache.Load(fTagCacheKey(f.id, f.vk, f.ch, f.aux))
-		ok = found && v.(bool)
-	}
-	if !ok {
-		b.Fatal("expected cache hit")
-	}
-}
+

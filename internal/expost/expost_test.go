@@ -1,7 +1,6 @@
 package expost
 
 import (
-	"encoding/base64"
 	"testing"
 	"time"
 
@@ -968,7 +967,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 
 	// Verify the result contains the expected data
 	result, exists := results.Get(
-		base64.StdEncoding.EncodeToString([]byte("test-vk")), base64.StdEncoding.EncodeToString([]byte("test-value")),
+		"test-vk", "test-value",
 	)
 	suite.True(exists)
 	suite.Equal("test-node", result.ID)
