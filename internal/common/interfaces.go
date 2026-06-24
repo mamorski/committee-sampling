@@ -1,8 +1,6 @@
 package common
 
 import (
-	"time"
-
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 )
 
@@ -71,11 +69,13 @@ type ProtoByteTotals struct {
 // so they stay decoupled and testable. All methods must be safe for concurrent
 // use and non-blocking enough for hot message paths.
 type StatsRecorder interface {
-	// RecordReceived counts a received message for (proto, step, round) and
-	// stamps its arrival time (used for arrival-lag and late-message detection).
-	RecordReceived(proto string, step Step, round int, arrival time.Time)
-	// RecordValid counts a message that passed all validation for (proto, step, round).
-	RecordValid(proto string, step Step, round int)
+	// RecordRoundStats flushes the pre-aggregated counters for one round.
+	// Protocols accumulate these locally (under their own mutex) and call once
+	// per round, reducing stats-daemon lock acquisitions from O(messages) to
+	// O(rounds).
+	RecordRoundStats(proto string, step Step, round int,
+		total, valid, lateCount, maxLateness int,
+		lagSumNs, lagMaxNs, lagLastNs int64, lagCount int)
 	// RecordBytesPerRound records the per-protocol byte delta accrued in a round window.
 	RecordBytesPerRound(step Step, round int, protocolID string, d RoundByteDelta)
 	// RecordBytesFinal records the end-of-run byte totals and per-protocol breakdown.
@@ -93,10 +93,10 @@ type StatsRecorder interface {
 // call the recorder unconditionally without nil checks.
 type NoopRecorder struct{}
 
-func (NoopRecorder) RecordReceived(string, Step, int, time.Time)        {}
-func (NoopRecorder) RecordValid(string, Step, int)                      {}
-func (NoopRecorder) RecordBytesPerRound(Step, int, string, RoundByteDelta) {}
-func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string]ProtoByteTotals) {}
-func (NoopRecorder) RecordNeighbors([]string)                          {}
-func (NoopRecorder) RecordCommittee([]*CommitteeOutput)                {}
-func (NoopRecorder) RecordPeerDrop(string, string, int)                {}
+func (NoopRecorder) RecordRoundStats(string, Step, int, int, int, int, int, int64, int64, int64, int) {
+}
+func (NoopRecorder) RecordBytesPerRound(Step, int, string, RoundByteDelta)        {}
+func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string]ProtoByteTotals)     {}
+func (NoopRecorder) RecordNeighbors([]string)                                     {}
+func (NoopRecorder) RecordCommittee([]*CommitteeOutput)                           {}
+func (NoopRecorder) RecordPeerDrop(string, string, int)                           {}

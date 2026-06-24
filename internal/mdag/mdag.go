@@ -37,8 +37,11 @@ type MDAG struct {
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
 	step           common.Step      // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
-	stats     common.StatsRecorder // sink for message/round statistics
-	isRunning bool                 // flag indicating if the protocol is running
+	stats        common.StatsRecorder // sink for message/round statistics
+	roundAcc     map[int]*common.RoundAcc
+	tickTimes    map[int]time.Time
+	currentRound int
+	isRunning    bool // flag indicating if the protocol is running
 }
 
 // New creates a new MDAG instance with the specified parameters.
@@ -83,6 +86,9 @@ func New(
 		step:           step,
 		protocolType:   protocolType,
 		stats:          statsRec,
+		roundAcc:       make(map[int]*common.RoundAcc),
+		tickTimes:      make(map[int]time.Time),
+		currentRound:   -1,
 	}
 
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
@@ -163,18 +169,26 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 
 		start := time.Now()
 		m.logger.Info("Starting round", zap.Int("round", r))
 
-		// Lock to safely access messages
+		// Lock to safely access messages and advance round tracking
 		m.mu.Lock()
-		// Get messages received in the previous round
+		m.currentRound = r
+		m.tickTimes[r] = tickNow
 		prevRoundMsgs, exists := m.messages[r-1]
 		if !exists || len(prevRoundMsgs) == 0 {
 			m.logger.Warn("No messages received in previous round", zap.Int("round", r-1))
 		}
+		prevAcc := m.roundAcc[r-1]
+		delete(m.roundAcc, r-1)
 		m.mu.Unlock()
+
+		if prevAcc != nil {
+			m.flushRoundStats(r-1, prevAcc)
+		}
 
 		sortedLabels := make([][]byte, len(prevRoundMsgs)+1)
 		sortedLabels[0] = m.currentLabel
@@ -213,21 +227,18 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	// Mark the protocol as completed
 	m.mu.Lock()
 	m.isRunning = false
+	remaining := m.roundAcc
+	m.roundAcc = make(map[int]*common.RoundAcc)
 	m.mu.Unlock()
+
+	for round, a := range remaining {
+		m.flushRoundStats(round, a)
+	}
 
 	return m.state, nil
 }
 
 // handleMessage processes incoming messages from the network.
-//
-// The function validates that the message is from a known neighbor, has a matching session ID,
-// and is received while the protocol is running.
-//
-// Parameters:
-//   - from: The peer ID of the sender
-//   - payload: Raw message bytes received from the network
-//
-// Returns an error if validation fails, nil otherwise.
 func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.mu.Lock()
 	running := m.isRunning
@@ -251,41 +262,83 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Record total message received
-	m.stats.RecordReceived(m.protocolType, m.step, round, time.Now())
+	arrival := time.Now()
 
+	// Phase 1: brief lock to snapshot state and count total.
+	m.mu.Lock()
+	acc := m.getAcc(round)
+	acc.Total++
+	curRound := m.currentRound
+	tt := m.tickTimes[round]
+	m.mu.Unlock()
+
+	if curRound >= 0 && round < curRound {
+		late := curRound - round
+		m.mu.Lock()
+		acc.LateCount++
+		if late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+		m.mu.Unlock()
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			m.mu.Lock()
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+			m.mu.Unlock()
+		}
+	}
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if !m.network.IsNeighbor(from) {
-		err := errors.New("message from unknown neighbor")
 		m.logger.Warn(
 			"Received message from unknown neighbor", zap.String("from", from.String()),
 		)
-		return err
+		return errors.New("message from unknown neighbor")
 	}
 
 	if m.sessionID != "" && pbMsg.SessionId != m.sessionID {
-		err := errors.New("session id mismatch")
 		m.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", m.sessionID), zap.String("received", pbMsg.SessionId),
 		)
-		return err
+		return errors.New("session id mismatch")
 	}
-
-	m.mu.Lock()
-	if _, exists := m.messages[round]; !exists {
-		m.messages[round] = make([][]byte, 0, 16)
-	}
-	m.messages[round] = append(m.messages[round], pbMsg.Label)
-	m.mu.Unlock()
-
-	// Record valid message - passed all validation checks
-	m.stats.RecordValid(m.protocolType, m.step, round)
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {
 		m.logger.Debug(
 			"Received message", zap.String("from", from.String()), zap.Int("round", round), zap.Binary("label", pbMsg.Label),
 		)
 	}
+
+	// Phase 2: brief lock to record valid message.
+	m.mu.Lock()
+	if _, exists := m.messages[round]; !exists {
+		m.messages[round] = make([][]byte, 0, 16)
+	}
+	m.messages[round] = append(m.messages[round], pbMsg.Label)
+	acc.Valid++
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *MDAG) getAcc(round int) *common.RoundAcc {
+	a, ok := m.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		m.roundAcc[round] = a
+	}
+	return a
+}
+
+func (m *MDAG) flushRoundStats(round int, a *common.RoundAcc) {
+	m.stats.RecordRoundStats(m.protocolType, m.step, round,
+		a.Total, a.Valid, a.LateCount, a.MaxLateness,
+		a.LagSumNs, a.LagMaxNs, a.LagLastNs, a.LagCount)
 }
 
 // broadcast sends a message to all network peers.

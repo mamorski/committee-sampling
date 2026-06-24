@@ -216,7 +216,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	d := discovery.NewDHTDiscovery(h, cfg.Network.DiscoveryConfig, logger)
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
-	statsd := stats.New(cfg, logger, synchronizer, h.ID().String(), sid)
+	statsd := stats.New(cfg, logger, h.ID().String(), sid)
 
 	node := &P2PNode{
 		host:                        h,

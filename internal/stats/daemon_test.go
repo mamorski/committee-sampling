@@ -13,37 +13,32 @@ import (
 	"github.com/mamorski/committee-sampling/pkg/config"
 )
 
-// stubSync satisfies common.Synchronizer without firing any ticks, so tests can
-// drive the daemon deterministically.
-type stubSync struct{}
-
-func (stubSync) WaitForRound(common.Step, int) (<-chan struct{}, error) {
-	return make(chan struct{}), nil
-}
-
-func (stubSync) TotalRounds(common.Step) (int, error) { return 0, nil }
-
 func newTestDaemon(dir string) *Daemon {
 	cfg := &config.Config{}
 	cfg.Stats.OutputDir = dir
-	return New(cfg, zap.NewNop(), stubSync{}, "node-1", "sid-1")
+	return New(cfg, zap.NewNop(), "node-1", "sid-1")
 }
 
-// TestLateAndArrivalDetection drives the consumer directly (white-box) so tick
-// and message ordering is deterministic: a message stamped round 2 arriving
-// while the current round is 5 must be flagged late by 3, and an on-time
-// message must contribute an arrival-lag sample.
+// TestLateAndArrivalDetection drives RecordRoundStats directly so late-message
+// and lag semantics are verified end-to-end without protocol machinery.
+//
+// Round 0: 1 message, 1 valid, lag = 5 ms.
+// Round 2 arriving when currentRound=5: 1 message, 0 valid, late by 3.
 func TestLateAndArrivalDetection(t *testing.T) {
 	d := newTestDaemon(t.TempDir())
 	step := common.ExPostVerify
-	base := time.Now()
 
-	d.recordTick(step, 0, base)
-	d.RecordReceived("expost", step, 0, base.Add(5 * time.Millisecond))
-	d.RecordValid("expost", step, 0)
+	lag5ms := (5 * time.Millisecond).Nanoseconds()
 
-	d.recordTick(step, 5, base.Add(50 * time.Millisecond))
-	d.RecordReceived("expost", step, 2, base.Add(55 * time.Millisecond))
+	// round 0: one valid message, 5 ms lag
+	d.RecordRoundStats("expost", step, 0,
+		1, 1, 0, 0,
+		lag5ms, lag5ms, lag5ms, 1)
+
+	// round 2: one message arriving at currentRound=5, late by 3, no lag data
+	d.RecordRoundStats("expost", step, 2,
+		1, 0, 1, 3,
+		0, 0, 0, 0)
 
 	rep := d.buildReport()
 	p := rep.Protocols["expost"]
@@ -60,7 +55,7 @@ func TestLateAndArrivalDetection(t *testing.T) {
 		t.Fatalf("late_by_round[2] = %d, want 1", p.LateByRound[2])
 	}
 	if p.TotalMessages[0] != 1 || p.TotalMessages[2] != 1 {
-		t.Fatalf("total_messages = %v, want [.. round0=1 round2=1]", p.TotalMessages)
+		t.Fatalf("total_messages = %v, want round0=1 round2=1", p.TotalMessages)
 	}
 	if p.ValidMessages[0] != 1 {
 		t.Fatalf("valid_messages[0] = %d, want 1", p.ValidMessages[0])
@@ -75,20 +70,18 @@ func TestLateAndArrivalDetection(t *testing.T) {
 	if lag0 == nil {
 		t.Fatal("no arrival-lag sample for round 0")
 	}
-	if want := (5 * time.Millisecond).Nanoseconds(); lag0.MaxNs != want {
-		t.Fatalf("round 0 max arrival lag = %d ns, want %d ns", lag0.MaxNs, want)
+	if lag0.MaxNs != lag5ms {
+		t.Fatalf("round 0 max arrival lag = %d ns, want %d ns", lag0.MaxNs, lag5ms)
 	}
 }
 
-// TestWritesReport exercises the full async path: Start, record via the public
-// recorder API, Close, then load the JSON report back.
+// TestWritesReport exercises the full path: record, Close, then load the JSON.
 func TestWritesReport(t *testing.T) {
 	dir := t.TempDir()
 	d := newTestDaemon(dir)
 	d.Start()
 
-	d.RecordReceived("exante", common.ExAnteVerify, 0, time.Now())
-	d.RecordValid("exante", common.ExAnteVerify, 0)
+	d.RecordRoundStats("exante", common.ExAnteVerify, 0, 1, 1, 0, 0, 0, 0, 0, 0)
 	d.RecordNeighbors([]string{"peerA", "peerB"})
 	d.RecordCommittee([]*common.CommitteeOutput{{ID: "m1", Grade: 2}})
 	d.RecordPeerDrop("peerX", "ExAnteVerify", 3)
@@ -123,16 +116,12 @@ func TestWritesReport(t *testing.T) {
 	}
 }
 
-func BenchmarkRecordReceived(b *testing.B) {
+func BenchmarkRecordRoundStats(b *testing.B) {
 	d := newTestDaemon(b.TempDir())
-	d.Start()
-	defer d.Close()
-	
-	now := time.Now()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			d.RecordReceived("exante", common.ExAnteVerify, 1, now)
+			d.RecordRoundStats("exante", common.ExAnteVerify, 1, 15, 12, 0, 0, 0, 0, 0, 0)
 		}
 	})
 }
