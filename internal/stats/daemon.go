@@ -32,39 +32,6 @@ var stepsToWatch = []common.Step{
 	common.ExAnteVerify,
 }
 
-// eventBuffer sizes the event channel. Producers block (with a ctx escape) when
-// it is full, so counts are never silently dropped during a normal run.
-const eventBuffer = 1 << 16
-
-type evtKind int
-
-const (
-	evtReceived evtKind = iota
-	evtValid
-	evtTick
-	evtBytesRound
-	evtBytesFinal
-	evtNeighbors
-	evtCommittee
-	evtPeerDrop
-)
-
-type event struct {
-	kind     evtKind
-	proto    string
-	step     common.Step
-	round    int
-	arrival  time.Time
-	pid      string
-	delta    common.RoundByteDelta
-	summary  common.ByteSummary
-	perProto map[string]common.ProtoByteTotals
-	strs     []string
-	members  []CommitteeMember
-	peerID   string
-	phase    string
-}
-
 // roundAgg accumulates per-round counters and arrival-lag samples (ns).
 type roundAgg struct {
 	total, valid                  int
@@ -80,7 +47,7 @@ type protoAgg struct {
 	lateByRound  map[int]int
 }
 
-// Daemon collects all per-node statistics on one goroutine and writes a JSON
+// Daemon collects all per-node statistics and writes a JSON
 // report at shutdown. It implements common.StatsRecorder.
 type Daemon struct {
 	nodeID string
@@ -89,13 +56,11 @@ type Daemon struct {
 	logger *zap.Logger
 	sync   common.Synchronizer
 
-	events chan event
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// The fields below are owned exclusively by the consumer goroutine (run);
-	// no other goroutine touches them, so no locking is needed.
+	mu        sync.Mutex
 	protocols map[string]*protoAgg
 	curRound  map[common.Step]int
 	tickTimes map[common.Step]map[int]time.Time
@@ -120,7 +85,6 @@ func New(cfg *config.Config, logger *zap.Logger, synchronizer common.Synchronize
 		outDir:    outDir,
 		logger:    logger.Named("stats"),
 		sync:      synchronizer,
-		events:    make(chan event, eventBuffer),
 		ctx:       ctx,
 		cancel:    cancel,
 		protocols: make(map[string]*protoAgg),
@@ -135,10 +99,8 @@ func New(cfg *config.Config, logger *zap.Logger, synchronizer common.Synchronize
 	return d
 }
 
-// Start launches the consumer goroutine plus one tick-watcher per watched step.
+// Start launches one tick-watcher per watched step.
 func (d *Daemon) Start() {
-	d.wg.Add(1)
-	go d.run()
 	for _, step := range stepsToWatch {
 		ticks, err := d.sync.TotalRounds(step)
 		if err != nil || ticks <= 0 {
@@ -149,150 +111,115 @@ func (d *Daemon) Start() {
 	}
 }
 
-// Close stops the watchers, drains buffered events, writes the report, and
+// Close stops the watchers, writes the report, and
 // waits for every goroutine to exit. Safe to call once.
 func (d *Daemon) Close() error {
 	d.cancel()
 	d.wg.Wait()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.writeReport()
 	return nil
 }
 
-// emit hands an event to the consumer. It blocks until the consumer accepts it
-// (back-pressure preserves counts) but bails out if the daemon is shutting down,
-// so it never deadlocks and never panics on a closed channel.
-func (d *Daemon) emit(ev event) {
-	select {
-	case d.events <- ev:
-	case <-d.ctx.Done():
+func (d *Daemon) recordTick(step common.Step, round int, arrival time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.curRound[step] = round
+	if d.tickTimes[step] == nil {
+		d.tickTimes[step] = make(map[int]time.Time)
 	}
+	d.tickTimes[step][round] = arrival
 }
 
 func (d *Daemon) RecordReceived(proto string, step common.Step, round int, arrival time.Time) {
-	d.emit(event{kind: evtReceived, proto: proto, step: step, round: round, arrival: arrival})
+	d.mu.Lock()
+	p := d.proto(proto, step)
+	ra := p.round(round)
+	ra.total++
+
+	// Late message: stamped round is below the step's current round.
+	if cur, ok := d.curRound[step]; ok && cur >= 0 && round < cur {
+		late := cur - round
+		p.lateMessages++
+		p.lateByRound[round]++
+		if late > p.maxLateness {
+			p.maxLateness = late
+		}
+	}
+
+	// Arrival lag: time from the round's start tick to message arrival.
+	if tt, ok := d.tickTimes[step][round]; ok && !tt.IsZero() {
+		lag := arrival.Sub(tt).Nanoseconds()
+		if lag < 0 {
+			lag = 0
+		}
+		ra.lagSumNs += lag
+		ra.lagCount++
+		ra.lagLastNs = lag
+		if lag > ra.lagMaxNs {
+			ra.lagMaxNs = lag
+		}
+	}
+	d.mu.Unlock()
+
+	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
 }
 
 func (d *Daemon) RecordValid(proto string, step common.Step, round int) {
-	d.emit(event{kind: evtValid, proto: proto, step: step, round: round})
+	d.mu.Lock()
+	d.proto(proto, step).round(round).valid++
+	d.mu.Unlock()
+
+	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
 }
 
 func (d *Daemon) RecordBytesPerRound(step common.Step, round int, protocolID string, delta common.RoundByteDelta) {
-	d.emit(event{kind: evtBytesRound, step: step, round: round, pid: protocolID, delta: delta})
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.bytes.PerRound = append(d.bytes.PerRound, ByteRound{
+		Step: string(step), Round: round, ProtocolID: protocolID,
+		InDelta: delta.WireIn, OutDelta: delta.WireOut,
+		PayloadInDelta: delta.PayloadIn, PayloadOutDelta: delta.PayloadOut,
+		EnvelopeInDelta: delta.EnvIn, EnvelopeOutDelta: delta.EnvOut,
+	})
 }
 
 func (d *Daemon) RecordBytesFinal(summary common.ByteSummary, perProtocol map[string]common.ProtoByteTotals) {
-	d.emit(event{kind: evtBytesFinal, summary: summary, perProto: perProtocol})
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.bytes.Summary = summary
+	for pid, c := range perProtocol {
+		d.bytes.ByProtocol[pid] = ByteCounts{
+			In: c.WireIn, Out: c.WireOut,
+			PayloadIn: c.PayloadIn, PayloadOut: c.PayloadOut,
+			EnvelopeIn: c.EnvIn, EnvelopeOut: c.EnvOut,
+		}
+	}
 }
 
 func (d *Daemon) RecordNeighbors(neighbors []string) {
-	d.emit(event{kind: evtNeighbors, strs: append([]string(nil), neighbors...)})
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.neighbors = append([]string(nil), neighbors...)
 }
 
 func (d *Daemon) RecordCommittee(members []*common.CommitteeOutput) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	cm := make([]CommitteeMember, 0, len(members))
 	for _, m := range members {
 		if m != nil {
 			cm = append(cm, CommitteeMember{ID: m.ID, Grade: m.Grade})
 		}
 	}
-	d.emit(event{kind: evtCommittee, members: cm})
+	d.committee = cm
 }
 
 func (d *Daemon) RecordPeerDrop(peerID, phase string, round int) {
-	d.emit(event{kind: evtPeerDrop, peerID: peerID, phase: phase, round: round})
-}
-
-// run is the single consumer goroutine. It owns all aggregation state. On ctx
-// cancellation it drains whatever is still buffered, writes the report, exits.
-func (d *Daemon) run() {
-	defer d.wg.Done()
-	for {
-		select {
-		case ev := <-d.events:
-			d.handle(ev)
-		case <-d.ctx.Done():
-			for {
-				select {
-				case ev := <-d.events:
-					d.handle(ev)
-				default:
-					d.writeReport()
-					return
-				}
-			}
-		}
-	}
-}
-
-func (d *Daemon) handle(ev event) {
-	switch ev.kind {
-	case evtTick:
-		d.curRound[ev.step] = ev.round
-		if d.tickTimes[ev.step] == nil {
-			d.tickTimes[ev.step] = make(map[int]time.Time)
-		}
-		d.tickTimes[ev.step][ev.round] = ev.arrival
-
-	case evtReceived:
-		p := d.proto(ev.proto, ev.step)
-		ra := p.round(ev.round)
-		ra.total++
-		metrics.TotalMessages.WithLabelValues(strconv.Itoa(ev.round), ev.proto, d.nodeID, d.sid).Inc()
-
-		// Late message: stamped round is below the step's current round.
-		if cur, ok := d.curRound[ev.step]; ok && cur >= 0 && ev.round < cur {
-			late := cur - ev.round
-			p.lateMessages++
-			p.lateByRound[ev.round]++
-			if late > p.maxLateness {
-				p.maxLateness = late
-			}
-		}
-
-		// Arrival lag: time from the round's start tick to message arrival.
-		if tt, ok := d.tickTimes[ev.step][ev.round]; ok && !tt.IsZero() {
-			lag := ev.arrival.Sub(tt).Nanoseconds()
-			if lag < 0 {
-				lag = 0
-			}
-			ra.lagSumNs += lag
-			ra.lagCount++
-			ra.lagLastNs = lag
-			if lag > ra.lagMaxNs {
-				ra.lagMaxNs = lag
-			}
-		}
-
-	case evtValid:
-		d.proto(ev.proto, ev.step).round(ev.round).valid++
-		metrics.ValidMessages.WithLabelValues(strconv.Itoa(ev.round), ev.proto, d.nodeID, d.sid).Inc()
-
-	case evtBytesRound:
-		d.bytes.PerRound = append(d.bytes.PerRound, ByteRound{
-			Step: string(ev.step), Round: ev.round, ProtocolID: ev.pid,
-			InDelta: ev.delta.WireIn, OutDelta: ev.delta.WireOut,
-			PayloadInDelta: ev.delta.PayloadIn, PayloadOutDelta: ev.delta.PayloadOut,
-			EnvelopeInDelta: ev.delta.EnvIn, EnvelopeOutDelta: ev.delta.EnvOut,
-		})
-
-	case evtBytesFinal:
-		d.bytes.Summary = ev.summary
-		for pid, c := range ev.perProto {
-			d.bytes.ByProtocol[pid] = ByteCounts{
-				In: c.WireIn, Out: c.WireOut,
-				PayloadIn: c.PayloadIn, PayloadOut: c.PayloadOut,
-				EnvelopeIn: c.EnvIn, EnvelopeOut: c.EnvOut,
-			}
-		}
-
-	case evtNeighbors:
-		d.neighbors = ev.strs
-
-	case evtCommittee:
-		d.committee = ev.members
-
-	case evtPeerDrop:
-		d.peerDrops = append(d.peerDrops, PeerDropReport{PeerID: ev.peerID, Phase: ev.phase, Round: ev.round})
-	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.peerDrops = append(d.peerDrops, PeerDropReport{PeerID: peerID, Phase: phase, Round: round})
 }
 
 func (d *Daemon) proto(name string, step common.Step) *protoAgg {
