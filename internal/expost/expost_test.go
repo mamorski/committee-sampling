@@ -127,6 +127,9 @@ func (suite *ExPostTestSuite) SetupTest() {
 		protocolID:   "/expost/1.0.0/" + suite.sid,
 		nodeID:       "test-node",
 		R:            3 * 5,
+		roundAcc:     make(map[int]*common.RoundAcc),
+		tickTimes:    make(map[int]time.Time),
+		currentRound: -1,
 	}
 }
 

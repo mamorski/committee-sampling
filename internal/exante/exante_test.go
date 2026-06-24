@@ -135,11 +135,14 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
 		stats:         common.NoopRecorder{},
-		messages:      make(map[int][]*pb.TimestampMessage), // changed
+		messages:      make(map[int][]*pb.TimestampMessage),
 		sid:           suite.testSID,
 		isRunning:     true,
-		R:             suite.testD * suite.testBigD, // R is the product of d and D
+		R:             suite.testD * suite.testBigD,
 		nodeID:        suite.testNodeID,
+		roundAcc:      make(map[int]*common.RoundAcc),
+		tickTimes:     make(map[int]time.Time),
+		currentRound:  -1,
 	}
 }
 

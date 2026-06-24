@@ -1,12 +1,10 @@
-// Package stats implements a per-node statistics daemon. A single goroutine
-// owns all aggregation state and consumes events from the protocols, the
-// network layer, and the bootstrap; at shutdown it writes one JSON report per
-// node. Centralizing here lets the protocols drop their own per-round counter
-// arrays and removes the need for the analysis notebook to scan the full log.
+// Package stats implements a per-node statistics daemon. Protocols accumulate
+// counters locally under their own mutex and flush once per round via
+// RecordRoundStats, so the daemon's lock is acquired O(rounds) times rather
+// than O(messages). At shutdown the daemon writes one JSON report per node.
 package stats
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -21,16 +19,6 @@ import (
 	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/pkg/config"
 )
-
-// stepsToWatch are the message-bearing steps whose current round the daemon
-// tracks (via synchronizer ticks) so it can flag late messages and measure
-// arrival lag relative to each round's start.
-var stepsToWatch = []common.Step{
-	common.ExPostMDAG,
-	common.ExAnteMDAG,
-	common.ExPostVerify,
-	common.ExAnteVerify,
-}
 
 // roundAgg accumulates per-round counters and arrival-lag samples (ns).
 type roundAgg struct {
@@ -53,18 +41,11 @@ type Daemon struct {
 	nodeID         string
 	sid            string
 	outDir         string
-	metricsEnabled bool
 	logger         *zap.Logger
-	sync           common.Synchronizer
-
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	metricsEnabled bool
 
 	mu        sync.Mutex
 	protocols map[string]*protoAgg
-	curRound  map[common.Step]int
-	tickTimes map[common.Step]map[int]time.Time
 	bytes     ByteReport
 	neighbors []string
 	committee []CommitteeMember
@@ -73,110 +54,64 @@ type Daemon struct {
 
 var _ common.StatsRecorder = (*Daemon)(nil)
 
-// New constructs the daemon. The returned daemon is inert until Start is called.
-func New(cfg *config.Config, logger *zap.Logger, synchronizer common.Synchronizer, nodeID, sid string) *Daemon {
-	ctx, cancel := context.WithCancel(context.Background())
+// New constructs the daemon.
+func New(cfg *config.Config, logger *zap.Logger, nodeID, sid string) *Daemon {
 	outDir := cfg.Stats.OutputDir
 	if outDir == "" {
 		outDir = "."
 	}
-	d := &Daemon{
+	return &Daemon{
 		nodeID:         nodeID,
 		sid:            sid,
 		outDir:         outDir,
-		metricsEnabled: cfg.Metrics.Enabled,
 		logger:         logger.Named("stats"),
-		sync:           synchronizer,
-		ctx:       ctx,
-		cancel:    cancel,
-		protocols: make(map[string]*protoAgg),
-		curRound:  make(map[common.Step]int),
-		tickTimes: make(map[common.Step]map[int]time.Time),
-		bytes:     ByteReport{ByProtocol: make(map[string]ByteCounts)},
-	}
-	for _, s := range stepsToWatch {
-		d.curRound[s] = -1
-		d.tickTimes[s] = make(map[int]time.Time)
-	}
-	return d
-}
-
-// Start launches one tick-watcher per watched step.
-func (d *Daemon) Start() {
-	for _, step := range stepsToWatch {
-		ticks, err := d.sync.TotalRounds(step)
-		if err != nil || ticks <= 0 {
-			continue
-		}
-		d.wg.Add(1)
-		go d.watch(step, ticks)
+		metricsEnabled: cfg.Metrics.Enabled,
+		protocols:      make(map[string]*protoAgg),
+		bytes:          ByteReport{ByProtocol: make(map[string]ByteCounts)},
 	}
 }
 
-// Close stops the watchers, writes the report, and
-// waits for every goroutine to exit. Safe to call once.
+// Start is a no-op; kept for call-site compatibility.
+func (d *Daemon) Start() {}
+
+// Close writes the JSON report. Safe to call once.
 func (d *Daemon) Close() error {
-	d.cancel()
-	d.wg.Wait()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.writeReport()
 	return nil
 }
 
-func (d *Daemon) recordTick(step common.Step, round int, arrival time.Time) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.curRound[step] = round
-	if d.tickTimes[step] == nil {
-		d.tickTimes[step] = make(map[int]time.Time)
-	}
-	d.tickTimes[step][round] = arrival
-}
+func (d *Daemon) RecordRoundStats(proto string, step common.Step, round int,
+	total, valid, lateCount, maxLateness int,
+	lagSumNs, lagMaxNs, lagLastNs int64, lagCount int) {
 
-func (d *Daemon) RecordReceived(proto string, step common.Step, round int, arrival time.Time) {
 	d.mu.Lock()
 	p := d.proto(proto, step)
 	ra := p.round(round)
-	ra.total++
-
-	// Late message: stamped round is below the step's current round.
-	if cur, ok := d.curRound[step]; ok && cur >= 0 && round < cur {
-		late := cur - round
-		p.lateMessages++
-		p.lateByRound[round]++
-		if late > p.maxLateness {
-			p.maxLateness = late
+	ra.total += total
+	ra.valid += valid
+	if lagCount > 0 {
+		ra.lagSumNs += lagSumNs
+		ra.lagCount += lagCount
+		ra.lagLastNs = lagLastNs
+		if lagMaxNs > ra.lagMaxNs {
+			ra.lagMaxNs = lagMaxNs
 		}
 	}
-
-	// Arrival lag: time from the round's start tick to message arrival.
-	if tt, ok := d.tickTimes[step][round]; ok && !tt.IsZero() {
-		lag := arrival.Sub(tt).Nanoseconds()
-		if lag < 0 {
-			lag = 0
-		}
-		ra.lagSumNs += lag
-		ra.lagCount++
-		ra.lagLastNs = lag
-		if lag > ra.lagMaxNs {
-			ra.lagMaxNs = lag
+	if lateCount > 0 {
+		p.lateMessages += lateCount
+		p.lateByRound[round] += lateCount
+		if maxLateness > p.maxLateness {
+			p.maxLateness = maxLateness
 		}
 	}
 	d.mu.Unlock()
 
-	if d.metricsEnabled {
-		metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
-	}
-}
-
-func (d *Daemon) RecordValid(proto string, step common.Step, round int) {
-	d.mu.Lock()
-	d.proto(proto, step).round(round).valid++
-	d.mu.Unlock()
-
-	if d.metricsEnabled {
-		metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
+	if d.metricsEnabled && (total > 0 || valid > 0) {
+		roundStr := strconv.Itoa(round)
+		metrics.TotalMessages.WithLabelValues(roundStr, proto, d.nodeID, d.sid).Add(float64(total))
+		metrics.ValidMessages.WithLabelValues(roundStr, proto, d.nodeID, d.sid).Add(float64(valid))
 	}
 }
 

@@ -117,6 +117,9 @@ type ExAnte struct {
 
 	gradeFunction common.GradeFunc
 	stats         common.StatsRecorder
+	roundAcc      map[int]*common.RoundAcc
+	tickTimes     map[int]time.Time
+	currentRound  int
 
 	protocolID string
 	nodeID     string
@@ -164,6 +167,9 @@ func New(
 		protocolID:    protocolID,
 		nodeID:        net.GetNodeID(),
 		R:             d * D,
+		roundAcc:      make(map[int]*common.RoundAcc),
+		tickTimes:     make(map[int]time.Time),
+		currentRound:  -1,
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -312,11 +318,20 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
 
 		e.mu.Lock()
+		e.currentRound = r
+		e.tickTimes[r] = tickNow
 		msgs := e.messages[r-1]
+		prevAcc := e.roundAcc[r-1]
+		delete(e.roundAcc, r-1)
 		e.mu.Unlock()
+
+		if prevAcc != nil {
+			e.flushRoundStats(r-1, prevAcc)
+		}
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
@@ -344,6 +359,15 @@ func (e *ExAnte) Verify(
 
 	e.isRunning = false
 	e.logger.Info("ExAnte verification phase completed")
+
+	// Flush stats for any rounds not yet flushed (including the last round).
+	e.mu.Lock()
+	remaining := e.roundAcc
+	e.roundAcc = make(map[int]*common.RoundAcc)
+	e.mu.Unlock()
+	for round, a := range remaining {
+		e.flushRoundStats(round, a)
+	}
 
 	return results, nil
 }
@@ -375,26 +399,52 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Record total message received, stamping arrival time for lag/late detection
-	e.stats.RecordReceived("exante", common.ExAnteVerify, round, time.Now())
+	arrival := time.Now()
 
+	// Phase 1: brief lock to snapshot state and count total.
+	e.mu.Lock()
+	acc := e.getAcc(round)
+	acc.Total++
+	curRound := e.currentRound
+	tt := e.tickTimes[round]
+	e.mu.Unlock()
+
+	if curRound >= 0 && round < curRound {
+		late := curRound - round
+		e.mu.Lock()
+		acc.LateCount++
+		if late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+		e.mu.Unlock()
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			e.mu.Lock()
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+			e.mu.Unlock()
+		}
+	}
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if msg.SessionId != e.sid {
-		err := errors.New("session id mismatch")
 		e.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", e.sid), zap.String("received", msg.SessionId),
 		)
-		return err
+		return errors.New("session id mismatch")
 	}
 
 	if !e.network.IsNeighbor(from) {
-		err := errors.New("sender not in neighbors list")
 		e.logger.Warn(
 			"Received message from non-neighbor sender", zap.String("sender", from.String()),
 		)
-		return err
+		return errors.New("sender not in neighbors list")
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if e.logger.Core().Enabled(zapcore.DebugLevel) {
 		e.logger.Debug(
@@ -408,12 +458,27 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Record valid message - passed all validation checks
-	e.stats.RecordValid("exante", common.ExAnteVerify, round)
-
+	// Phase 2: brief lock to record valid message.
+	e.mu.Lock()
+	acc.Valid++
 	e.messages[round] = append(e.messages[round], &msg)
-
+	e.mu.Unlock()
 	return nil
+}
+
+func (e *ExAnte) getAcc(round int) *common.RoundAcc {
+	a, ok := e.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		e.roundAcc[round] = a
+	}
+	return a
+}
+
+func (e *ExAnte) flushRoundStats(round int, a *common.RoundAcc) {
+	e.stats.RecordRoundStats("exante", common.ExAnteVerify, round,
+		a.Total, a.Valid, a.LateCount, a.MaxLateness,
+		a.LagSumNs, a.LagMaxNs, a.LagLastNs, a.LagCount)
 }
 
 func (e *ExAnte) validateMerklePath(merklePath []*pb.State, round int) bool {

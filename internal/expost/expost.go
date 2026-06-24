@@ -121,7 +121,10 @@ type ExPost struct {
 	gradeFunc  common.GradeFunc
 	threadPool *threadpool.ThreadPool
 
-	stats common.StatsRecorder
+	stats        common.StatsRecorder
+	roundAcc     map[int]*common.RoundAcc
+	tickTimes    map[int]time.Time
+	currentRound int
 
 	protocolID string
 	nodeID     string
@@ -171,9 +174,12 @@ func New(
 		vk:           vk,
 		isRunning:    true,
 
-		protocolID: protocolID,
-		nodeID:     net.GetNodeID(),
-		R:          gradeLevels * diameterBound,
+		protocolID:   protocolID,
+		nodeID:       net.GetNodeID(),
+		R:            gradeLevels * diameterBound,
+		roundAcc:     make(map[int]*common.RoundAcc),
+		tickTimes:    make(map[int]time.Time),
+		currentRound: -1,
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -329,12 +335,22 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 		e.logger.Info(
 			"ExPost verification round", zap.Int("round", r), zap.String("node_id", e.nodeID),
 		)
+
 		e.mu.Lock()
+		e.currentRound = r
+		e.tickTimes[r] = tickNow
 		msgs := e.messages[r-1]
+		prevAcc := e.roundAcc[r-1]
+		delete(e.roundAcc, r-1)
 		e.mu.Unlock()
+
+		if prevAcc != nil {
+			e.flushRoundStats(r-1, prevAcc)
+		}
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
@@ -361,6 +377,15 @@ func (e *ExPost) Verify(
 	}
 
 	e.isRunning = false
+
+	// Flush stats for any rounds not yet flushed (including the last round).
+	e.mu.Lock()
+	remaining := e.roundAcc
+	e.roundAcc = make(map[int]*common.RoundAcc)
+	e.mu.Unlock()
+	for round, a := range remaining {
+		e.flushRoundStats(round, a)
+	}
 	e.logger.Info("ExPost verification phase completed")
 	return results, nil
 }
@@ -541,40 +566,60 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Record total message received, stamping arrival time for lag/late detection
-	e.stats.RecordReceived("expost", common.ExPostVerify, round, time.Now())
+	arrival := time.Now()
 
+	// Phase 1: brief lock to snapshot state and count total.
+	e.mu.Lock()
+	acc := e.getAcc(round)
+	acc.Total++
+	curRound := e.currentRound
+	tt := e.tickTimes[round]
+	e.mu.Unlock()
+
+	if curRound >= 0 && round < curRound {
+		late := curRound - round
+		e.mu.Lock()
+		acc.LateCount++
+		if late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+		e.mu.Unlock()
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			e.mu.Lock()
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+			e.mu.Unlock()
+		}
+	}
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if msg.SessionId != e.sid {
-		err := fmt.Errorf("session id mismatch")
 		e.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", e.sid), zap.String("received", msg.SessionId),
 		)
-
-		return err
+		return fmt.Errorf("session id mismatch")
 	}
 
 	if msg.Aux == nil {
-		err := fmt.Errorf("message missing required Aux field")
 		e.logger.Warn("Received message with nil Aux", zap.String("sender", from.String()))
-		return err
+		return fmt.Errorf("message missing required Aux field")
 	}
 
 	if msg.Aux.AuxKey == nil {
-		err := fmt.Errorf("message missing required AuxKey field")
 		e.logger.Warn("Received message with nil AuxKey", zap.String("sender", from.String()))
-		return err
+		return fmt.Errorf("message missing required AuxKey field")
 	}
 
 	if !e.network.IsNeighbor(from) {
-		err := fmt.Errorf("sender not in neighbors list")
-
 		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from.String()))
-
-		return err
+		return fmt.Errorf("sender not in neighbors list")
 	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if e.logger.Core().Enabled(zap.DebugLevel) {
 		e.logger.Debug(
@@ -588,11 +633,27 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Record valid message - passed all validation checks
-	e.stats.RecordValid("expost", common.ExPostVerify, round)
-
+	// Phase 2: brief lock to record valid message.
+	e.mu.Lock()
+	acc.Valid++
 	e.messages[round] = append(e.messages[round], &msg)
+	e.mu.Unlock()
 	return nil
+}
+
+func (e *ExPost) getAcc(round int) *common.RoundAcc {
+	a, ok := e.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		e.roundAcc[round] = a
+	}
+	return a
+}
+
+func (e *ExPost) flushRoundStats(round int, a *common.RoundAcc) {
+	e.stats.RecordRoundStats("expost", common.ExPostVerify, round,
+		a.Total, a.Valid, a.LateCount, a.MaxLateness,
+		a.LagSumNs, a.LagMaxNs, a.LagLastNs, a.LagCount)
 }
 
 func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {
