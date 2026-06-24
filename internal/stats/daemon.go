@@ -50,11 +50,12 @@ type protoAgg struct {
 // Daemon collects all per-node statistics and writes a JSON
 // report at shutdown. It implements common.StatsRecorder.
 type Daemon struct {
-	nodeID string
-	sid    string
-	outDir string
-	logger *zap.Logger
-	sync   common.Synchronizer
+	nodeID         string
+	sid            string
+	outDir         string
+	metricsEnabled bool
+	logger         *zap.Logger
+	sync           common.Synchronizer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -80,11 +81,12 @@ func New(cfg *config.Config, logger *zap.Logger, synchronizer common.Synchronize
 		outDir = "."
 	}
 	d := &Daemon{
-		nodeID:    nodeID,
-		sid:       sid,
-		outDir:    outDir,
-		logger:    logger.Named("stats"),
-		sync:      synchronizer,
+		nodeID:         nodeID,
+		sid:            sid,
+		outDir:         outDir,
+		metricsEnabled: cfg.Metrics.Enabled,
+		logger:         logger.Named("stats"),
+		sync:           synchronizer,
 		ctx:       ctx,
 		cancel:    cancel,
 		protocols: make(map[string]*protoAgg),
@@ -163,7 +165,9 @@ func (d *Daemon) RecordReceived(proto string, step common.Step, round int, arriv
 	}
 	d.mu.Unlock()
 
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
+	if d.metricsEnabled {
+		metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
+	}
 }
 
 func (d *Daemon) RecordValid(proto string, step common.Step, round int) {
@@ -171,7 +175,9 @@ func (d *Daemon) RecordValid(proto string, step common.Step, round int) {
 	d.proto(proto, step).round(round).valid++
 	d.mu.Unlock()
 
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
+	if d.metricsEnabled {
+		metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), proto, d.nodeID, d.sid).Inc()
+	}
 }
 
 func (d *Daemon) RecordBytesPerRound(step common.Step, round int, protocolID string, delta common.RoundByteDelta) {
