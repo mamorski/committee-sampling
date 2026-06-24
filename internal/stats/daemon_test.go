@@ -38,12 +38,12 @@ func TestLateAndArrivalDetection(t *testing.T) {
 	step := common.ExPostVerify
 	base := time.Now()
 
-	d.handle(event{kind: evtTick, step: step, round: 0, arrival: base})
-	d.handle(event{kind: evtReceived, proto: "expost", step: step, round: 0, arrival: base.Add(5 * time.Millisecond)})
-	d.handle(event{kind: evtValid, proto: "expost", step: step, round: 0})
+	d.recordTick(step, 0, base)
+	d.RecordReceived("expost", step, 0, base.Add(5 * time.Millisecond))
+	d.RecordValid("expost", step, 0)
 
-	d.handle(event{kind: evtTick, step: step, round: 5, arrival: base.Add(50 * time.Millisecond)})
-	d.handle(event{kind: evtReceived, proto: "expost", step: step, round: 2, arrival: base.Add(55 * time.Millisecond)})
+	d.recordTick(step, 5, base.Add(50 * time.Millisecond))
+	d.RecordReceived("expost", step, 2, base.Add(55 * time.Millisecond))
 
 	rep := d.buildReport()
 	p := rep.Protocols["expost"]
@@ -121,4 +121,18 @@ func TestWritesReport(t *testing.T) {
 	if p := rep.Protocols["exante"]; p == nil || p.TotalMessages[0] != 1 || p.ValidMessages[0] != 1 {
 		t.Fatalf("exante report = %v, want total/valid round0=1", p)
 	}
+}
+
+func BenchmarkRecordReceived(b *testing.B) {
+	d := newTestDaemon(b.TempDir())
+	d.Start()
+	defer d.Close()
+	
+	now := time.Now()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			d.RecordReceived("exante", common.ExAnteVerify, 1, now)
+		}
+	})
 }

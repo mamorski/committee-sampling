@@ -23,7 +23,7 @@ func (d *Daemon) watch(step common.Step, ticks int) {
 		}
 		select {
 		case <-ch:
-			d.emit(event{kind: evtTick, step: step, round: r, arrival: time.Now()})
+			d.recordTick(step, r, time.Now())
 		case <-d.ctx.Done():
 			return
 		}
