@@ -43,3 +43,5 @@ venv/
 bin/
 
 results/
+
+LOG_COLLECTION.md
