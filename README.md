@@ -60,7 +60,7 @@ The binary entry point is `cmd/committee-sampling/main.go`. At startup the follo
 2. **Logging** – `createLogger` builds a zap logger configured by `logger.level`.
 3. **Time Synchronization** – `internal/synchronizer` queries the configured NTP server, computes per-step start times, and exposes `WaitForRound(step, round)` channels that gate protocol progress.
 4. **Networking** – `internal/network` spins up a libp2p host, joins the discovery DHT, handles neighbor churn, authenticates protobuf messages, and applies optional simulation behaviors.
-5. **Metrics** – `internal/metrics` registers Prometheus counters and optionally launches a `/metrics` HTTP server or Pushgateway pusher.
+5. **Metrics** – `internal/metrics` optionally launches a `/metrics` HTTP server or Pushgateway pusher. No application counters are registered; per-round message/byte/cache statistics are emitted to the structured logs at `WARN` level (see Observability).
 6. **Protocol Bootstrapping** – `internal/boot` wires together the building blocks:
    - `internal/resourceproof` provides proof-of-work based resource certificates.
    - `internal/resourcebound` runs Ex-Post and Ex-Ante timestamp protocols in parallel and intersects their outputs.
@@ -132,14 +132,15 @@ Single field `level` (`debug`, `info`, `warn`, `error`).
 }
 ```
 
-The collector always registers Prometheus counters:
+The collector registers no application counters. The former Prometheus counters
+(`total_messages`, `valid_messages`) were removed: with 1000 nodes per run their
+`node_id`-labelled cardinality made scraping/pushing impractical. Per-round message
+counts, arrival lag/lateness, byte volumes, cache hit/miss, committee, neighbors and
+peer-drops are instead emitted to the structured logs at `WARN` level, so a run with
+`logger.level: warn` keeps only that signal.
 
-| Metric           | Labels                                | Meaning                                                  |
-|------------------|---------------------------------------|----------------------------------------------------------|
-| `total_messages` | `round`, `protocol`, `node_id`, `sid` | Every inbound MDAG/ExAnte/ExPost packet the node parsed. |
-| `valid_messages` | Same as above                         | Subset that passed all validation checks.                |
-
-When `push_gateway.enabled` is true, metrics are pushed on the configured interval and optionally deleted on shutdown. The HTTP server exposes live metrics if `http_server.enabled` is set. Disable the entire block (`enabled: false`) for bare-bones runs.
+The push gateway / HTTP server blocks remain configurable but export nothing on their
+own now; leave `enabled: false` unless you register your own metrics.
 
 ---
 
@@ -173,8 +174,7 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 
 ## Observability & Troubleshooting
 
-* **Logs** – zap outputs to stdout/stderr with structured JSON format.
-* **Metrics** – visit the HTTP endpoint or query the Pushgateway / Prometheus instance you configured.
+* **Logs** – zap outputs to stdout/stderr with structured JSON format. Per-round stats (message counts, lag/lateness, byte volumes), cache hit/miss, committee, neighbor lists and peer-drops are logged at `WARN`; run with `logger.level: warn` to keep only these.
 * **Neighbor Topology** – final neighbor lists are logged at the end of each run for quick sanity checks.
 * **Committee Output** – elected members are printed both to stdout and to the structured logs with grade details.
 
@@ -200,7 +200,7 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 | `internal/mdag`, `internal/exante`, `internal/expost` | Protocol sub-components.                                |
 | `internal/resourceproof`, `internal/resourcebound`    | Resource-bounded proofs.                                |
 | `internal/synchronizer`                               | Time-based round scheduler.                             |
-| `internal/metrics`                                    | Prometheus collector.                                   |
+| `internal/metrics`                                    | Optional metrics server (no app counters).              |
 | `pkg/config`                                          | Config loader.                                          |
 | `pkg/proto`                                           | Generated protobuf stubs.                               |
 

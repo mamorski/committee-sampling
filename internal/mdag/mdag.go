@@ -37,7 +37,6 @@ type MDAG struct {
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
 	step           common.Step      // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
-	stats        common.StatsRecorder // sink for message/round statistics
 	roundAcc     map[int]*common.RoundAcc
 	tickTimes    map[int]time.Time
 	currentRound int
@@ -65,12 +64,7 @@ func New(
 	logger *zap.Logger,
 	step common.Step,
 	protocolType string,
-	statsRec common.StatsRecorder,
 ) *MDAG {
-
-	if statsRec == nil {
-		statsRec = common.NoopRecorder{}
-	}
 
 	m := &MDAG{
 		rounds:         rounds,
@@ -85,7 +79,6 @@ func New(
 		sessionID:      sid,
 		step:           step,
 		protocolType:   protocolType,
-		stats:          statsRec,
 		roundAcc:       make(map[int]*common.RoundAcc),
 		tickTimes:      make(map[int]time.Time),
 		currentRound:   -1,
@@ -336,9 +329,19 @@ func (m *MDAG) getAcc(round int) *common.RoundAcc {
 }
 
 func (m *MDAG) flushRoundStats(round int, a *common.RoundAcc) {
-	m.stats.RecordRoundStats(m.protocolType, m.step, round,
-		a.Total, a.Valid, a.LateCount, a.MaxLateness,
-		a.LagSumNs, a.LagMaxNs, a.LagLastNs, a.LagCount)
+	if a.Total == 0 {
+		return
+	}
+	var meanNs int64
+	if a.LagCount > 0 {
+		meanNs = a.LagSumNs / int64(a.LagCount)
+	}
+	m.logger.Warn("round stats",
+		zap.String("proto", m.protocolType), zap.String("step", string(m.step)),
+		zap.Int("round", round), zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+		zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+		zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+		zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
 }
 
 // broadcast sends a message to all network peers.

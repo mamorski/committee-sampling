@@ -125,14 +125,18 @@ func (n *P2PNode) logDelta(step common.Step, round int, prev, cur map[string]Byt
 			continue
 		}
 
-		n.statsd.RecordBytesPerRound(step, round, pid, d)
+		n.logger.Warn("round bytes",
+			zap.String("step", string(step)), zap.Int("round", round), zap.String("protocol", pid),
+			zap.Int64("wire_in", d.WireIn), zap.Int64("wire_out", d.WireOut),
+			zap.Int64("payload_in", d.PayloadIn), zap.Int64("payload_out", d.PayloadOut),
+			zap.Int64("env_in", d.EnvIn), zap.Int64("env_out", d.EnvOut))
 	}
 }
 
-// recordFinalBytes feeds the end-of-run byte breakdown into the stats daemon
-// (called from Close, after the byte watchers have stopped).
+// recordFinalBytes logs the end-of-run byte breakdown (called from Close, after
+// the byte watchers have stopped).
 func (n *P2PNode) recordFinalBytes() {
-	if n.bwc == nil || n.statsd == nil {
+	if n.bwc == nil {
 		return
 	}
 	all := n.bytesByProtocol()
@@ -164,17 +168,18 @@ func (n *P2PNode) recordFinalBytes() {
 		}
 	}
 
-	n.statsd.RecordBytesFinal(common.ByteSummary{
-		AppIn:       appIn,
-		AppOut:      appOut,
-		OverheadIn:  overheadIn,
-		OverheadOut: overheadOut,
-		TotalIn:     totalIn,
-		TotalOut:    totalOut,
-		PayloadIn:   payloadIn,
-		PayloadOut:  payloadOut,
-		EnvelopeIn:  envIn,
-		EnvelopeOut: envOut,
-	}, perProto)
+	n.logger.Warn("final bytes",
+		zap.Int64("app_in", appIn), zap.Int64("app_out", appOut),
+		zap.Int64("overhead_in", overheadIn), zap.Int64("overhead_out", overheadOut),
+		zap.Int64("total_in", totalIn), zap.Int64("total_out", totalOut),
+		zap.Int64("payload_in", payloadIn), zap.Int64("payload_out", payloadOut),
+		zap.Int64("env_in", envIn), zap.Int64("env_out", envOut))
+	for pid, t := range perProto {
+		n.logger.Warn("final bytes by protocol",
+			zap.String("protocol", pid),
+			zap.Int64("wire_in", t.WireIn), zap.Int64("wire_out", t.WireOut),
+			zap.Int64("payload_in", t.PayloadIn), zap.Int64("payload_out", t.PayloadOut),
+			zap.Int64("env_in", t.EnvIn), zap.Int64("env_out", t.EnvOut))
+	}
 }
 

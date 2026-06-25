@@ -2,7 +2,7 @@
 
 ## Monitoring / Observability
 
-**Prometheus counters** (`total_messages`, `valid_messages`) — registered but not used for live analysis. With 1000 nodes per run, scraping/pushing per-node metrics is impractical. The primary observability mechanism is **structured logging** (JSON via zap); per-node log files are the authoritative source for post-run analysis.
+**Prometheus counters** (`total_messages`, `valid_messages`) — **removed**. With 1000 nodes per run, scraping/pushing per-node (`node_id`-labelled) metrics was impractical, and the per-node stats daemon that emitted them added load. The sole observability mechanism is now **structured logging** (JSON via zap): per-round message counts, arrival lag/lateness, byte volumes, cache hit/miss, committee, neighbors and peer-drops are emitted at `WARN`, so a run with `logger.level: warn` keeps only that signal. Per-node log files are the authoritative source for post-run analysis. (`internal/metrics` still hosts the optional `/metrics` server / Pushgateway pusher but registers no application counters.)
 
 **Byte instrumentation** — the planned addition of communication-volume tracking in bytes. This is an *addition* to existing message-count logging, not a replacement. Byte volumes are an implementation-dependent contribution; message counts are not. Both will coexist in logs.
 

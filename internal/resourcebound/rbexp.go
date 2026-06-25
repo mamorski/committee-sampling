@@ -56,13 +56,9 @@ type RbExp struct {
 	ffilter       common.FilterF
 	logger        *zap.Logger
 	noAdversarial bool
-	stats         common.StatsRecorder
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, noAdversarial bool, stats common.StatsRecorder, logger *zap.Logger) *RbExp {
-	if stats == nil {
-		stats = common.NoopRecorder{}
-	}
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, noAdversarial bool, logger *zap.Logger) *RbExp {
 	return &RbExp{
 		rp:            rp,
 		exp:           exp,
@@ -71,7 +67,6 @@ func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weigh
 		ffilter:       ffilter,
 		logger:        logger.Named("rbexp"),
 		noAdversarial: noAdversarial,
-		stats:         stats,
 	}
 }
 
@@ -237,7 +232,8 @@ func (r *RbExp) Verify(
 	exPostResult := <-exPostCh
 	exAnteResult := <-exAnteCh
 
-	r.stats.RecordCacheStats("ftag", fTagHits.Load(), fTagMisses.Load())
+	r.logger.Warn("cache stats", zap.String("cache", "ftag"),
+		zap.Int64("hits", fTagHits.Load()), zap.Int64("misses", fTagMisses.Load()))
 
 	if exPostResult.err != nil {
 		return nil, exPostResult.err
