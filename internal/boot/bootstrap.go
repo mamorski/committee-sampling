@@ -45,17 +45,13 @@ type Bootstrap struct {
 	Network    network.Network
 	Logger     *zap.Logger
 	Context    context.Context
-	Stats      common.StatsRecorder
 
 	gradeCacheHits   *atomic.Int64
 	gradeCacheMisses *atomic.Int64
 }
 
 //nolint:funlen
-func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer, statsRec common.StatsRecorder) (*Bootstrap, error) {
-	if statsRec == nil {
-		statsRec = common.NoopRecorder{}
-	}
+func New(ctx context.Context, cfg *config.Config, node network.Network, logger *zap.Logger, sync common.Synchronizer) (*Bootstrap, error) {
 
 	vdFunc := vdf.New(logger)
 	vrFunc := vrf.New(logger)
@@ -177,7 +173,6 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		logger,
 		common.ExAnteMDAG,
 		"exanteMDAG",
-		statsRec,
 	)
 
 	mdagExPost := mdag.New(
@@ -189,10 +184,9 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		logger,
 		common.ExPostMDAG,
 		"expostMDAG",
-		statsRec,
 	)
 
-	exAnte := exante.New(node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger, statsRec)
+	exAnte := exante.New(node, mdagExAnte, cfg.Committee.SessionID, sync, cfg.Graph.GradingLevels, cfg.Graph.Diameter, gradeF, logger)
 
 	exPost := expost.New(
 		node,
@@ -205,11 +199,10 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		cfg.Committee.Lambda,
 		gradeF,
 		logger,
-		statsRec,
 	)
 
 	rp := resourceproof.New(logger)
-	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, cfg.Committee.NoAdversarial, statsRec, logger)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, cfg.Committee.NoAdversarial, logger)
 
 	election := gce.New(logger)
 
@@ -230,7 +223,6 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		Config:           cfg,
 		Logger:           logger,
 		Context:          ctx,
-		Stats:            statsRec,
 	}, nil
 
 }
@@ -248,9 +240,9 @@ func (b *Bootstrap) Run() error {
 		return fmt.Errorf("failed to perform committee election: %w", err)
 	}
 
-	b.Logger.Info("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
-	b.Stats.RecordCacheStats("grade", b.gradeCacheHits.Load(), b.gradeCacheMisses.Load())
-	b.Stats.RecordCommittee(committee)
+	b.Logger.Warn("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
+	b.Logger.Warn("cache stats", zap.String("cache", "grade"),
+		zap.Int64("hits", b.gradeCacheHits.Load()), zap.Int64("misses", b.gradeCacheMisses.Load()))
 	for _, member := range committee {
 		fmt.Printf("ID:    %s\n", member.ID)
 		fmt.Printf("VK:    %s\n", member.VK)

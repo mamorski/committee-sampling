@@ -1430,45 +1430,33 @@ if p > 1 { p = 1 }
 
 ## 10. Metrics Specification
 
-### 10.1 Prometheus Metrics
+### 10.1 Prometheus Metrics — removed
 
-**Counter: total_messages**
-
-```
-Name: total_messages
-Help: Total number of messages processed
-Labels:
-  - round: Protocol round number
-  - protocol: Protocol type (mdag/expost/exante)
-  - node_id: Node identifier
-  - sid: Session identifier
-```
-
-**Counter: valid_messages**
-
-```
-Name: valid_messages
-Help: Number of valid messages processed
-Labels:
-  - round: Protocol round number
-  - protocol: Protocol type (mdag/expost/exante)
-  - node_id: Node identifier
-  - sid: Session identifier
-```
+The per-node stats daemon and its Prometheus counters (`total_messages`,
+`valid_messages`, labelled `round`/`protocol`/`node_id`/`sid`) were removed. At 1000
+nodes the `node_id` cardinality made scraping/pushing impractical and the daemon's
+accumulation + JSON output added load. `internal/metrics` still hosts an optional
+`/metrics` server / Pushgateway pusher, but registers no application counters. All
+metrics are now emitted to the structured logs at `WARN`.
 
 ### 10.2 Internal Tracking
 
 ```go
-// Per-module message tracking
-type ExPost struct {
-    validMessages []int  // validMessages[round] = count
-    totalMessages []int  // totalMessages[round] = count
+// Per-round counters accumulated locally under the protocol's own mutex,
+// flushed (logged) once per round rather than per message.
+type RoundAcc struct {
+    Total, Valid, LateCount, MaxLateness int
+    LagSumNs, LagMaxNs, LagLastNs        int64
+    LagCount                             int
 }
 
-// Logged at protocol completion
-logger.Info("Message counts", 
-    zap.Ints("valid_messages", e.validMessages),
-    zap.Ints("total_messages", e.totalMessages))
+// flushRoundStats emits one WARN line per round (skipped when Total == 0):
+logger.Warn("round stats",
+    zap.String("proto", "expost"), zap.Int("round", round),
+    zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+    zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+    zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+    zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
 ```
 
 ### 10.3 Timing Measurements
@@ -1542,8 +1530,7 @@ committee-sampling/
 │   ├── hash/hash.go               # Hash utilities
 │   ├── mdag/mdag.go               # Merkle DAG
 │   ├── metrics/
-│   │   ├── collector.go           # Metrics collector
-│   │   └── metrics.go             # Prometheus metrics
+│   │   └── collector.go           # Optional /metrics server + Pushgateway (no app counters)
 │   ├── network/
 │   │   ├── host.go                # P2P node
 │   │   ├── internals.go           # Internal helpers

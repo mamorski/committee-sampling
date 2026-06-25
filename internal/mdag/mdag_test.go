@@ -91,7 +91,7 @@ func (suite *MDAGTestSuite) setupMDAG() {
 	suite.mockNetwork.On("GetNodeID").Return("testNode").Maybe()
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
-	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test", nil)
+	suite.mdag = New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 	suite.Require().NotNil(suite.mdag)
 }
 
@@ -99,7 +99,7 @@ func (suite *MDAGTestSuite) setupMDAG() {
 func (suite *MDAGTestSuite) TestNew() {
 	suite.mockNetwork.On("RegisterHandler", mock.Anything, mock.Anything).Return().Once()
 
-	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test", nil)
+	mdagInstance := New(3, "test-session", testOracle, suite.mockNetwork, suite.mockSynchronizer, suite.logger, common.ExPostMDAG, "test")
 
 	suite.NotNil(mdagInstance)
 	suite.mockNetwork.AssertExpectations(suite.T())

@@ -134,7 +134,6 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		d:             suite.testD,
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
-		stats:         common.NoopRecorder{},
 		messages:      make(map[int][]*pb.TimestampMessage),
 		sid:           suite.testSID,
 		isRunning:     true,
@@ -181,7 +180,7 @@ func (suite *ExAnteTestSuite) TestNew() {
 	mockNetwork.On("GetNodeID").Return("test-node-id").Once()
 
 	// Call New function
-	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger, nil)
+	exante := New(mockNetwork, mockMDAG, testSID, syncMock{}, testD, testBigD, gradeFunc, logger)
 
 	// Verify the instance is properly initialized
 	suite.NotNil(exante)

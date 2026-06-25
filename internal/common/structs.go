@@ -55,7 +55,7 @@ type FSigmaRBExp struct {
 }
 
 // RoundAcc holds per-round stats accumulated locally under a protocol's own
-// mutex. Flushed once per round via RecordRoundStats instead of per message.
+// mutex. Flushed (logged) once per round via flushRoundStats instead of per message.
 type RoundAcc struct {
 	Total, Valid, LateCount, MaxLateness int
 	LagSumNs, LagMaxNs, LagLastNs       int64

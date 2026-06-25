@@ -66,14 +66,7 @@ func New(ctx context.Context, cfg *config.Metrics, logger *zap.Logger, nodeID, s
 		}
 	}
 
-	collector.registerMetrics()
-
 	return collector, nil
-}
-
-func (c *Collector) registerMetrics() {
-	c.registry.MustRegister(TotalMessages)
-	c.registry.MustRegister(ValidMessages)
 }
 
 func (c *Collector) setupPushGateway() error {

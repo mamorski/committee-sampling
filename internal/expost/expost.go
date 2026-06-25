@@ -121,7 +121,6 @@ type ExPost struct {
 	gradeFunc  common.GradeFunc
 	threadPool *threadpool.ThreadPool
 
-	stats        common.StatsRecorder
 	roundAcc     map[int]*common.RoundAcc
 	tickTimes    map[int]time.Time
 	currentRound int
@@ -150,14 +149,9 @@ func New(
 	lambda int,
 	gradeFunc common.GradeFunc,
 	logger *zap.Logger,
-	statsRec common.StatsRecorder,
 ) *ExPost {
 
 	protocolID := fmt.Sprintf("%s/%s", expostProtocolID, sid)
-
-	if statsRec == nil {
-		statsRec = common.NoopRecorder{}
-	}
 
 	e := &ExPost{
 		network:      net,
@@ -169,7 +163,6 @@ func New(
 		lambda:       lambda,
 		gradeFunc:    gradeFunc,
 		messages:     make(map[int][]*pb.TimestampMessage, gradeLevels*diameterBound),
-		stats:        statsRec,
 		sid:          sid,
 		vk:           vk,
 		isRunning:    true,
@@ -650,9 +643,19 @@ func (e *ExPost) getAcc(round int) *common.RoundAcc {
 }
 
 func (e *ExPost) flushRoundStats(round int, a *common.RoundAcc) {
-	e.stats.RecordRoundStats("expost", common.ExPostVerify, round,
-		a.Total, a.Valid, a.LateCount, a.MaxLateness,
-		a.LagSumNs, a.LagMaxNs, a.LagLastNs, a.LagCount)
+	if a.Total == 0 {
+		return
+	}
+	var meanNs int64
+	if a.LagCount > 0 {
+		meanNs = a.LagSumNs / int64(a.LagCount)
+	}
+	e.logger.Warn("round stats",
+		zap.String("proto", "expost"), zap.Int("round", round),
+		zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+		zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+		zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+		zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
 }
 
 func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {

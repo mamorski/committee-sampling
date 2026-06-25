@@ -29,25 +29,6 @@ type Synchronizer interface {
 	TotalRounds(step Step) (int, error)
 }
 
-// ByteSummary is the end-of-run application-vs-overhead byte breakdown for a node.
-// App*/Overhead*/Total* are libp2p wire bytes (App* = app-protocol streams,
-// Overhead* = discovery/connection protocols). Payload*/Envelope* are summed across
-// app-protocol streams only: Payload* is the protocol's own message size, Envelope*
-// the marshaled ProtocolMessage (payload + signature + MessageData). Thus
-// Envelope-Payload = app wrapping overhead, App(wire)-Envelope = libp2p stream framing.
-type ByteSummary struct {
-	AppIn       int64 `json:"app_in"`
-	AppOut      int64 `json:"app_out"`
-	OverheadIn  int64 `json:"overhead_in"`
-	OverheadOut int64 `json:"overhead_out"`
-	TotalIn     int64 `json:"total_in"`
-	TotalOut    int64 `json:"total_out"`
-	PayloadIn   int64 `json:"payload_in"`
-	PayloadOut  int64 `json:"payload_out"`
-	EnvelopeIn  int64 `json:"envelope_in"`
-	EnvelopeOut int64 `json:"envelope_out"`
-}
-
 // RoundByteDelta carries one protocol's byte deltas accrued within a round window.
 // Wire* are libp2p BandwidthCounter deltas; Env* are marshaled ProtocolMessage sizes;
 // Payload* are the protocol's own message sizes. Per direction Payload <= Env <= Wire.
@@ -63,43 +44,3 @@ type ProtoByteTotals struct {
 	EnvIn, EnvOut         int64
 	PayloadIn, PayloadOut int64
 }
-
-// StatsRecorder is the sink every protocol/component reports statistics to. The
-// stats daemon implements it; protocols hold this interface (never the daemon)
-// so they stay decoupled and testable. All methods must be safe for concurrent
-// use and non-blocking enough for hot message paths.
-type StatsRecorder interface {
-	// RecordRoundStats flushes the pre-aggregated counters for one round.
-	// Protocols accumulate these locally (under their own mutex) and call once
-	// per round, reducing stats-daemon lock acquisitions from O(messages) to
-	// O(rounds).
-	RecordRoundStats(proto string, step Step, round int,
-		total, valid, lateCount, maxLateness int,
-		lagSumNs, lagMaxNs, lagLastNs int64, lagCount int)
-	// RecordBytesPerRound records the per-protocol byte delta accrued in a round window.
-	RecordBytesPerRound(step Step, round int, protocolID string, d RoundByteDelta)
-	// RecordBytesFinal records the end-of-run byte totals and per-protocol breakdown.
-	RecordBytesFinal(summary ByteSummary, perProtocol map[string]ProtoByteTotals)
-	// RecordNeighbors records this node's final neighbor list.
-	RecordNeighbors(neighbors []string)
-	// RecordCommittee records the elected committee.
-	RecordCommittee(members []*CommitteeOutput)
-	// RecordPeerDrop records a simulated peer-drop event initiated by this node.
-	RecordPeerDrop(peerID, phase string, round int)
-	// RecordCacheStats records hit/miss counts for a named cache (e.g. "ftag", "grade").
-	RecordCacheStats(name string, hits, misses int64)
-}
-
-// NoopRecorder is a StatsRecorder that discards everything. Constructors
-// substitute it when no daemon is injected (e.g. unit tests) so hot paths can
-// call the recorder unconditionally without nil checks.
-type NoopRecorder struct{}
-
-func (NoopRecorder) RecordRoundStats(string, Step, int, int, int, int, int, int64, int64, int64, int) {
-}
-func (NoopRecorder) RecordBytesPerRound(Step, int, string, RoundByteDelta)        {}
-func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string]ProtoByteTotals)     {}
-func (NoopRecorder) RecordNeighbors([]string)                                     {}
-func (NoopRecorder) RecordCommittee([]*CommitteeOutput)                           {}
-func (NoopRecorder) RecordPeerDrop(string, string, int)                           {}
-func (NoopRecorder) RecordCacheStats(string, int64, int64)                        {}
