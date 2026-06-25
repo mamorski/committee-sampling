@@ -18,6 +18,7 @@ type Report struct {
 	Neighbors   []string                   `json:"neighbors"`
 	Committee   []CommitteeMember          `json:"committee"`
 	PeerDrops   []PeerDropReport           `json:"peer_drops"`
+	Caches      map[string]CacheStat       `json:"caches,omitempty"`
 }
 
 // ProtocolReport holds per-round message counts plus the synchronization and
@@ -90,4 +91,10 @@ type PeerDropReport struct {
 	PeerID string `json:"peer_id"`
 	Phase  string `json:"phase"`
 	Round  int    `json:"round"`
+}
+
+// CacheStat is the hit/miss summary for one named cache over a run.
+type CacheStat struct {
+	Hits   int64 `json:"hits"`
+	Misses int64 `json:"misses"`
 }

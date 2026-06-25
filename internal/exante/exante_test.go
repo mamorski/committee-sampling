@@ -844,9 +844,7 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.False(suite.exante.isRunning)
 
 	// Verify that the message was processed and included in results
-	r, exists := result.Get(
-		string(suite.testVK), string(suite.testChallenge),
-	)
+	r, exists := result.Get(string(suite.testVK))
 	suite.True(exists)
 	suite.Equal(2, r.Grade)
 
@@ -941,9 +939,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.NotNil(result)
 
 	// Should only have one entry for the key (higher grade wins)
-	r, exists := result.Get(
-		string(suite.testVK), string(suite.testChallenge),
-	)
+	r, exists := result.Get(string(suite.testVK))
 	suite.True(exists)
 	suite.Equal(result.Len(), 1)
 	suite.Equal(3, r.Grade) // Should take the higher grade from node2

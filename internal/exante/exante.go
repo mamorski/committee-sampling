@@ -306,7 +306,7 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
 		}
 
-		results.Add(vk, e.challenge, e.nodeID, grade)
+		results.Add(vk, e.nodeID, grade)
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
@@ -562,7 +562,7 @@ func (e *ExAnte) processMessage(
 				"Processing valid message", zap.String("sender_id", msg.Id), zap.Int("round", r), zap.Int("grade", g),
 			)
 		}
-		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
+		if results.Add(msg.VerificationKey, msg.Id, g) {
 			e.logger.Info(
 				"Added to results",
 				zap.String("sender_id", msg.Id),

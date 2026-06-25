@@ -71,7 +71,7 @@ func (s *RbExpSuite) SetupTest() {
 	s.exp = new(MockExPost)
 	s.exa = new(MockExAnte)
 	s.weight = 1.0
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return true }, s.weight, zap.NewNop())
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return true }, s.weight, false, nil, zap.NewNop())
 }
 
 func TestRbExpSuite(t *testing.T) {
@@ -190,9 +190,9 @@ func (s *RbExpSuite) TestVer_Success() {
 	auxTag := &common.AuxTag{PiRP: piRP, AuxKey: auxKey}
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 	outputP := &common.Committee{}
-	outputP.Add(vk, challenge, "id1", 8)
+	outputP.Add(vk, "id1", 8)
 	outputA := &common.Committee{}
-	outputA.Add(vk, challenge, "id1", 5)
+	outputA.Add(vk, "id1", 5)
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(outputP, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(outputA, nil).Once()
@@ -306,7 +306,7 @@ func (s *RbExpSuite) TestVer_FilterFalse() {
 	fSigmaExp := &common.FSigmaExp{Challenge: challenge, Sigma: sigmaExp}
 
 	// Use a filter that always returns false by changing the rbexp instance
-	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return false }, s.weight, zap.NewNop())
+	s.rbexp = New(s.rp, s.exp, s.exa, func(string, string, []byte, []byte, *pb.AuxKeyMessage) bool { return false }, s.weight, false, nil, zap.NewNop())
 
 	s.exp.On("Verify", sid, vk, fSigmaExp, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()
 	s.exa.On("Verify", sid, vk, sigmaExa, auxTag, 0.0, mock.Anything).Return(&common.Committee{}, nil).Once()

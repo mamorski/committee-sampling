@@ -106,6 +106,9 @@ type Committee struct {
 	DeltaW        float64 `mapstructure:"delta_w"`        // Acceptable weight deviation
 	CommitteeSize int     `mapstructure:"committee_size"` // Size of the committee to be formed
 	Delay         int     `mapstructure:"delay"`          // Delay for the VDF in seconds
+
+	// Simulation-only: when true, all messages are assumed honest; enables cheaper vk-only caching.
+	NoAdversarial bool `mapstructure:"no_adversarial"`
 }
 
 type Synchronization struct {
