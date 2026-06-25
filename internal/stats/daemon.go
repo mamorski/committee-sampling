@@ -50,6 +50,7 @@ type Daemon struct {
 	neighbors []string
 	committee []CommitteeMember
 	peerDrops []PeerDropReport
+	caches    map[string]CacheStat
 }
 
 var _ common.StatsRecorder = (*Daemon)(nil)
@@ -68,6 +69,7 @@ func New(cfg *config.Config, logger *zap.Logger, nodeID, sid string) *Daemon {
 		metricsEnabled: cfg.Metrics.Enabled,
 		protocols:      make(map[string]*protoAgg),
 		bytes:          ByteReport{ByProtocol: make(map[string]ByteCounts)},
+		caches:         make(map[string]CacheStat),
 	}
 }
 
@@ -163,6 +165,15 @@ func (d *Daemon) RecordPeerDrop(peerID, phase string, round int) {
 	d.peerDrops = append(d.peerDrops, PeerDropReport{PeerID: peerID, Phase: phase, Round: round})
 }
 
+func (d *Daemon) RecordCacheStats(name string, hits, misses int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s := d.caches[name]
+	s.Hits += hits
+	s.Misses += misses
+	d.caches[name] = s
+}
+
 func (d *Daemon) proto(name string, step common.Step) *protoAgg {
 	p, ok := d.protocols[name]
 	if !ok {
@@ -183,6 +194,10 @@ func (p *protoAgg) round(r int) *roundAgg {
 
 // buildReport snapshots the aggregation state into the serializable Report.
 func (d *Daemon) buildReport() Report {
+	caches := make(map[string]CacheStat, len(d.caches))
+	for k, v := range d.caches {
+		caches[k] = v
+	}
 	rep := Report{
 		NodeID:      d.nodeID,
 		SID:         d.sid,
@@ -192,6 +207,7 @@ func (d *Daemon) buildReport() Report {
 		Neighbors:   d.neighbors,
 		Committee:   d.committee,
 		PeerDrops:   d.peerDrops,
+		Caches:      caches,
 	}
 	if rep.Neighbors == nil {
 		rep.Neighbors = []string{}

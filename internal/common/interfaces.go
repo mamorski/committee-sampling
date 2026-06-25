@@ -86,6 +86,8 @@ type StatsRecorder interface {
 	RecordCommittee(members []*CommitteeOutput)
 	// RecordPeerDrop records a simulated peer-drop event initiated by this node.
 	RecordPeerDrop(peerID, phase string, round int)
+	// RecordCacheStats records hit/miss counts for a named cache (e.g. "ftag", "grade").
+	RecordCacheStats(name string, hits, misses int64)
 }
 
 // NoopRecorder is a StatsRecorder that discards everything. Constructors
@@ -100,3 +102,4 @@ func (NoopRecorder) RecordBytesFinal(ByteSummary, map[string]ProtoByteTotals)   
 func (NoopRecorder) RecordNeighbors([]string)                                     {}
 func (NoopRecorder) RecordCommittee([]*CommitteeOutput)                           {}
 func (NoopRecorder) RecordPeerDrop(string, string, int)                           {}
+func (NoopRecorder) RecordCacheStats(string, int64, int64)                        {}

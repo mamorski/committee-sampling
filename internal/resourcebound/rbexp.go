@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
@@ -48,22 +49,29 @@ type ExAnte interface {
 }
 
 type RbExp struct {
-	rp      ResourceProof
-	exp     ExPost
-	exa     ExAnte
-	weight  float64
-	ffilter common.FilterF
-	logger  *zap.Logger
+	rp            ResourceProof
+	exp           ExPost
+	exa           ExAnte
+	weight        float64
+	ffilter       common.FilterF
+	logger        *zap.Logger
+	noAdversarial bool
+	stats         common.StatsRecorder
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, logger *zap.Logger) *RbExp {
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, noAdversarial bool, stats common.StatsRecorder, logger *zap.Logger) *RbExp {
+	if stats == nil {
+		stats = common.NoopRecorder{}
+	}
 	return &RbExp{
-		rp:      rp,
-		exp:     exp,
-		exa:     exa,
-		weight:  weight,
-		ffilter: ffilter,
-		logger:  logger.Named("rbexp"),
+		rp:            rp,
+		exp:           exp,
+		exa:           exa,
+		weight:        weight,
+		ffilter:       ffilter,
+		logger:        logger.Named("rbexp"),
+		noAdversarial: noAdversarial,
+		stats:         stats,
 	}
 }
 
@@ -137,6 +145,8 @@ func (r *RbExp) Verify(
 	var fTagCacheMu sync.RWMutex
 	fTagCache := make(map[string]bool)
 
+	var fTagHits, fTagMisses atomic.Int64
+
 	fTag := func(sid, id string, vk []byte, ch []byte, aux *pb.Aux) bool {
 		r.logger.Debug("Filter tag function called",
 			zap.String("sender_id", id),
@@ -149,31 +159,39 @@ func (r *RbExp) Verify(
 			return false
 		}
 
-		bPtr := fTagBufPool.Get().(*[]byte)
-		buf := (*bPtr)[:0] // Reset length to 0
+		var cacheKey string
+		if r.noAdversarial {
+			cacheKey = string(vk)
+		} else {
+			bPtr := fTagBufPool.Get().(*[]byte)
+			buf := (*bPtr)[:0]
 
-		ak := aux.AuxKey
-		var lenBuf [4]byte
-		writeField := func(p []byte) {
-			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
+			ak := aux.AuxKey
+			var lenBuf [4]byte
+			writeField := func(p []byte) {
+				binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
+				buf = append(buf, lenBuf[:]...)
+				buf = append(buf, p...)
+			}
+			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
 			buf = append(buf, lenBuf[:]...)
-			buf = append(buf, p...)
+			buf = append(buf, id...)
+			writeField(vk)
+			writeField(ch)
+			writeField(aux.PiRP)
+			writeField(ak.PhiVdf)
+			writeField(ak.PiVdf)
+			writeField(ak.PhiVrf)
+			writeField(ak.PiVrf)
+
+			cacheKey = string(buf)
+			fTagBufPool.Put(bPtr)
 		}
-		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
-		buf = append(buf, lenBuf[:]...)
-		buf = append(buf, id...)
-		writeField(vk)
-		writeField(ch)
-		writeField(aux.PiRP)
-		writeField(ak.PhiVdf)
-		writeField(ak.PiVdf)
-		writeField(ak.PhiVrf)
-		writeField(ak.PiVrf)
 
 		fTagCacheMu.RLock()
-		if v, ok := fTagCache[string(buf)]; ok {
+		if v, ok := fTagCache[cacheKey]; ok {
 			fTagCacheMu.RUnlock()
-			fTagBufPool.Put(bPtr)
+			fTagHits.Add(1)
 			return v
 		}
 		fTagCacheMu.RUnlock()
@@ -181,10 +199,10 @@ func (r *RbExp) Verify(
 		res := r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
 
 		fTagCacheMu.Lock()
-		fTagCache[string(buf)] = res
+		fTagCache[cacheKey] = res
 		fTagCacheMu.Unlock()
-		
-		fTagBufPool.Put(bPtr)
+
+		fTagMisses.Add(1)
 		return res
 	}
 	auxTag := &common.AuxTag{
@@ -219,6 +237,8 @@ func (r *RbExp) Verify(
 	exPostResult := <-exPostCh
 	exAnteResult := <-exAnteCh
 
+	r.stats.RecordCacheStats("ftag", fTagHits.Load(), fTagMisses.Load())
+
 	if exPostResult.err != nil {
 		return nil, exPostResult.err
 	}
@@ -239,8 +259,8 @@ func (r *RbExp) Verify(
 	)
 
 	var outputs []*common.CommitteeOutput
-	oP.Range(func(key, ch string, val common.O) {
-		if exAnteValue, ok := oA.Get(key, ch); ok {
+	oP.Range(func(key string, val common.O) {
+		if exAnteValue, ok := oA.Get(key); ok {
 			g := min(val.Grade, exAnteValue.Grade)
 			outputs = append(outputs, &common.CommitteeOutput{
 				ID:    val.ID,
@@ -251,7 +271,6 @@ func (r *RbExp) Verify(
 			r.logger.Debug("No matching ExAnte value for ExPost",
 				zap.String("sid", sid),
 				zap.String("vk", key),
-				zap.String("challenge", ch),
 			)
 		}
 	})

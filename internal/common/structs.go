@@ -69,37 +69,28 @@ type CommitteeOutput struct {
 	Grade int
 }
 
-type committeeKey struct {
-	vk string
-	ch string
-}
-
 // Committee holds the committee members' information.
 type Committee struct {
 	mu        sync.RWMutex // Protects concurrent access to committee map
-	committee map[committeeKey]O
+	committee map[string]O
 	len       int
 }
 
 // Add adds a new member to the committee.
-// It takes a verification key (vk), a challenge (ch), an identifier (id), and a grade.
 // If the member already exists with a lower grade, it will overwrite it.
 // If the member exists with a higher or equal grade, it will not update the entry.
 // Returns true if the member was added or updated, false if not.
 // This method is thread-safe.
-func (c *Committee) Add(vk, ch []byte, id string, grade int) bool {
+func (c *Committee) Add(vk []byte, id string, grade int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.committee == nil {
-		c.committee = make(map[committeeKey]O)
+		c.committee = make(map[string]O)
 		c.len = 0
 	}
-	
-	key := committeeKey{
-		vk: string(vk),
-		ch: string(ch),
-	}
+
+	key := string(vk)
 
 	existing, exists := c.committee[key]
 	if exists && existing.Grade >= grade {
@@ -126,7 +117,7 @@ func (c *Committee) ToCommitteeOutput() []*CommitteeOutput {
 	outputs := make([]*CommitteeOutput, 0, c.len)
 
 	for key, member := range c.committee {
-		vkStr := base64.StdEncoding.EncodeToString([]byte(key.vk))
+		vkStr := base64.StdEncoding.EncodeToString([]byte(key))
 		outputs = append(outputs, &CommitteeOutput{
 			ID:    member.ID,
 			VK:    vkStr,
@@ -137,20 +128,20 @@ func (c *Committee) ToCommitteeOutput() []*CommitteeOutput {
 	return outputs
 }
 
-// Range calls fn for every (vk, ch, value) in the underlying maps.
+// Range calls fn for every (vk, value) in the committee.
 // This method is thread-safe.
-func (c *Committee) Range(fn func(vk, ch string, val O)) {
+func (c *Committee) Range(fn func(vk string, val O)) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	for key, val := range c.committee {
-		fn(key.vk, key.ch, val)
+		fn(key, val)
 	}
 }
 
-// Get retrieves a committee member by verification key and challenge.
+// Get retrieves a committee member by verification key.
 // This method is thread-safe.
-func (c *Committee) Get(vk, ch string) (O, bool) {
+func (c *Committee) Get(vk string) (O, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -158,7 +149,7 @@ func (c *Committee) Get(vk, ch string) (O, bool) {
 		return O{}, false
 	}
 
-	key := committeeKey{vk: vk, ch: ch}
+	key := string(vk)
 	if member, exists := c.committee[key]; exists {
 		return member, true
 	}

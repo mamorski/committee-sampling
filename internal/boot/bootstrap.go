@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	stdsync "sync" // aliased: the New() param `sync common.Synchronizer` shadows the package name
+	"sync/atomic"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/exante"
@@ -45,6 +46,9 @@ type Bootstrap struct {
 	Logger     *zap.Logger
 	Context    context.Context
 	Stats      common.StatsRecorder
+
+	gradeCacheHits   *atomic.Int64
+	gradeCacheMisses *atomic.Int64
 }
 
 //nolint:funlen
@@ -109,6 +113,8 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	// work to ~one compute per distinct member. The closure is shared by both ExPost
 	// and ExAnte; sync.Map fits the write-once / read-many / stable-key pattern.
 	var gradeCache stdsync.Map // map[string]int
+	gradeCacheHits := &atomic.Int64{}
+	gradeCacheMisses := &atomic.Int64{}
 
 	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf), ϕ(vrf), π(vrf) ), Wi),
 	// parameterized by a "weight disagreement" bound ∆W computes gi ← d + 1 − (Wi − n · 2^λ/ ϕ(vrf)+1) · 1 / ∆W
@@ -125,8 +131,10 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		// the cache.
 		cacheKey := string(auxKey.PhiVrf)
 		if v, ok := gradeCache.Load(cacheKey); ok {
+			gradeCacheHits.Add(1)
 			return v.(int)
 		}
+		gradeCacheMisses.Add(1)
 
 		g, err := computeGrade(
 			cfg.Graph.GradingLevels,
@@ -201,26 +209,28 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	)
 
 	rp := resourceproof.New(logger)
-	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, logger)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, cfg.Committee.NoAdversarial, statsRec, logger)
 
 	election := gce.New(logger)
 
 	return &Bootstrap{
-		id:         node.GetNodeID(),
-		MDagExAnte: mdagExAnte,
-		MDagExPost: mdagExPost,
-		ExAnte:     exAnte,
-		ExPost:     exPost,
-		RP:         rp,
-		RbExp:      rbExp,
-		VDF:        vdFunc,
-		VRF:        vrFunc,
-		GCE:        election,
-		Network:    node,
-		Config:     cfg,
-		Logger:     logger,
-		Context:    ctx,
-		Stats:      statsRec,
+		id:               node.GetNodeID(),
+		MDagExAnte:       mdagExAnte,
+		MDagExPost:       mdagExPost,
+		ExAnte:           exAnte,
+		ExPost:           exPost,
+		RP:               rp,
+		RbExp:            rbExp,
+		VDF:              vdFunc,
+		VRF:              vrFunc,
+		GCE:              election,
+		Network:          node,
+		gradeCacheHits:   gradeCacheHits,
+		gradeCacheMisses: gradeCacheMisses,
+		Config:           cfg,
+		Logger:           logger,
+		Context:          ctx,
+		Stats:            statsRec,
 	}, nil
 
 }
@@ -239,6 +249,7 @@ func (b *Bootstrap) Run() error {
 	}
 
 	b.Logger.Info("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
+	b.Stats.RecordCacheStats("grade", b.gradeCacheHits.Load(), b.gradeCacheMisses.Load())
 	b.Stats.RecordCommittee(committee)
 	for _, member := range committee {
 		fmt.Printf("ID:    %s\n", member.ID)
