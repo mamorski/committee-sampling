@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"syscall"
 
 	"github.com/mamorski/committee-sampling/internal/boot"
@@ -20,6 +21,8 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "path to config file (optional, defaults to ./configs/{env}.json)")
+	cpuprofile := flag.String("cpuprofile", "", "write CPU profile to this file (empty = off)")
+	memprofile := flag.String("memprofile", "", "write heap profile to this file at shutdown (empty = off)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -29,6 +32,36 @@ func main() {
 
 	ctx := context.Background()
 	logger := createLogger(cfg)
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			logger.Fatal("could not create CPU profile", zap.Error(err))
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			logger.Fatal("could not start CPU profile", zap.Error(err))
+		}
+		// Order matters: defers run LIFO, so f.Close() is registered first to
+		// ensure StopCPUProfile() flushes the profile before the file is closed.
+		defer f.Close()
+		defer pprof.StopCPUProfile()
+		logger.Info("CPU profiling enabled", zap.String("file", *cpuprofile))
+	}
+
+	if *memprofile != "" {
+		defer func() {
+			f, err := os.Create(*memprofile)
+			if err != nil {
+				logger.Error("could not create heap profile", zap.Error(err))
+				return
+			}
+			defer f.Close()
+			runtime.GC() // get up-to-date statistics
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				logger.Error("could not write heap profile", zap.Error(err))
+			}
+		}()
+	}
 
 	gomaxprocs := cfg.Runtime.GOMAXPROCS
 	if gomaxprocs == 0 {
