@@ -560,35 +560,29 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 
 	arrival := time.Now()
 
-	// Phase 1: brief lock to snapshot state and count total.
+	// Single critical section: snapshot state and record total/late/lag.
 	e.mu.Lock()
 	acc := e.getAcc(round)
 	acc.Total++
 	curRound := e.currentRound
 	tt := e.tickTimes[round]
-	e.mu.Unlock()
-
 	if curRound >= 0 && round < curRound {
-		late := curRound - round
-		e.mu.Lock()
 		acc.LateCount++
-		if late > acc.MaxLateness {
+		if late := curRound - round; late > acc.MaxLateness {
 			acc.MaxLateness = late
 		}
-		e.mu.Unlock()
 	}
 	if !tt.IsZero() {
 		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
-			e.mu.Lock()
 			acc.LagSumNs += lag
 			acc.LagCount++
 			acc.LagLastNs = lag
 			if lag > acc.LagMaxNs {
 				acc.LagMaxNs = lag
 			}
-			e.mu.Unlock()
 		}
 	}
+	e.mu.Unlock()
 
 	// Validation outside lock — Warn calls must not hold mu.
 	if msg.SessionId != e.sid {
