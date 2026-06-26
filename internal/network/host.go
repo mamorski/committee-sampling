@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +20,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -153,16 +157,18 @@ type P2PNode struct {
 	logger                      *zap.Logger
 	discovery                   discovery.PeerDiscovery
 	sync                        common.Synchronizer
-	mu                          sync.Mutex
+	mu                          sync.RWMutex
 	key                         crypto.PrivKey
 	bwc                         *lp2pmetrics.BandwidthCounter
 	appBytes                    *appByteTracker
 	bwWG                        sync.WaitGroup
 	nodeID                      string
+	nodePubKey                  []byte
 	neighbors                   map[peer.ID]peer.AddrInfo
 	potentialNeighbors          sync.Map
 	sid                         string
 	maxOutbound                 int
+	sendTimeout                 time.Duration
 	buildingRounds              int
 	dropOnSendProbability       float64
 	acceptingPotentialNeighbors atomic.Bool
@@ -177,6 +183,22 @@ type P2PNode struct {
 	shuffledPotentialNeighbors  []peer.AddrInfo
 	selectedNeighborTarget      int
 	sentProposalsTo             map[peer.ID]bool
+	streamPool                  map[streamKey]*pooledStream
+	poolMu                      sync.Mutex
+}
+
+// streamKey identifies a reusable outbound stream by peer and protocol.
+type streamKey struct {
+	peer  peer.ID
+	proto protocol.ID
+}
+
+// pooledStream is a long-lived outbound stream with length-prefixed framing.
+// s is nil until first open and after lazy eviction on write error.
+type pooledStream struct {
+	mu sync.Mutex // serialize writes; libp2p stream not concurrent-write safe
+	s  network.Stream
+	w  msgio.Writer
 }
 
 func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchronizer common.Synchronizer, sid string) (*P2PNode, error) {
@@ -200,11 +222,36 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 
 	bwc := lp2pmetrics.NewBandwidthCounter()
 
-	// Create libp2p h
-	h, err := libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.ListenAddrs(listenAddr), libp2p.Identity(priv),
 		libp2p.BandwidthReporter(bwc),
-	)
+	}
+	// Co-located simulations open many concurrent streams; the default resource
+	// manager rejects them ("Failed to open stream"). Disable the limits when asked.
+	if cfg.Network.UnlimitedResources {
+		// InfiniteLimits only relaxes the resource Limiter. The connLimiter is a
+		// separate cap that defaults to 8 conns per IPv4 /32 (loopback excepted),
+		// so co-located nodes sharing one non-loopback IP hit "connections per ip
+		// limit exceeded". Lift the per-subnet and network-prefix caps too.
+		unlimitedV4 := []rcmgr.ConnLimitPerSubnet{{PrefixLength: 0, ConnCount: math.MaxInt}}
+		unlimitedV6 := []rcmgr.ConnLimitPerSubnet{{PrefixLength: 0, ConnCount: math.MaxInt}}
+		unlimitedPrefixV4 := []rcmgr.NetworkPrefixLimit{{Network: netip.MustParsePrefix("0.0.0.0/0"), ConnCount: math.MaxInt}}
+		unlimitedPrefixV6 := []rcmgr.NetworkPrefixLimit{{Network: netip.MustParsePrefix("::/0"), ConnCount: math.MaxInt}}
+		rm, err := rcmgr.NewResourceManager(
+			rcmgr.NewFixedLimiter(rcmgr.InfiniteLimits),
+			rcmgr.WithLimitPerSubnet(unlimitedV4, unlimitedV6),
+			rcmgr.WithNetworkPrefixLimit(unlimitedPrefixV4, unlimitedPrefixV6),
+		)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create resource manager: %w", err)
+		}
+		opts = append(opts, libp2p.ResourceManager(rm))
+		logger.Info("Simulation: libp2p resource manager limits disabled")
+	}
+
+	// Create libp2p h
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create h: %w", err)
@@ -214,11 +261,24 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	d := discovery.NewDHTDiscovery(h, cfg.Network.DiscoveryConfig, logger)
 	logger = logger.With(zap.String("node_id", h.ID().String()))
 
+	// Marshal own public key once; it is constant and attached to every outbound message.
+	nodePubKey, err := crypto.MarshalPublicKey(priv.GetPublic())
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
 	node := &P2PNode{
 		host:                        h,
 		ctx:                         c,
 		cancel:                      cancel,
 		maxOutbound:                 cfg.Network.MaxOutboundDegree,
+		sendTimeout: func() time.Duration {
+			if cfg.Network.SendTimeout > 0 {
+				return cfg.Network.SendTimeout
+			}
+			return 5 * time.Second
+		}(),
 		discovery:                   d,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
@@ -226,6 +286,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		bwc:                         bwc,
 		appBytes:                    newAppByteTracker(),
 		nodeID:                      h.ID().String(),
+		nodePubKey:                  nodePubKey,
 		acceptingPotentialNeighbors: atomic.Bool{},
 		sync:                        synchronizer,
 		sid:                         sid,
@@ -253,6 +314,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		dropQueue:              make([]queuedDrop, 0),
 		acceptingGraphMessages: atomic.Bool{},
 		sentProposalsTo:        make(map[peer.ID]bool),
+		streamPool:             make(map[streamKey]*pooledStream),
 	}
 
 	if node.dropOnSend {
@@ -291,6 +353,19 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 func (n *P2PNode) Close() error {
 	n.cancel()
 	n.bwWG.Wait()
+	// Reset any pooled outbound streams before tearing down the host.
+	n.poolMu.Lock()
+	for key, ps := range n.streamPool {
+		ps.mu.Lock()
+		if ps.s != nil {
+			_ = ps.s.Reset()
+			ps.s = nil
+			ps.w = nil
+		}
+		ps.mu.Unlock()
+		delete(n.streamPool, key)
+	}
+	n.poolMu.Unlock()
 	// Log the final byte breakdown after the byte watchers have stopped.
 	n.recordFinalBytes()
 	if err := n.discovery.Stop(); err != nil {
@@ -310,12 +385,16 @@ func cryptoFloat64() (float64, error) {
 
 func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 	// snapshot neighbors to avoid concurrent map writes if send() drops neighbors
-	n.mu.Lock()
+	n.mu.RLock()
 	snapshot := make([]peer.AddrInfo, 0, len(n.neighbors))
 	for _, ai := range n.neighbors {
 		snapshot = append(snapshot, ai)
 	}
-	n.mu.Unlock()
+	n.mu.RUnlock()
+
+	// Fan out to neighbors concurrently: each send opens/reuses its own per-peer
+	// stream, so a slow peer no longer serializes the whole round.
+	var wg sync.WaitGroup
 	for _, addrInfo := range snapshot {
 		// simulation: optional probabilistic drop per recipient using crypto-secure RNG (avoid G404)
 		if n.dropOnSend {
@@ -335,32 +414,38 @@ func (n *P2PNode) SendProtocolMessage(protocolID string, data []byte) {
 			}
 		}
 
-		payloadCopy := append([]byte(nil), data...)
-		m := &pproto.ProtocolMessage{
-			Payload:     payloadCopy,
-			MessageData: n.newMessageData(),
-		}
+		wg.Add(1)
+		go func(addrInfo peer.AddrInfo) {
+			defer wg.Done()
 
-		signature, err := n.signProtoMessage(m)
-		if err != nil {
-			n.logger.Error("Failed to sign message", zap.Error(err))
-			continue
-		}
+			payloadCopy := append([]byte(nil), data...)
+			m := &pproto.ProtocolMessage{
+				Payload:     payloadCopy,
+				MessageData: n.newMessageData(),
+			}
 
-		m.MessageData.Sign = signature
-		// envelope = full marshaled ProtocolMessage (payload + signature + metadata);
-		// count both only on a successful send to align with the wire counter;
-		// envSize is the marshaled envelope length returned by send (no re-marshal).
-		if envSize, ok := n.send(addrInfo, protocol.ID(protocolID), m); ok {
-			n.appBytes.addOut(protocolID, int64(len(data)), envSize)
-		}
+			signature, err := n.signProtoMessage(m)
+			if err != nil {
+				n.logger.Error("Failed to sign message", zap.Error(err))
+				return
+			}
+
+			m.MessageData.Sign = signature
+			// envelope = full marshaled ProtocolMessage (payload + signature + metadata);
+			// count both only on a successful send to align with the wire counter;
+			// envSize is the marshaled envelope length returned by send (no re-marshal).
+			if envSize, ok := n.sendFramed(addrInfo, protocol.ID(protocolID), m); ok {
+				n.appBytes.addOut(protocolID, int64(len(data)), envSize)
+			}
+		}(addrInfo)
 	}
+	wg.Wait()
 }
 
 func (n *P2PNode) GetNeighbors() []string {
 	neighbors := make([]string, 0, len(n.neighbors))
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	for id := range n.neighbors {
 		neighbors = append(neighbors, id.String())
 	}
@@ -371,8 +456,8 @@ func (n *P2PNode) GetNeighbors() []string {
 }
 
 func (n *P2PNode) IsNeighbor(peerID peer.ID) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	_, exists := n.neighbors[peerID]
 	return exists
 }
@@ -380,35 +465,43 @@ func (n *P2PNode) IsNeighbor(peerID peer.ID) bool {
 func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 	n.host.SetStreamHandler(
 		protocol.ID(protocolID), func(s network.Stream) {
-			data := &pproto.ProtocolMessage{}
-			buf, err := readStreamWithLimit(s, int64(maxInboundMessageSize))
-			if err != nil {
-				n.logger.Error("Failed to read message", zap.Error(err))
-				_ = s.Reset()
-				return
-			}
+			// The sender keeps this stream open and writes successive
+			// length-prefixed frames (see sendFramed); read them in a loop
+			// until the peer resets the stream or goes away.
+			rd := msgio.NewVarintReaderSize(s, maxInboundMessageSize)
+			defer rd.Close()
+			for {
+				buf, err := rd.ReadMsg()
+				if err != nil {
+					if err != io.EOF {
+						n.logger.Debug("Stream read ended", zap.Error(err))
+					}
+					_ = s.Reset()
+					return
+				}
 
-			if err := s.Close(); err != nil {
-				n.logger.Debug("Failed to close stream after read", zap.Error(err))
-			}
+				data := &pproto.ProtocolMessage{}
+				if err := proto.Unmarshal(buf, data); err != nil {
+					n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
+					rd.ReleaseMsg(buf)
+					continue
+				}
 
-			if err := proto.Unmarshal(buf, data); err != nil {
-				n.logger.Error("Failed to unmarshal EX ANTE message", zap.Error(err))
-				return
-			}
+				if !n.authenticateMessage(data, data.MessageData) {
+					n.logger.Error("Failed to authenticate message")
+					rd.ReleaseMsg(buf)
+					continue
+				}
 
-			if !n.authenticateMessage(data, data.MessageData) {
-				n.logger.Error("Failed to authenticate message")
-				return
-			}
-
-			from := s.Conn().RemotePeer()
-			// payload = the protocol's own message; envelope = full marshaled
-			// ProtocolMessage read off the stream (buf).
-			n.appBytes.addIn(string(s.Protocol()), int64(len(data.Payload)), int64(len(buf)))
-			payload := append([]byte(nil), data.Payload...)
-			if err := handler(from, payload); err != nil {
-				n.logger.Error("Failed to handle message", zap.Error(err))
+				from := s.Conn().RemotePeer()
+				// payload = the protocol's own message; envelope = full marshaled
+				// ProtocolMessage read off the stream (buf).
+				n.appBytes.addIn(string(s.Protocol()), int64(len(data.Payload)), int64(len(buf)))
+				payload := append([]byte(nil), data.Payload...)
+				rd.ReleaseMsg(buf)
+				if err := handler(from, payload); err != nil {
+					n.logger.Error("Failed to handle message", zap.Error(err))
+				}
 			}
 		},
 	)
@@ -481,9 +574,9 @@ func (n *P2PNode) processProposalQueue() {
 			continue
 		}
 
-		n.mu.Lock()
+		n.mu.RLock()
 		currentCount := len(n.neighbors)
-		n.mu.Unlock()
+		n.mu.RUnlock()
 
 		if currentCount < n.selectedNeighborTarget {
 			if err := n.addNeighbor(proposal.addrInfo); err == nil {
@@ -627,9 +720,9 @@ func (n *P2PNode) graphBuilder() {
 		if round%2 == 1 {
 			n.processDropQueue()
 
-			n.mu.Lock()
+			n.mu.RLock()
 			currentNeighbors := len(n.neighbors)
-			n.mu.Unlock()
+			n.mu.RUnlock()
 
 			if currentNeighbors < limit {
 				n.sendProposalsToUnsent(round)
@@ -696,9 +789,11 @@ func (n *P2PNode) handleDiscoveredPeers(ctx context.Context) {
 				continue
 			}
 
-			n.logger.Debug(
-				"Adding potential neighbor", zap.String("peer_id", pi.ID.String()), zap.Strings("addresses", addrsToStrings(pi.Addrs)),
-			)
+			if n.logger.Core().Enabled(zap.DebugLevel) {
+				n.logger.Debug(
+					"Adding potential neighbor", zap.String("peer_id", pi.ID.String()), zap.Strings("addresses", addrsToStrings(pi.Addrs)),
+				)
+			}
 			n.potentialNeighbors.Store(pi.ID, pi)
 		}
 	}
@@ -788,12 +883,12 @@ func (n *P2PNode) simulatePeerDrop() {
 		return
 	}
 
-	n.mu.Lock()
+	n.mu.RLock()
 	candidates := make([]peer.ID, 0, len(n.neighbors))
 	for id := range n.neighbors {
 		candidates = append(candidates, id)
 	}
-	n.mu.Unlock()
+	n.mu.RUnlock()
 
 	if len(candidates) == 0 {
 		n.logger.Warn("Simulation: peer-drop: no neighbors available to drop")
