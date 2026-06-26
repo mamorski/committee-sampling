@@ -257,35 +257,29 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 
 	arrival := time.Now()
 
-	// Phase 1: brief lock to snapshot state and count total.
+	// Single critical section: snapshot state and record total/late/lag.
 	m.mu.Lock()
 	acc := m.getAcc(round)
 	acc.Total++
 	curRound := m.currentRound
 	tt := m.tickTimes[round]
-	m.mu.Unlock()
-
 	if curRound >= 0 && round < curRound {
-		late := curRound - round
-		m.mu.Lock()
 		acc.LateCount++
-		if late > acc.MaxLateness {
+		if late := curRound - round; late > acc.MaxLateness {
 			acc.MaxLateness = late
 		}
-		m.mu.Unlock()
 	}
 	if !tt.IsZero() {
 		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
-			m.mu.Lock()
 			acc.LagSumNs += lag
 			acc.LagCount++
 			acc.LagLastNs = lag
 			if lag > acc.LagMaxNs {
 				acc.LagMaxNs = lag
 			}
-			m.mu.Unlock()
 		}
 	}
+	m.mu.Unlock()
 
 	// Validation outside lock — Warn calls must not hold mu.
 	if !m.network.IsNeighbor(from) {
