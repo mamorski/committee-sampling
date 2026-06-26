@@ -23,6 +23,8 @@ func main() {
 	configPath := flag.String("config", "", "path to config file (optional, defaults to ./configs/{env}.json)")
 	cpuprofile := flag.String("cpuprofile", "", "write CPU profile to this file (empty = off)")
 	memprofile := flag.String("memprofile", "", "write heap profile to this file at shutdown (empty = off)")
+	blockprofile := flag.String("blockprofile", "", "write goroutine blocking profile to this file at shutdown (empty = off)")
+	mutexprofile := flag.String("mutexprofile", "", "write mutex contention profile to this file at shutdown (empty = off)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -61,6 +63,20 @@ func main() {
 				logger.Error("could not write heap profile", zap.Error(err))
 			}
 		}()
+	}
+
+	if *blockprofile != "" {
+		// Record every blocking event; adds overhead, so only enable on sampled nodes.
+		runtime.SetBlockProfileRate(1)
+		defer writeNamedProfile(logger, "block", *blockprofile)
+		logger.Info("Block profiling enabled", zap.String("file", *blockprofile))
+	}
+
+	if *mutexprofile != "" {
+		// Report all mutex contention events; adds overhead, sample nodes only.
+		runtime.SetMutexProfileFraction(1)
+		defer writeNamedProfile(logger, "mutex", *mutexprofile)
+		logger.Info("Mutex profiling enabled", zap.String("file", *mutexprofile))
 	}
 
 	gomaxprocs := cfg.Runtime.GOMAXPROCS
@@ -137,6 +153,20 @@ func main() {
 
 	if err := node.Close(); err != nil {
 		logger.Error("Failed to close network node", zap.Error(err))
+	}
+}
+
+// writeNamedProfile dumps a runtime/pprof named profile (e.g. "block", "mutex")
+// to path. Intended to run at shutdown via defer.
+func writeNamedProfile(logger *zap.Logger, name, path string) {
+	f, err := os.Create(path)
+	if err != nil {
+		logger.Error("could not create profile", zap.String("profile", name), zap.Error(err))
+		return
+	}
+	defer f.Close()
+	if err := pprof.Lookup(name).WriteTo(f, 0); err != nil {
+		logger.Error("could not write profile", zap.String("profile", name), zap.Error(err))
 	}
 }
 

@@ -123,6 +123,9 @@ func (suite *HostTestSuite) SetupTest() {
 	suite.testPeerID, err = peer.IDFromPublicKey(pub)
 	suite.Require().NoError(err)
 
+	pubKeyBytes, err := crypto.MarshalPublicKey(pub)
+	suite.Require().NoError(err)
+
 	suite.mockHost = &MockHost{}
 	suite.mockPeerstore = &MockPeerstore{}
 	suite.mockDiscovery = &MockDiscovery{
@@ -137,8 +140,11 @@ func (suite *HostTestSuite) SetupTest() {
 		discovery:   suite.mockDiscovery,
 		maxOutbound: 5,
 		key:         suite.testPrivKey,
+		nodeID:      suite.testPeerID.String(),
+		nodePubKey:  pubKeyBytes,
 		neighbors:   make(map[peer.ID]peer.AddrInfo),
 		appBytes:    newAppByteTracker(),
+		streamPool:  make(map[streamKey]*pooledStream),
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -215,10 +221,12 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Maybe()
 	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Maybe()
 
+	// Pooled framing: open one stream, then write length-prefixed frames over it.
+	// msgio's WriteMsg issues two Writes (varint length prefix + body) and the
+	// stream stays open in the pool (no per-message Close).
 	mockStream := &MockStream{}
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
-	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
-	mockStream.On("Close").Return(nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil)
 
 	// Add a neighbor
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -232,6 +240,28 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
+	mockStream.AssertExpectations(suite.T())
+}
+
+func (suite *HostTestSuite) TestSendFramedReusesStream() {
+	// Three sends to the same (peer, protocol) must open the stream once and
+	// reuse it: NewStream is called exactly once, with two framed Writes per
+	// message (varint prefix + body), and no Close between messages.
+	mockStream := &MockStream{}
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil)
+
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	msg := &pproto.ProtocolMessage{Payload: []byte("payload")}
+
+	for i := 0; i < 3; i++ {
+		size, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+		suite.True(ok)
+		suite.Greater(size, int64(0))
+	}
+
+	suite.mockHost.AssertExpectations(suite.T())
 	mockStream.AssertExpectations(suite.T())
 }
 

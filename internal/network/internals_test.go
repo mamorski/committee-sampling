@@ -1,9 +1,11 @@
 package network
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -50,11 +52,15 @@ func (suite *InternalsTestSuite) SetupTest() {
 	suite.mockPeerstore = &MockPeerstore{}
 
 	suite.node = &P2PNode{
-		host:      suite.mockHost,
-		logger:    suite.logger,
-		key:       suite.testPrivKey,
-		neighbors: make(map[peer.ID]peer.AddrInfo),
-		appBytes:  newAppByteTracker(),
+		host:        suite.mockHost,
+		ctx:         context.Background(),
+		logger:      suite.logger,
+		key:         suite.testPrivKey,
+		nodeID:      suite.testPeerID.String(),
+		nodePubKey:  suite.testPubKeyBytes,
+		neighbors:   make(map[peer.ID]peer.AddrInfo),
+		appBytes:    newAppByteTracker(),
+		sendTimeout: 5 * time.Second,
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -285,28 +291,13 @@ func (suite *InternalsTestSuite) TestVerifyDataSignatureVerificationError() {
 }
 
 func (suite *InternalsTestSuite) TestNewMessageData() {
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey)
-
+	// NodeId and NodePubKey are served from the cached fields populated at
+	// construction; newMessageData makes no host/peerstore calls.
 	messageData := suite.node.newMessageData()
 
 	suite.NotNil(messageData)
 	suite.Equal(suite.testPeerID.String(), messageData.NodeId)
-	suite.NotEmpty(messageData.NodePubKey)
-
-	suite.mockHost.AssertExpectations(suite.T())
-	suite.mockPeerstore.AssertExpectations(suite.T())
-}
-
-func (suite *InternalsTestSuite) TestNewMessageDataMarshalError() {
-	// Create a mock that returns an error when marshaling public key
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-
-	// This will cause a panic in the actual code due to Fatal call
-	// We can't easily test this without changing the implementation
-	// So we'll skip this test case for now
+	suite.Equal(suite.testPubKeyBytes, messageData.NodePubKey)
 }
 
 func (suite *InternalsTestSuite) TestSendSuccess() {
