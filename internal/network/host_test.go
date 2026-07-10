@@ -145,6 +145,9 @@ func (suite *HostTestSuite) SetupTest() {
 		neighbors:   make(map[peer.ID]peer.AddrInfo),
 		appBytes:    newAppByteTracker(),
 		streamPool:  make(map[streamKey]*pooledStream),
+		dialTimeout: time.Second,
+
+		connectFailsMax: 3,
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -263,6 +266,56 @@ func (suite *HostTestSuite) TestSendFramedReusesStream() {
 
 	suite.mockHost.AssertExpectations(suite.T())
 	mockStream.AssertExpectations(suite.T())
+}
+
+func (suite *HostTestSuite) TestEvictsNeighborAfterMaxConnectFailures() {
+	// A neighbor whose dials always fail is evicted once its streak reaches
+	// connectFailsMax. Before that it stays in the neighbor set.
+	suite.node.connectFailsMax = 3
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).
+		Return((*MockStream)(nil), assert.AnError)
+	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(assert.AnError)
+
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	msg := &pproto.ProtocolMessage{Payload: []byte("payload")}
+
+	// Below threshold: still a neighbor.
+	for i := 0; i < 2; i++ {
+		suite.node.neighbors[suite.testPeerID] = addrInfo
+		_, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+		suite.False(ok)
+		suite.True(suite.node.IsNeighbor(suite.testPeerID))
+	}
+
+	// Third failure hits the threshold and evicts.
+	suite.node.neighbors[suite.testPeerID] = addrInfo
+	_, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+	suite.False(ok)
+	suite.False(suite.node.IsNeighbor(suite.testPeerID))
+	suite.Empty(suite.node.GetNeighbors())
+}
+
+func (suite *HostTestSuite) TestConnectSuccessResetsFailureStreak() {
+	// A success between failures resets the streak, so a peer that keeps
+	// recovering is never evicted.
+	suite.node.connectFailsMax = 2
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	suite.node.neighbors[suite.testPeerID] = addrInfo
+
+	suite.node.recordConnectFailure(suite.testPeerID) // streak 1
+	suite.node.recordConnectSuccess(suite.testPeerID) // reset
+	suite.node.recordConnectFailure(suite.testPeerID) // streak 1 again, below max
+
+	suite.True(suite.node.IsNeighbor(suite.testPeerID))
+}
+
+func (suite *HostTestSuite) TestLogGraphSnapshotDoesNotPanic() {
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	suite.node.neighbors[suite.testPeerID] = peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	suite.node.logGraphSnapshot("start")
+	suite.node.logGraphSnapshot("end")
 }
 
 func (suite *HostTestSuite) TestRegisterHandler() {

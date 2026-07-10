@@ -74,6 +74,7 @@ type Network struct {
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)
 	SendTimeout time.Duration `mapstructure:"send_timeout"` // Per-attempt timeout for opening an outbound stream (default: 5s)
+	DialTimeout time.Duration `mapstructure:"dial_timeout"` // Timeout bounding a single openStream dial; shorter so dead peers fail fast (default: 1s)
 
 	// Simulation-only options
 	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
