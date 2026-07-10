@@ -48,6 +48,7 @@ func TestSendProtocolMessageRoundTrip(t *testing.T) {
 		logger:      zap.NewNop(),
 		appBytes:    newAppByteTracker(),
 		sendTimeout: 5 * time.Second,
+		dialTimeout: 5 * time.Second,
 		nodeID:      h1.ID().String(),
 		nodePubKey:  h1PubKey,
 		neighbors: map[peer.ID]peer.AddrInfo{

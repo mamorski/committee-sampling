@@ -146,7 +146,7 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 // attempt fails. Stream creation is bounded by sendTimeout so a stuck peer
 // cannot block the caller indefinitely.
 func (n *P2PNode) openStream(addrInfo peer.AddrInfo, p protocol.ID) (network.Stream, bool) {
-	ctx, cancel := context.WithTimeout(n.ctx, n.sendTimeout)
+	ctx, cancel := context.WithTimeout(n.ctx, n.dialTimeout)
 	defer cancel()
 
 	s, err := n.host.NewStream(ctx, addrInfo.ID, p)
@@ -154,16 +154,19 @@ func (n *P2PNode) openStream(addrInfo peer.AddrInfo, p protocol.ID) (network.Str
 		// Attempt to establish a connection and retry once.
 		if errConn := n.host.Connect(ctx, addrInfo); errConn != nil {
 			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
+			n.recordConnectFailure(addrInfo.ID)
 			return nil, false
 		}
 
 		s, err = n.host.NewStream(ctx, addrInfo.ID, p)
 		if err != nil {
 			n.logger.Error("Failed to create stream", zap.Error(err))
+			n.recordConnectFailure(addrInfo.ID)
 			return nil, false
 		}
 	}
 
+	n.recordConnectSuccess(addrInfo.ID)
 	return s, true
 }
 

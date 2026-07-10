@@ -185,6 +185,9 @@ type P2PNode struct {
 	sentProposalsTo             map[peer.ID]bool
 	streamPool                  map[streamKey]*pooledStream
 	poolMu                      sync.Mutex
+	dialTimeout                 time.Duration
+	connectFails                sync.Map // peer.ID -> *atomic.Int64: consecutive failed dials
+	connectFailsMax             int64    // evict a neighbor once its streak reaches this
 }
 
 // streamKey identifies a reusable outbound stream by peer and protocol.
@@ -279,6 +282,18 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 			}
 			return 5 * time.Second
 		}(),
+		dialTimeout: func() time.Duration {
+			if cfg.Network.DialTimeout > 0 {
+				return cfg.Network.DialTimeout
+			}
+			return 1 * time.Second
+		}(),
+		connectFailsMax: func() int64 {
+			if cfg.Network.ConnectivityRetries > 0 {
+				return int64(cfg.Network.ConnectivityRetries)
+			}
+			return 3
+		}(),
 		discovery:                   d,
 		logger:                      logger.Named("network"),
 		neighbors:                   make(map[peer.ID]peer.AddrInfo),
@@ -351,6 +366,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 }
 
 func (n *P2PNode) Close() error {
+	n.logGraphSnapshot("end")
 	n.cancel()
 	n.bwWG.Wait()
 	// Reset any pooled outbound streams before tearing down the host.
@@ -758,6 +774,7 @@ func (n *P2PNode) graphBuilder() {
 	n.logger.Warn(
 		"Final neighbor list", zap.Int("count", len(neighbors)), zap.Strings("neighbors", neighbors),
 	)
+	n.logGraphSnapshot("start")
 
 	if n.peerDropEnabled {
 		go n.simulatePeerDrop()
@@ -841,6 +858,46 @@ func (n *P2PNode) dropNeighbor(peerID peer.ID) {
 	delete(n.neighbors, peerID)
 	n.logger.Info(
 		"Dropped neighbor", zap.String("peer_id", peerID.String()), zap.Int("remaining_neighbors", len(n.neighbors)),
+	)
+}
+
+// recordConnectSuccess clears a peer's failure streak after a successful dial.
+func (n *P2PNode) recordConnectSuccess(id peer.ID) {
+	if v, ok := n.connectFails.Load(id); ok {
+		v.(*atomic.Int64).Store(0)
+	}
+}
+
+// recordConnectFailure increments a peer's consecutive-dial-failure streak and, once it reaches
+// connectFailsMax, evicts the peer from the neighbor set so dead peers stop stalling the send
+// fan-out on every round. dropNeighbor logs the resulting degree.
+func (n *P2PNode) recordConnectFailure(id peer.ID) {
+	v, _ := n.connectFails.LoadOrStore(id, new(atomic.Int64))
+	if v.(*atomic.Int64).Add(1) >= n.connectFailsMax {
+		n.connectFails.Delete(id)
+		n.logger.Warn(
+			"Dropping unreachable neighbor after repeated connect failures",
+			zap.String("peer_id", id.String()),
+			zap.Int64("failures", n.connectFailsMax),
+		)
+		n.dropNeighbor(id)
+	}
+}
+
+// logGraphSnapshot records the current neighbor set tagged with a phase ("start" post-build, "end"
+// at shutdown) so start-vs-end can be diffed to see how many edges eviction/peer-drop removed.
+func (n *P2PNode) logGraphSnapshot(phase string) {
+	n.mu.RLock()
+	neighbors := make([]string, 0, len(n.neighbors))
+	for id := range n.neighbors {
+		neighbors = append(neighbors, id.String())
+	}
+	n.mu.RUnlock()
+	n.logger.Warn(
+		"Graph snapshot",
+		zap.String("phase", phase),
+		zap.Int("count", len(neighbors)),
+		zap.Strings("neighbors", neighbors),
 	)
 }
 
