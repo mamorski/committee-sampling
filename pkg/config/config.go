@@ -74,13 +74,15 @@ type Network struct {
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)
 	SendTimeout time.Duration `mapstructure:"send_timeout"` // Per-attempt timeout for opening an outbound stream (default: 5s)
-	DialTimeout time.Duration `mapstructure:"dial_timeout"` // Timeout bounding a single openStream dial; shorter so dead peers fail fast (default: 1s)
+	// Timeout bounding a single openStream dial; shorter so dead peers fail fast (default: 1s)
+	DialTimeout time.Duration `mapstructure:"dial_timeout"`
 
 	// Simulation-only options
 	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
 	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
 	PeerDropEnabled       bool    `mapstructure:"peer_drop_enabled"`        // If true, this node drops one neighbor edge after graph building
-	UnlimitedResources    bool    `mapstructure:"unlimited_resources"`      // If true, run libp2p with an unlimited resource manager (co-located sim with many nodes)
+	// If true, run libp2p with an unlimited resource manager (co-located sim with many nodes)
+	UnlimitedResources bool `mapstructure:"unlimited_resources"`
 }
 
 type Discovery struct {

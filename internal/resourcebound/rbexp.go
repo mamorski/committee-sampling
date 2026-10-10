@@ -164,11 +164,11 @@ func (r *RbExp) Verify(
 			ak := aux.AuxKey
 			var lenBuf [4]byte
 			writeField := func(p []byte) {
-				binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p)))
+				binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p))) //nolint:gosec // field lengths are far below 4 GiB
 				buf = append(buf, lenBuf[:]...)
 				buf = append(buf, p...)
 			}
-			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id)))
+			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id))) //nolint:gosec // field lengths are far below 4 GiB
 			buf = append(buf, lenBuf[:]...)
 			buf = append(buf, id...)
 			writeField(vk)

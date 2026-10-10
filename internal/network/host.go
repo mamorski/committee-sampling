@@ -240,14 +240,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 		unlimitedV6 := []rcmgr.ConnLimitPerSubnet{{PrefixLength: 0, ConnCount: math.MaxInt}}
 		unlimitedPrefixV4 := []rcmgr.NetworkPrefixLimit{{Network: netip.MustParsePrefix("0.0.0.0/0"), ConnCount: math.MaxInt}}
 		unlimitedPrefixV6 := []rcmgr.NetworkPrefixLimit{{Network: netip.MustParsePrefix("::/0"), ConnCount: math.MaxInt}}
-		rm, err := rcmgr.NewResourceManager(
+		rm, rmErr := rcmgr.NewResourceManager(
 			rcmgr.NewFixedLimiter(rcmgr.InfiniteLimits),
 			rcmgr.WithLimitPerSubnet(unlimitedV4, unlimitedV6),
 			rcmgr.WithNetworkPrefixLimit(unlimitedPrefixV4, unlimitedPrefixV6),
 		)
-		if err != nil {
+		if rmErr != nil {
 			cancel()
-			return nil, fmt.Errorf("failed to create resource manager: %w", err)
+			return nil, fmt.Errorf("failed to create resource manager: %w", rmErr)
 		}
 		opts = append(opts, libp2p.ResourceManager(rm))
 		logger.Info("Simulation: libp2p resource manager limits disabled")
@@ -272,10 +272,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger, synchroniz
 	}
 
 	node := &P2PNode{
-		host:                        h,
-		ctx:                         c,
-		cancel:                      cancel,
-		maxOutbound:                 cfg.Network.MaxOutboundDegree,
+		host:        h,
+		ctx:         c,
+		cancel:      cancel,
+		maxOutbound: cfg.Network.MaxOutboundDegree,
 		sendTimeout: func() time.Duration {
 			if cfg.Network.SendTimeout > 0 {
 				return cfg.Network.SendTimeout
@@ -485,7 +485,7 @@ func (n *P2PNode) RegisterHandler(protocolID string, handler MessageHandler) {
 			// length-prefixed frames (see sendFramed); read them in a loop
 			// until the peer resets the stream or goes away.
 			rd := msgio.NewVarintReaderSize(s, maxInboundMessageSize)
-			defer rd.Close()
+			defer func() { _ = rd.Close() }()
 			for {
 				buf, err := rd.ReadMsg()
 				if err != nil {
@@ -626,7 +626,7 @@ func (n *P2PNode) sendDropMessage(peerID peer.ID) {
 
 	msg.MessageData.Sign = signature
 
-	if _, ok := n.send(addrInfo, protocol.ID(graphDrop+"/"+n.sid), msg); !ok {
+	if !n.send(addrInfo, protocol.ID(graphDrop+"/"+n.sid), msg) {
 		n.logger.Warn("Failed to send graph drop", zap.String("to", peerID.String()))
 	} else {
 		n.logger.Debug("Sent graph drop", zap.String("to", peerID.String()))
@@ -678,7 +678,7 @@ func (n *P2PNode) sendProposalsToUnsent(round int) {
 
 		msg.MessageData.Sign = signature
 
-		if _, ok := n.send(candidate, protocol.ID(graphProposal+"/"+n.sid), msg); ok {
+		if n.send(candidate, protocol.ID(graphProposal+"/"+n.sid), msg) {
 			n.sentProposalsTo[candidate.ID] = true
 			sent++
 			n.logger.Debug("Sent graph proposal", zap.String("to", candidate.ID.String()), zap.Int("round", round))
@@ -1149,7 +1149,7 @@ func (n *P2PNode) sendPeerDropMessage(peerID peer.ID) {
 
 	msg.MessageData.Sign = signature
 
-	if _, ok := n.send(addrInfo, protocol.ID(peerDrop+"/"+n.sid), msg); !ok {
+	if !n.send(addrInfo, protocol.ID(peerDrop+"/"+n.sid), msg) {
 		n.logger.Warn("Failed to send peer drop notification", zap.String("to", peerID.String()))
 	} else {
 		n.logger.Debug("Sent peer drop notification", zap.String("to", peerID.String()))

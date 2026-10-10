@@ -83,7 +83,7 @@ func (n *P2PNode) watchStep(step common.Step, ticks int) {
 }
 
 // waitForTick blocks until the synchronizer fires the given step/round tick.
-// Returns false if the context is cancelled or the tick cannot be obtained.
+// Returns false if the context is canceled or the tick cannot be obtained.
 func (n *P2PNode) waitForTick(step common.Step, round int) bool {
 	ch, err := n.sync.WaitForRound(step, round)
 	if err != nil {
@@ -182,4 +182,3 @@ func (n *P2PNode) recordFinalBytes() {
 			zap.Int64("env_in", t.EnvIn), zap.Int64("env_out", t.EnvOut))
 	}
 }
-

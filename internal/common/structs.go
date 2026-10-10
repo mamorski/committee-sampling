@@ -58,7 +58,7 @@ type FSigmaRBExp struct {
 // mutex. Flushed (logged) once per round via flushRoundStats instead of per message.
 type RoundAcc struct {
 	Total, Valid, LateCount, MaxLateness int
-	LagSumNs, LagMaxNs, LagLastNs       int64
+	LagSumNs, LagMaxNs, LagLastNs        int64
 	LagCount                             int
 }
 
@@ -149,8 +149,7 @@ func (c *Committee) Get(vk string) (O, bool) {
 		return O{}, false
 	}
 
-	key := string(vk)
-	if member, exists := c.committee[key]; exists {
+	if member, exists := c.committee[vk]; exists {
 		return member, true
 	}
 

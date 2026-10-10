@@ -110,13 +110,12 @@ func (n *P2PNode) newMessageData() *pproto.MessageData {
 	}
 }
 
-// send marshals and writes data to peer over protocol p. It returns the number of
-// bytes written (the marshaled envelope size) and true on success, or 0 and false
-// on any failure.
-func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) (int64, bool) {
+// send marshals and writes data to peer over protocol p. It returns true on
+// success and false on any failure.
+func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
 	s, ok := n.openStream(addrInfo, p)
 	if !ok {
-		return 0, false
+		return false
 	}
 
 	defer func(s network.Stream) {
@@ -129,17 +128,17 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 		n.logger.Error("Failed to marshal proto message", zap.Error(err))
 		_ = s.Reset()
 		// no connectivity check for marshal failure
-		return 0, false
+		return false
 	}
 
 	_, err = s.Write(buf)
 	if err != nil {
 		n.logger.Error("Failed to write message to stream", zap.Error(err))
 		_ = s.Reset()
-		return 0, false
+		return false
 	}
 
-	return int64(len(buf)), true
+	return true
 }
 
 // openStream opens a stream to the peer, dialing and retrying once if the first

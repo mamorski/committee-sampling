@@ -643,8 +643,6 @@ func (suite *ExAnteTestSuite) TestIsValueInState_NotFound() {
 	suite.False(result)
 }
 
-
-
 // Helper functions for creating test messages
 
 // createTestTimestampMessage creates a test TimestampMessage

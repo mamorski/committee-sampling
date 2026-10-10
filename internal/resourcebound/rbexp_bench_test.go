@@ -102,5 +102,3 @@ func BenchmarkFTagCompute(b *testing.B) {
 		b.Fatal("expected valid proof")
 	}
 }
-
-

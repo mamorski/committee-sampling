@@ -35,49 +35,8 @@ func main() {
 	ctx := context.Background()
 	logger := createLogger(cfg)
 
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			logger.Fatal("could not create CPU profile", zap.Error(err))
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			logger.Fatal("could not start CPU profile", zap.Error(err))
-		}
-		// Order matters: defers run LIFO, so f.Close() is registered first to
-		// ensure StopCPUProfile() flushes the profile before the file is closed.
-		defer f.Close()
-		defer pprof.StopCPUProfile()
-		logger.Info("CPU profiling enabled", zap.String("file", *cpuprofile))
-	}
-
-	if *memprofile != "" {
-		defer func() {
-			f, err := os.Create(*memprofile)
-			if err != nil {
-				logger.Error("could not create heap profile", zap.Error(err))
-				return
-			}
-			defer f.Close()
-			runtime.GC() // get up-to-date statistics
-			if err := pprof.WriteHeapProfile(f); err != nil {
-				logger.Error("could not write heap profile", zap.Error(err))
-			}
-		}()
-	}
-
-	if *blockprofile != "" {
-		// Record every blocking event; adds overhead, so only enable on sampled nodes.
-		runtime.SetBlockProfileRate(1)
-		defer writeNamedProfile(logger, "block", *blockprofile)
-		logger.Info("Block profiling enabled", zap.String("file", *blockprofile))
-	}
-
-	if *mutexprofile != "" {
-		// Report all mutex contention events; adds overhead, sample nodes only.
-		runtime.SetMutexProfileFraction(1)
-		defer writeNamedProfile(logger, "mutex", *mutexprofile)
-		logger.Info("Mutex profiling enabled", zap.String("file", *mutexprofile))
-	}
+	stopProfiling := startProfiling(logger, *cpuprofile, *memprofile, *blockprofile, *mutexprofile)
+	defer stopProfiling()
 
 	gomaxprocs := cfg.Runtime.GOMAXPROCS
 	if gomaxprocs == 0 {
@@ -156,15 +115,66 @@ func main() {
 	}
 }
 
-// writeNamedProfile dumps a runtime/pprof named profile (e.g. "block", "mutex")
-// to path. Intended to run at shutdown via defer.
-func writeNamedProfile(logger *zap.Logger, name, path string) {
-	f, err := os.Create(path)
+// startProfiling enables the requested profiles (empty path = off) and returns
+// a function that flushes and closes them; call it once at shutdown.
+func startProfiling(logger *zap.Logger, cpuPath, memPath, blockPath, mutexPath string) func() {
+	var cpuFile *os.File
+	if cpuPath != "" {
+		f, err := os.Create(cpuPath) //nolint:gosec // operator-supplied CLI flag
+		if err != nil {
+			logger.Fatal("could not create CPU profile", zap.Error(err))
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			logger.Fatal("could not start CPU profile", zap.Error(err))
+		}
+		cpuFile = f
+		logger.Info("CPU profiling enabled", zap.String("file", cpuPath))
+	}
+	if blockPath != "" {
+		// Record every blocking event; adds overhead, so only enable on sampled nodes.
+		runtime.SetBlockProfileRate(1)
+		logger.Info("Block profiling enabled", zap.String("file", blockPath))
+	}
+	if mutexPath != "" {
+		// Report all mutex contention events; adds overhead, sample nodes only.
+		runtime.SetMutexProfileFraction(1)
+		logger.Info("Mutex profiling enabled", zap.String("file", mutexPath))
+	}
+
+	return func() {
+		if mutexPath != "" {
+			writeProfile(logger, "mutex", mutexPath)
+		}
+		if blockPath != "" {
+			writeProfile(logger, "block", blockPath)
+		}
+		if memPath != "" {
+			runtime.GC() // get up-to-date statistics
+			writeProfile(logger, "heap", memPath)
+		}
+		if cpuFile != nil {
+			// StopCPUProfile flushes the profile, so it must run before Close.
+			pprof.StopCPUProfile()
+			if err := cpuFile.Close(); err != nil {
+				logger.Error("could not close CPU profile", zap.Error(err))
+			}
+		}
+	}
+}
+
+// writeProfile dumps a runtime/pprof named profile (e.g. "heap", "block",
+// "mutex") to path.
+func writeProfile(logger *zap.Logger, name, path string) {
+	f, err := os.Create(path) //nolint:gosec // operator-supplied CLI flag
 	if err != nil {
 		logger.Error("could not create profile", zap.String("profile", name), zap.Error(err))
 		return
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			logger.Error("could not close profile", zap.String("profile", name), zap.Error(err))
+		}
+	}()
 	if err := pprof.Lookup(name).WriteTo(f, 0); err != nil {
 		logger.Error("could not write profile", zap.String("profile", name), zap.Error(err))
 	}

@@ -496,7 +496,7 @@ func (e *ExAnte) validateMerklePath(merklePath []*pb.State, round int) bool {
 	for i := 0; i < round; i++ {
 		h := e.mdag.Oracle(merklePath[i].Row...)
 		if i == round-1 {
-			return isValueInState(h, e.state[round])
+			return isValueInState(h, e.state[round]) //nolint:gosec // len(e.state) >= round+1 checked above
 		} else if !isValueInState(h, merklePath[i+1].Row) {
 			return false
 		}

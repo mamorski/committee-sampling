@@ -17,10 +17,10 @@ import (
 func TestSendProtocolMessageRoundTrip(t *testing.T) {
 	h1, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	require.NoError(t, err)
-	defer h1.Close()
+	defer func() { _ = h1.Close() }()
 	h2, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	require.NoError(t, err)
-	defer h2.Close()
+	defer func() { _ = h2.Close() }()
 
 	ctx := context.Background()
 	require.NoError(t, h1.Connect(ctx, peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()}))
