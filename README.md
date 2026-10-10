@@ -2,6 +2,29 @@
 
 A simulation platform for setup-free committee election protocols. This software implements the algorithms and protocols described in **Setup-Free Committee Sampling with Subquadratic Communication** (Asiacrypt 2025).
 
+> **Disclaimer: verification is split into two streams and is not hardened against spam.**
+>
+> `RbExp.Verify` (`internal/resourcebound/rbexp.go`) runs the ex-post and ex-ante
+> timestamp verification protocols as two independent gossip streams and intersects
+> their output sets only after both finish. This follows Protocol 3 of the paper
+> literally. Within each stream every message is checked for the resource proof,
+> VDF, VRF, grade, and that stream's own Merkle path before it is forwarded, but a
+> message is never checked against the *other* stream's Merkle path. The informal
+> walkthrough in Section 2 of the paper instead sends one message carrying both
+> Merkle paths and drops it if either path fails.
+>
+> Consequence: the ex-ante stream does not establish that the challenge is fresh, so
+> an adversary can commit precomputed resource-proof tuples during initialization and
+> have honest nodes verify and forward them for all rounds. The final committee is
+> unaffected because the intersection removes them, but the communication and
+> verification cost is already paid. This is a protocol-level gap in Protocol 3 as
+> written, inherited by this implementation.
+>
+> It does not affect the published measurements. All experiments run under honest
+> execution, where both streams produce identical sets and the split and combined
+> variants yield the same committees and the same traffic. A combined-message variant
+> that verifies both paths before forwarding is listed as future work.
+
 ## About the Paper
 
 📄 **[View on IACR CryptoDB](https://iacr.org/cryptodb/data/paper.php?pubkey=36134)**
