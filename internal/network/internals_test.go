@@ -1,12 +1,12 @@
 package network
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -52,10 +52,15 @@ func (suite *InternalsTestSuite) SetupTest() {
 	suite.mockPeerstore = &MockPeerstore{}
 
 	suite.node = &P2PNode{
-		host:      suite.mockHost,
-		logger:    suite.logger,
-		key:       suite.testPrivKey,
-		neighbors: make(map[peer.ID]peer.AddrInfo),
+		host:        suite.mockHost,
+		ctx:         context.Background(),
+		logger:      suite.logger,
+		key:         suite.testPrivKey,
+		nodeID:      suite.testPeerID.String(),
+		nodePubKey:  suite.testPubKeyBytes,
+		neighbors:   make(map[peer.ID]peer.AddrInfo),
+		appBytes:    newAppByteTracker(),
+		sendTimeout: 5 * time.Second,
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -84,10 +89,7 @@ func (suite *InternalsTestSuite) TestSignData() {
 func (suite *InternalsTestSuite) TestSignProtoMessage() {
 	testMessage := &pproto.GraphProposal{
 		MessageData: &pproto.MessageData{
-			ClientVersion: clientVersion,
-			NodeId:        suite.testPeerID.String(),
-			Timestamp:     time.Now().Unix(),
-			Id:            uuid.New().String(),
+			NodeId: suite.testPeerID.String(),
 		},
 	}
 
@@ -126,12 +128,8 @@ func (suite *InternalsTestSuite) TestSignProtoMessageMarshalError() {
 func (suite *InternalsTestSuite) TestAuthenticateMessageSuccess() {
 	// Create test message
 	messageData := &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        suite.testPeerID.String(),
-		NodePubKey:    suite.testPubKeyBytes,
-		Timestamp:     time.Now().Unix(),
-		Id:            uuid.New().String(),
-		Gossip:        false,
+		NodeId:     suite.testPeerID.String(),
+		NodePubKey: suite.testPubKeyBytes,
 	}
 
 	testMessage := &pproto.GraphProposal{
@@ -153,13 +151,9 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageSuccess() {
 func (suite *InternalsTestSuite) TestAuthenticateMessageInvalidSignature() {
 	// Create test message
 	messageData := &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        suite.testPeerID.String(),
-		NodePubKey:    suite.testPubKeyBytes,
-		Timestamp:     time.Now().Unix(),
-		Id:            uuid.New().String(),
-		Gossip:        false,
-		Sign:          []byte("invalid-signature"),
+		NodeId:     suite.testPeerID.String(),
+		NodePubKey: suite.testPubKeyBytes,
+		Sign:       []byte("invalid-signature"),
 	}
 
 	testMessage := &pproto.GraphProposal{
@@ -174,12 +168,8 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageInvalidSignature() {
 func (suite *InternalsTestSuite) TestAuthenticateMessageInvalidNodeID() {
 	// Create test message with invalid node ID
 	messageData := &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        "invalid-node-id",
-		NodePubKey:    suite.testPubKeyBytes,
-		Timestamp:     time.Now().Unix(),
-		Id:            uuid.New().String(),
-		Gossip:        false,
+		NodeId:     "invalid-node-id",
+		NodePubKey: suite.testPubKeyBytes,
 	}
 
 	testMessage := &pproto.GraphProposal{
@@ -200,12 +190,8 @@ func (suite *InternalsTestSuite) TestAuthenticateMessagePeerIDMismatch() {
 
 	// Create test message with mismatched peer ID and public key
 	messageData := &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        otherPeerID.String(),  // Different peer ID
-		NodePubKey:    suite.testPubKeyBytes, // But our public key
-		Timestamp:     time.Now().Unix(),
-		Id:            uuid.New().String(),
-		Gossip:        false,
+		NodeId:     otherPeerID.String(),  // Different peer ID
+		NodePubKey: suite.testPubKeyBytes, // But our public key
 	}
 
 	testMessage := &pproto.GraphProposal{
@@ -228,13 +214,9 @@ func (suite *InternalsTestSuite) TestAuthenticateMessageMarshalError() {
 	// This test is tricky because proto.Marshal rarely fails
 	// We'll test with a valid message but corrupted signature
 	messageData := &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        suite.testPeerID.String(),
-		NodePubKey:    suite.testPubKeyBytes,
-		Timestamp:     time.Now().Unix(),
-		Id:            uuid.New().String(),
-		Gossip:        false,
-		Sign:          []byte("some-signature"),
+		NodeId:     suite.testPeerID.String(),
+		NodePubKey: suite.testPubKeyBytes,
+		Sign:       []byte("some-signature"),
 	}
 
 	testMessage := &pproto.GraphProposal{
@@ -309,33 +291,13 @@ func (suite *InternalsTestSuite) TestVerifyDataSignatureVerificationError() {
 }
 
 func (suite *InternalsTestSuite) TestNewMessageData() {
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey)
-
-	messageID := uuid.New().String()
-	messageData := suite.node.newMessageData(messageID, true)
+	// NodeId and NodePubKey are served from the cached fields populated at
+	// construction; newMessageData makes no host/peerstore calls.
+	messageData := suite.node.newMessageData()
 
 	suite.NotNil(messageData)
-	suite.Equal(clientVersion, messageData.ClientVersion)
 	suite.Equal(suite.testPeerID.String(), messageData.NodeId)
-	suite.Equal(messageID, messageData.Id)
-	suite.Equal(true, messageData.Gossip)
-	suite.NotEmpty(messageData.NodePubKey)
-	suite.Greater(messageData.Timestamp, int64(0))
-
-	suite.mockHost.AssertExpectations(suite.T())
-	suite.mockPeerstore.AssertExpectations(suite.T())
-}
-
-func (suite *InternalsTestSuite) TestNewMessageDataMarshalError() {
-	// Create a mock that returns an error when marshaling public key
-	suite.mockHost.On("ID").Return(suite.testPeerID)
-	suite.mockHost.On("Peerstore").Return(suite.mockPeerstore)
-
-	// This will cause a panic in the actual code due to Fatal call
-	// We can't easily test this without changing the implementation
-	// So we'll skip this test case for now
+	suite.Equal(suite.testPubKeyBytes, messageData.NodePubKey)
 }
 
 func (suite *InternalsTestSuite) TestSendSuccess() {
@@ -346,9 +308,7 @@ func (suite *InternalsTestSuite) TestSendSuccess() {
 	mockStream.On("Close").Return(nil).Once()
 
 	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
+		MessageData: &pproto.MessageData{},
 	}
 
 	addr, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -371,9 +331,7 @@ func (suite *InternalsTestSuite) TestSendConnectionFailure() {
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
 
 	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
+		MessageData: &pproto.MessageData{},
 	}
 
 	addr, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -395,9 +353,7 @@ func (suite *InternalsTestSuite) TestSendStreamCreationFailure() {
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("stream creation failed"))
 
 	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
+		MessageData: &pproto.MessageData{},
 	}
 
 	addr, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -422,9 +378,7 @@ func (suite *InternalsTestSuite) TestSendMarshalFailure() {
 	mockStream.On("Close").Return(nil)
 
 	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
+		MessageData: &pproto.MessageData{},
 	}
 
 	addr, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -451,9 +405,7 @@ func (suite *InternalsTestSuite) TestSendWriteFailure() {
 	mockStream.On("Close").Return(nil).Once()
 
 	testMessage := &pproto.GraphProposal{
-		MessageData: &pproto.MessageData{
-			Id: uuid.New().String(),
-		},
+		MessageData: &pproto.MessageData{},
 	}
 
 	addr, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")

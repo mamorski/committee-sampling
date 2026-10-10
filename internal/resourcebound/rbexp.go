@@ -1,13 +1,24 @@
 package resourcebound
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
 	"go.uber.org/zap"
 )
+
+var fTagBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 2048)
+		return &b
+	},
+}
 
 type ResourceProof interface {
 	Setup(vk []byte) ([]byte, error)
@@ -38,22 +49,24 @@ type ExAnte interface {
 }
 
 type RbExp struct {
-	rp      ResourceProof
-	exp     ExPost
-	exa     ExAnte
-	weight  float64
-	ffilter common.FilterF
-	logger  *zap.Logger
+	rp            ResourceProof
+	exp           ExPost
+	exa           ExAnte
+	weight        float64
+	ffilter       common.FilterF
+	logger        *zap.Logger
+	noAdversarial bool
 }
 
-func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, logger *zap.Logger) *RbExp {
+func New(rp ResourceProof, exp ExPost, exa ExAnte, ffilter common.FilterF, weight float64, noAdversarial bool, logger *zap.Logger) *RbExp {
 	return &RbExp{
-		rp:      rp,
-		exp:     exp,
-		exa:     exa,
-		weight:  weight,
-		ffilter: ffilter,
-		logger:  logger.Named("rbexp"),
+		rp:            rp,
+		exp:           exp,
+		exa:           exa,
+		weight:        weight,
+		ffilter:       ffilter,
+		logger:        logger.Named("rbexp"),
+		noAdversarial: noAdversarial,
 	}
 }
 
@@ -119,13 +132,73 @@ func (r *RbExp) Verify(
 		)
 	}()
 
+	// fTagCache memoizes verification results for the run. The same member's
+	// proof is gossiped across the network and re-verified hundreds of thousands
+	// of times; verification (ECVRF + x509 parse + resource proof) is pure in its
+	// inputs, so caching by those inputs collapses the redundant crypto work to
+	// ~one verify per distinct member. Shared by both Verify goroutines below;
+	var fTagCacheMu sync.RWMutex
+	fTagCache := make(map[string]bool)
+
+	var fTagHits, fTagMisses atomic.Int64
+
 	fTag := func(sid, id string, vk []byte, ch []byte, aux *pb.Aux) bool {
 		r.logger.Debug("Filter tag function called",
 			zap.String("sender_id", id),
 			zap.Binary("vk", vk),
 		)
 
-		return r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
+		// A nil aux/AuxKey carries no proof and can never verify; reject without
+		// caching (mirrors ffilter, which returns false on a nil AuxKey).
+		if aux == nil || aux.AuxKey == nil {
+			return false
+		}
+
+		var cacheKey string
+		if r.noAdversarial {
+			cacheKey = string(vk)
+		} else {
+			bPtr := fTagBufPool.Get().(*[]byte)
+			buf := (*bPtr)[:0]
+
+			ak := aux.AuxKey
+			var lenBuf [4]byte
+			writeField := func(p []byte) {
+				binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(p))) //nolint:gosec // field lengths are far below 4 GiB
+				buf = append(buf, lenBuf[:]...)
+				buf = append(buf, p...)
+			}
+			binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(id))) //nolint:gosec // field lengths are far below 4 GiB
+			buf = append(buf, lenBuf[:]...)
+			buf = append(buf, id...)
+			writeField(vk)
+			writeField(ch)
+			writeField(aux.PiRP)
+			writeField(ak.PhiVdf)
+			writeField(ak.PiVdf)
+			writeField(ak.PhiVrf)
+			writeField(ak.PiVrf)
+
+			cacheKey = string(buf)
+			fTagBufPool.Put(bPtr)
+		}
+
+		fTagCacheMu.RLock()
+		if v, ok := fTagCache[cacheKey]; ok {
+			fTagCacheMu.RUnlock()
+			fTagHits.Add(1)
+			return v
+		}
+		fTagCacheMu.RUnlock()
+
+		res := r.rp.Ver(vk, r.weight, ch, aux.PiRP) && r.ffilter(sid, id, vk, ch, aux.AuxKey)
+
+		fTagCacheMu.Lock()
+		fTagCache[cacheKey] = res
+		fTagCacheMu.Unlock()
+
+		fTagMisses.Add(1)
+		return res
 	}
 	auxTag := &common.AuxTag{
 		PiRP:   proof.PiRP,
@@ -159,6 +232,9 @@ func (r *RbExp) Verify(
 	exPostResult := <-exPostCh
 	exAnteResult := <-exAnteCh
 
+	r.logger.Warn("cache stats", zap.String("cache", "ftag"),
+		zap.Int64("hits", fTagHits.Load()), zap.Int64("misses", fTagMisses.Load()))
+
 	if exPostResult.err != nil {
 		return nil, exPostResult.err
 	}
@@ -179,19 +255,18 @@ func (r *RbExp) Verify(
 	)
 
 	var outputs []*common.CommitteeOutput
-	oP.Range(func(key, ch string, val common.O) {
-		if exAnteValue, ok := oA.Get(key, ch); ok {
+	oP.Range(func(key string, val common.O) {
+		if exAnteValue, ok := oA.Get(key); ok {
 			g := min(val.Grade, exAnteValue.Grade)
 			outputs = append(outputs, &common.CommitteeOutput{
 				ID:    val.ID,
-				VK:    key,
+				VK:    base64.StdEncoding.EncodeToString([]byte(key)),
 				Grade: g,
 			})
 		} else {
 			r.logger.Debug("No matching ExAnte value for ExPost",
 				zap.String("sid", sid),
 				zap.String("vk", key),
-				zap.String("challenge", ch),
 			)
 		}
 	})

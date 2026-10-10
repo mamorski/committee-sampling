@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	stdsync "sync" // aliased: the New() param `sync common.Synchronizer` shadows the package name
+	"sync/atomic"
 
 	"github.com/mamorski/committee-sampling/internal/common"
 	"github.com/mamorski/committee-sampling/internal/exante"
@@ -43,6 +45,9 @@ type Bootstrap struct {
 	Network    network.Network
 	Logger     *zap.Logger
 	Context    context.Context
+
+	gradeCacheHits   *atomic.Int64
+	gradeCacheMisses *atomic.Int64
 }
 
 //nolint:funlen
@@ -97,6 +102,16 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 		return true
 	}
 
+	// gradeCache memoizes computeGrade for the run. The same member's φ(vrf) is
+	// gossiped and re-graded hundreds of thousands of times, and grading is pure in
+	// φ(vrf) given the run-fixed parameters and weight (big.Int/big.Float math, no
+	// crypto but allocation-heavy). Caching by those inputs collapses the redundant
+	// work to ~one compute per distinct member. The closure is shared by both ExPost
+	// and ExAnte; sync.Map fits the write-once / read-many / stable-key pattern.
+	var gradeCache stdsync.Map // map[string]int
+	gradeCacheHits := &atomic.Int64{}
+	gradeCacheMisses := &atomic.Int64{}
+
 	// The key grading function f_grade_∆W (sid, id||vk(vrf) , ch,(ϕ(vdf) , π(vdf), ϕ(vrf), π(vrf) ), Wi),
 	// parameterized by a "weight disagreement" bound ∆W computes gi ← d + 1 − (Wi − n · 2^λ/ ϕ(vrf)+1) · 1 / ∆W
 	// and returns grade min {d + 1, ⌊g⌋}.
@@ -105,6 +120,17 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			logger.Warn("Grade function received nil auxKey")
 			return 0
 		}
+
+		// Grade depends only on φ(vrf) among per-message inputs: the grading params
+		// are run-fixed config and weight is the run-fixed cfg.Committee.TotalW (this
+		// closure is only ever called with that single value), so φ(vrf) alone keys
+		// the cache.
+		cacheKey := string(auxKey.PhiVrf)
+		if v, ok := gradeCache.Load(cacheKey); ok {
+			gradeCacheHits.Add(1)
+			return v.(int)
+		}
+		gradeCacheMisses.Add(1)
 
 		g, err := computeGrade(
 			cfg.Graph.GradingLevels,
@@ -119,7 +145,8 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			logger.Warn(
 				"Failed to compute grade", zap.String("sid", sid), zap.Error(err),
 			)
-			return 0 // Return 0 if there's an error in grade calculation
+			gradeCache.Store(cacheKey, 0) // memoize the rejection too
+			return 0                      // Return 0 if there's an error in grade calculation
 		}
 
 		if logger.Core().Enabled(zap.DebugLevel) {
@@ -133,6 +160,7 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 			)
 		}
 
+		gradeCache.Store(cacheKey, g)
 		return g
 	}
 
@@ -174,25 +202,27 @@ func New(ctx context.Context, cfg *config.Config, node network.Network, logger *
 	)
 
 	rp := resourceproof.New(logger)
-	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, logger)
+	rbExp := resourcebound.New(rp, exPost, exAnte, filterF, cfg.Committee.Weight, cfg.Committee.NoAdversarial, logger)
 
 	election := gce.New(logger)
 
 	return &Bootstrap{
-		id:         node.GetNodeID(),
-		MDagExAnte: mdagExAnte,
-		MDagExPost: mdagExPost,
-		ExAnte:     exAnte,
-		ExPost:     exPost,
-		RP:         rp,
-		RbExp:      rbExp,
-		VDF:        vdFunc,
-		VRF:        vrFunc,
-		GCE:        election,
-		Network:    node,
-		Config:     cfg,
-		Logger:     logger,
-		Context:    ctx,
+		id:               node.GetNodeID(),
+		MDagExAnte:       mdagExAnte,
+		MDagExPost:       mdagExPost,
+		ExAnte:           exAnte,
+		ExPost:           exPost,
+		RP:               rp,
+		RbExp:            rbExp,
+		VDF:              vdFunc,
+		VRF:              vrFunc,
+		GCE:              election,
+		Network:          node,
+		gradeCacheHits:   gradeCacheHits,
+		gradeCacheMisses: gradeCacheMisses,
+		Config:           cfg,
+		Logger:           logger,
+		Context:          ctx,
 	}, nil
 
 }
@@ -210,14 +240,15 @@ func (b *Bootstrap) Run() error {
 		return fmt.Errorf("failed to perform committee election: %w", err)
 	}
 
-	b.Logger.Info("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
+	b.Logger.Warn("Committee elected", zap.Int("size", len(committee)), zap.Any("committee", committee))
+	b.Logger.Warn("cache stats", zap.String("cache", "grade"),
+		zap.Int64("hits", b.gradeCacheHits.Load()), zap.Int64("misses", b.gradeCacheMisses.Load()))
 	for _, member := range committee {
 		fmt.Printf("ID:    %s\n", member.ID)
 		fmt.Printf("VK:    %s\n", member.VK)
 		fmt.Printf("Grade: %d\n", member.Grade)
 		fmt.Println("--------------------------------")
 	}
-	b.Logger.Info("Final Neighbors", zap.Strings("neighbors", b.Network.GetNeighbors()))
 
 	return nil
 }
@@ -253,27 +284,23 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 		return 0, fmt.Errorf("phi must be > 0")
 	}
 
-	// 3) Compute φ + 1 as big.Int
-	phiPlusOne := new(big.Int).Add(phiInt, big.NewInt(1))
+	// 3) Convert phi to float64, add 1.0
+	phiFloat, _ := phiInt.Float64()
+	phiPlusOneF := phiFloat + 1.0
 
-	// 4) Compute 2^λ as big.Int
-	twoToLambdaInt := new(big.Int).Lsh(big.NewInt(1), uint(lambda)) //nolint:gosec
+	// 4) Compute 2^lambda as float64
+	twoToLambda := math.Ldexp(1.0, lambda)
 
-	// 5) Convert numerator (2^λ) and denominator (φ+1) to big.Float
-	numerator := new(big.Float).SetInt(twoToLambdaInt)
-	denominator := new(big.Float).SetInt(phiPlusOne)
+	// 5) Compute a ratio = 2^λ / (φ + 1) as float64
+	ratioF := twoToLambda / phiPlusOneF
 
-	// 6) Compute a ratio = 2^λ / (φ + 1) as big.Float, then to float64
-	ratioF, _ := new(big.Float).Quo(numerator, denominator).Float64()
-	//    ratioF ≈ 2^λ/(φ+1)
-
-	// 7) Compute the subterm: (Wᵢ − n·ratioF)
+	// 6) Compute the subterm: (Wᵢ − n·ratioF)
 	sub := Wi - float64(n)*ratioF
 
-	// 8) Multiply by (1/ΔW)
+	// 7) Multiply by (1/ΔW)
 	term := sub / deltaW
 
-	// 9) Compute gᵢ = (d + 1) − term
+	// 8) Compute gᵢ = (d + 1) − term
 	g := float64(d+1) - term
 
 	// Log the computed values for debugging
@@ -288,12 +315,11 @@ func computeGrade(d, n, lambda int, Wi, deltaW float64, beta []byte, logger *zap
 			zap.Float64("term", term),
 			zap.Float64("g", g),
 			zap.String("phi", phiInt.String()),
-			zap.String("phi_plus_one", phiPlusOne.String()),
-			zap.String("twoToLambdaInt", twoToLambdaInt.String()),
+			zap.Float64("phi_float", phiFloat),
 			zap.Int("lambda", lambda),
 		)
 	}
-	// 10) Take floor(gᵢ)
+	// 9) Take floor(gᵢ)
 	floorG := math.Floor(g)
 
 	finalGrade := math.Min(float64(d+1), floorG)

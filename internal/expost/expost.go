@@ -6,12 +6,10 @@ import (
 	"math/big"
 	"runtime"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -123,13 +121,14 @@ type ExPost struct {
 	gradeFunc  common.GradeFunc
 	threadPool *threadpool.ThreadPool
 
+	roundAcc     map[int]*common.RoundAcc
+	tickTimes    map[int]time.Time
+	currentRound int
+
 	protocolID string
 	nodeID     string
 	sid        string
 	vk         []byte
-
-	validMessages []int
-	totalMessages []int
 
 	d         int
 	D         int
@@ -168,12 +167,12 @@ func New(
 		vk:           vk,
 		isRunning:    true,
 
-		protocolID: protocolID,
-		nodeID:     net.GetNodeID(),
-		R:          gradeLevels * diameterBound,
-
-		validMessages: make([]int, gradeLevels*diameterBound),
-		totalMessages: make([]int, gradeLevels*diameterBound),
+		protocolID:   protocolID,
+		nodeID:       net.GetNodeID(),
+		R:            gradeLevels * diameterBound,
+		roundAcc:     make(map[int]*common.RoundAcc),
+		tickTimes:    make(map[int]time.Time),
+		currentRound: -1,
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -233,7 +232,6 @@ func (e *ExPost) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
-		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -318,7 +316,7 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
 		}
 
-		results.Add(vk, challenge, e.nodeID, grade)
+		results.Add(vk, e.nodeID, grade)
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
@@ -330,12 +328,22 @@ func (e *ExPost) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 		e.logger.Info(
 			"ExPost verification round", zap.Int("round", r), zap.String("node_id", e.nodeID),
 		)
+
 		e.mu.Lock()
+		e.currentRound = r
+		e.tickTimes[r] = tickNow
 		msgs := e.messages[r-1]
+		prevAcc := e.roundAcc[r-1]
+		delete(e.roundAcc, r-1)
 		e.mu.Unlock()
+
+		if prevAcc != nil {
+			e.flushRoundStats(r-1, prevAcc)
+		}
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
@@ -362,6 +370,15 @@ func (e *ExPost) Verify(
 	}
 
 	e.isRunning = false
+
+	// Flush stats for any rounds not yet flushed (including the last round).
+	e.mu.Lock()
+	remaining := e.roundAcc
+	e.roundAcc = make(map[int]*common.RoundAcc)
+	e.mu.Unlock()
+	for round, a := range remaining {
+		e.flushRoundStats(round, a)
+	}
 	e.logger.Info("ExPost verification phase completed")
 	return results, nil
 }
@@ -426,10 +443,9 @@ func (e *ExPost) validateMerklePath(merklePath []*pb.State, round int) bool {
 	// Each layer should contain the hash of the previous layer
 	for i := 1; i < round; i++ {
 		// Hash the previous layer (i-1) and check if it's in the current layer (i)
-		prevLayerHash := e.mdag.Oracle(merklePath[i-1].Row...)
-		// The length is checked earlier, so we can directly access merklePath[i]
-		// nolint:gosec
-		if !isValueInState(prevLayerHash, merklePath[i].Row) {
+		// len(merklePath) >= round is checked by the caller, so i-1 and i are in range.
+		prevLayerHash := e.mdag.Oracle(merklePath[i-1].Row...) //nolint:gosec // bounds checked by caller
+		if !isValueInState(prevLayerHash, merklePath[i].Row) { //nolint:gosec // bounds checked by caller
 			e.logger.Warn("Invalid Merkle path at layer", zap.Int("layer", i), zap.Int("round", round))
 			return false
 		}
@@ -457,12 +473,11 @@ func (e *ExPost) processMessage(
 				"Processing valid message", zap.Int("round", r), zap.String("sender_id", msg.Id), zap.Int("round", r), zap.Int("grade", g),
 			)
 		}
-		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
+		if results.Add(msg.VerificationKey, msg.Id, g) {
 			e.logger.Info(
 				"Added to results",
 				zap.String("sender_id", msg.Id),
 				zap.Binary("vk", msg.VerificationKey),
-				zap.Binary("value", msg.Value),
 				zap.Int("grade", g),
 			)
 		} else {
@@ -542,41 +557,54 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
-	e.totalMessages[round]++
+	arrival := time.Now()
 
+	// Single critical section: snapshot state and record total/late/lag.
+	e.mu.Lock()
+	acc := e.getAcc(round)
+	acc.Total++
+	curRound := e.currentRound
+	tt := e.tickTimes[round]
+	if curRound >= 0 && round < curRound {
+		acc.LateCount++
+		if late := curRound - round; late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+		}
+	}
+	e.mu.Unlock()
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if msg.SessionId != e.sid {
-		err := fmt.Errorf("session id mismatch")
 		e.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", e.sid), zap.String("received", msg.SessionId),
 		)
-
-		return err
+		return fmt.Errorf("session id mismatch")
 	}
 
 	if msg.Aux == nil {
-		err := fmt.Errorf("message missing required Aux field")
 		e.logger.Warn("Received message with nil Aux", zap.String("sender", from.String()))
-		return err
+		return fmt.Errorf("message missing required Aux field")
 	}
 
 	if msg.Aux.AuxKey == nil {
-		err := fmt.Errorf("message missing required AuxKey field")
 		e.logger.Warn("Received message with nil AuxKey", zap.String("sender", from.String()))
-		return err
+		return fmt.Errorf("message missing required AuxKey field")
 	}
 
 	if !e.network.IsNeighbor(from) {
-		err := fmt.Errorf("sender not in neighbors list")
-
 		e.logger.Warn("Received message from non-neighbor sender", zap.String("sender", from.String()))
-
-		return err
+		return fmt.Errorf("sender not in neighbors list")
 	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if e.logger.Core().Enabled(zap.DebugLevel) {
 		e.logger.Debug(
@@ -590,12 +618,37 @@ func (e *ExPost) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "expost", e.nodeID, e.sid).Inc()
-	e.validMessages[round]++
-
+	// Phase 2: brief lock to record valid message.
+	e.mu.Lock()
+	acc.Valid++
 	e.messages[round] = append(e.messages[round], &msg)
+	e.mu.Unlock()
 	return nil
+}
+
+func (e *ExPost) getAcc(round int) *common.RoundAcc {
+	a, ok := e.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		e.roundAcc[round] = a
+	}
+	return a
+}
+
+func (e *ExPost) flushRoundStats(round int, a *common.RoundAcc) {
+	if a.Total == 0 {
+		return
+	}
+	var meanNs int64
+	if a.LagCount > 0 {
+		meanNs = a.LagSumNs / int64(a.LagCount)
+	}
+	e.logger.Warn("round stats",
+		zap.String("proto", "expost"), zap.Int("round", round),
+		zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+		zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+		zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+		zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
 }
 
 func secureRandomBytes(n int, allowedCharset string) ([]byte, error) {

@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/base64"
-	"strings"
 	"sync"
 
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -55,6 +54,14 @@ type FSigmaRBExp struct {
 	SigmaExa [][][]byte
 }
 
+// RoundAcc holds per-round stats accumulated locally under a protocol's own
+// mutex. Flushed (logged) once per round via flushRoundStats instead of per message.
+type RoundAcc struct {
+	Total, Valid, LateCount, MaxLateness int
+	LagSumNs, LagMaxNs, LagLastNs        int64
+	LagCount                             int
+}
+
 // CommitteeOutput is the final output for an elected candidate: a triple (id, vk, grade).
 type CommitteeOutput struct {
 	ID    string
@@ -63,34 +70,18 @@ type CommitteeOutput struct {
 }
 
 // Committee holds the committee members' information.
-// It maps a flattened key (vkStr + "\x00" + chStr) to their outputs (O).
 type Committee struct {
 	mu        sync.RWMutex // Protects concurrent access to committee map
 	committee map[string]O
 	len       int
 }
 
-// makeKey creates a flattened key from vk and ch strings.
-func makeKey(vkStr, chStr string) string {
-	return vkStr + "\x00" + chStr
-}
-
-// splitKey splits a flattened key back into vk and ch strings.
-func splitKey(key string) (vkStr, chStr string) {
-	parts := strings.SplitN(key, "\x00", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return key, ""
-}
-
 // Add adds a new member to the committee.
-// It takes a verification key (vk), a challenge (ch), an identifier (id), and a grade.
 // If the member already exists with a lower grade, it will overwrite it.
 // If the member exists with a higher or equal grade, it will not update the entry.
 // Returns true if the member was added or updated, false if not.
 // This method is thread-safe.
-func (c *Committee) Add(vk, ch []byte, id string, grade int) bool {
+func (c *Committee) Add(vk []byte, id string, grade int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -98,9 +89,8 @@ func (c *Committee) Add(vk, ch []byte, id string, grade int) bool {
 		c.committee = make(map[string]O)
 		c.len = 0
 	}
-	vkStr := base64.StdEncoding.EncodeToString(vk)
-	chStr := base64.StdEncoding.EncodeToString(ch)
-	key := makeKey(vkStr, chStr)
+
+	key := string(vk)
 
 	existing, exists := c.committee[key]
 	if exists && existing.Grade >= grade {
@@ -124,14 +114,13 @@ func (c *Committee) ToCommitteeOutput() []*CommitteeOutput {
 		return nil
 	}
 
-	// Pre-allocate slice with exact capacity to avoid reallocations
 	outputs := make([]*CommitteeOutput, 0, c.len)
 
 	for key, member := range c.committee {
-		vk, _ := splitKey(key)
+		vkStr := base64.StdEncoding.EncodeToString([]byte(key))
 		outputs = append(outputs, &CommitteeOutput{
 			ID:    member.ID,
-			VK:    vk,
+			VK:    vkStr,
 			Grade: member.Grade,
 		})
 	}
@@ -139,21 +128,20 @@ func (c *Committee) ToCommitteeOutput() []*CommitteeOutput {
 	return outputs
 }
 
-// Range calls fn for every (vk, ch, value) in the underlying maps.
+// Range calls fn for every (vk, value) in the committee.
 // This method is thread-safe.
-func (c *Committee) Range(fn func(vk, ch string, val O)) {
+func (c *Committee) Range(fn func(vk string, val O)) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	for key, val := range c.committee {
-		vk, ch := splitKey(key)
-		fn(vk, ch, val)
+		fn(key, val)
 	}
 }
 
-// Get retrieves a committee member by verification key and challenge.
+// Get retrieves a committee member by verification key.
 // This method is thread-safe.
-func (c *Committee) Get(vk, ch string) (O, bool) {
+func (c *Committee) Get(vk string) (O, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -161,8 +149,7 @@ func (c *Committee) Get(vk, ch string) (O, bool) {
 		return O{}, false
 	}
 
-	key := makeKey(vk, ch)
-	if member, exists := c.committee[key]; exists {
+	if member, exists := c.committee[vk]; exists {
 		return member, true
 	}
 

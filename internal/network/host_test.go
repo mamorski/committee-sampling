@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -124,6 +123,9 @@ func (suite *HostTestSuite) SetupTest() {
 	suite.testPeerID, err = peer.IDFromPublicKey(pub)
 	suite.Require().NoError(err)
 
+	pubKeyBytes, err := crypto.MarshalPublicKey(pub)
+	suite.Require().NoError(err)
+
 	suite.mockHost = &MockHost{}
 	suite.mockPeerstore = &MockPeerstore{}
 	suite.mockDiscovery = &MockDiscovery{
@@ -138,7 +140,14 @@ func (suite *HostTestSuite) SetupTest() {
 		discovery:   suite.mockDiscovery,
 		maxOutbound: 5,
 		key:         suite.testPrivKey,
+		nodeID:      suite.testPeerID.String(),
+		nodePubKey:  pubKeyBytes,
 		neighbors:   make(map[peer.ID]peer.AddrInfo),
+		appBytes:    newAppByteTracker(),
+		streamPool:  make(map[streamKey]*pooledStream),
+		dialTimeout: time.Second,
+
+		connectFailsMax: 3,
 	}
 	suite.node.acceptingPotentialNeighbors.Store(true)
 }
@@ -215,10 +224,12 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 	suite.mockPeerstore.On("PubKey", suite.testPeerID).Return(suite.testPubKey).Maybe()
 	suite.mockPeerstore.On("PrivKey", suite.testPeerID).Return(suite.testPrivKey).Maybe()
 
+	// Pooled framing: open one stream, then write length-prefixed frames over it.
+	// msgio's WriteMsg issues two Writes (varint length prefix + body) and the
+	// stream stays open in the pool (no per-message Close).
 	mockStream := &MockStream{}
 	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
-	mockStream.On("Write", mock.Anything).Return(100, nil).Once()
-	mockStream.On("Close").Return(nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil)
 
 	// Add a neighbor
 	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
@@ -233,6 +244,78 @@ func (suite *HostTestSuite) TestSendProtocolMessageWithNeighbors() {
 	suite.mockHost.AssertExpectations(suite.T())
 	suite.mockPeerstore.AssertExpectations(suite.T())
 	mockStream.AssertExpectations(suite.T())
+}
+
+func (suite *HostTestSuite) TestSendFramedReusesStream() {
+	// Three sends to the same (peer, protocol) must open the stream once and
+	// reuse it: NewStream is called exactly once, with two framed Writes per
+	// message (varint prefix + body), and no Close between messages.
+	mockStream := &MockStream{}
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(mockStream, nil).Once()
+	mockStream.On("Write", mock.Anything).Return(100, nil)
+
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	msg := &pproto.ProtocolMessage{Payload: []byte("payload")}
+
+	for i := 0; i < 3; i++ {
+		size, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+		suite.True(ok)
+		suite.Greater(size, int64(0))
+	}
+
+	suite.mockHost.AssertExpectations(suite.T())
+	mockStream.AssertExpectations(suite.T())
+}
+
+func (suite *HostTestSuite) TestEvictsNeighborAfterMaxConnectFailures() {
+	// A neighbor whose dials always fail is evicted once its streak reaches
+	// connectFailsMax. Before that it stays in the neighbor set.
+	suite.node.connectFailsMax = 3
+	suite.mockHost.On("NewStream", mock.Anything, mock.Anything, mock.Anything).
+		Return((*MockStream)(nil), assert.AnError)
+	suite.mockHost.On("Connect", mock.Anything, mock.Anything).Return(assert.AnError)
+
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	msg := &pproto.ProtocolMessage{Payload: []byte("payload")}
+
+	// Below threshold: still a neighbor.
+	for i := 0; i < 2; i++ {
+		suite.node.neighbors[suite.testPeerID] = addrInfo
+		_, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+		suite.False(ok)
+		suite.True(suite.node.IsNeighbor(suite.testPeerID))
+	}
+
+	// Third failure hits the threshold and evicts.
+	suite.node.neighbors[suite.testPeerID] = addrInfo
+	_, ok := suite.node.sendFramed(addrInfo, protocol.ID("test-protocol"), msg)
+	suite.False(ok)
+	suite.False(suite.node.IsNeighbor(suite.testPeerID))
+	suite.Empty(suite.node.GetNeighbors())
+}
+
+func (suite *HostTestSuite) TestConnectSuccessResetsFailureStreak() {
+	// A success between failures resets the streak, so a peer that keeps
+	// recovering is never evicted.
+	suite.node.connectFailsMax = 2
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	addrInfo := peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	suite.node.neighbors[suite.testPeerID] = addrInfo
+
+	suite.node.recordConnectFailure(suite.testPeerID) // streak 1
+	suite.node.recordConnectSuccess(suite.testPeerID) // reset
+	suite.node.recordConnectFailure(suite.testPeerID) // streak 1 again, below max
+
+	suite.True(suite.node.IsNeighbor(suite.testPeerID))
+}
+
+func (suite *HostTestSuite) TestLogGraphSnapshotDoesNotPanic() {
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/8080")
+	suite.node.neighbors[suite.testPeerID] = peer.AddrInfo{ID: suite.testPeerID, Addrs: []multiaddr.Multiaddr{addr}}
+	suite.node.logGraphSnapshot("start")
+	suite.node.logGraphSnapshot("end")
 }
 
 func (suite *HostTestSuite) TestRegisterHandler() {
@@ -413,7 +496,7 @@ func (suite *HostTestSuite) TestGraphDropHandler() {
 	mockStream.On("Conn").Return(mockConn)
 
 	dropMsg := &pproto.GraphDrop{
-		MessageData: suite.node.newMessageData(uuid.New().String(), false),
+		MessageData: suite.node.newMessageData(),
 	}
 
 	signature, err := suite.node.signProtoMessage(dropMsg)

@@ -32,10 +32,18 @@ type Config struct {
 	Synchronization Synchronization `mapstructure:"synchronization"` // Configuration for the synchronization protocol
 	Logger          Logger          `mapstructure:"logger"`          // Configuration for the logger
 	Metrics         Metrics         `mapstructure:"metrics"`         // Configuration for metrics collection
+	Runtime         Runtime         `mapstructure:"runtime"`         // Go runtime tuning
 }
 
 type Logger struct {
 	Level string `mapstructure:"level"`
+}
+
+type Runtime struct {
+	// GOMAXPROCS caps Go runtime threads. absent/0 => default 2 (co-located simulation,
+	// many nodes per host). >0 pins to that value. <0 => no override (Go default = all
+	// host cores, for production single-node-per-host).
+	GOMAXPROCS int `mapstructure:"gomaxprocs"`
 }
 
 type Metrics struct {
@@ -65,10 +73,16 @@ type Network struct {
 	DiscoveryConfig     Discovery `mapstructure:"discovery_config"`     // Configuration for peer discovery
 	ConnectivityRetries int       `mapstructure:"connectivity_retries"` // Number of retries to verify connectivity on sent failure (
 	// default: 3)
+	SendTimeout time.Duration `mapstructure:"send_timeout"` // Per-attempt timeout for opening an outbound stream (default: 5s)
+	// Timeout bounding a single openStream dial; shorter so dead peers fail fast (default: 1s)
+	DialTimeout time.Duration `mapstructure:"dial_timeout"`
 
 	// Simulation-only options
 	DropOnSend            bool    `mapstructure:"drop_on_send"`             // If true, randomly drop outgoing protocol messages
 	DropOnSendProbability float64 `mapstructure:"drop_on_send_probability"` // Probability in [0,1] to drop a send when enabled
+	PeerDropEnabled       bool    `mapstructure:"peer_drop_enabled"`        // If true, this node drops one neighbor edge after graph building
+	// If true, run libp2p with an unlimited resource manager (co-located sim with many nodes)
+	UnlimitedResources bool `mapstructure:"unlimited_resources"`
 }
 
 type Discovery struct {
@@ -91,6 +105,9 @@ type Committee struct {
 	DeltaW        float64 `mapstructure:"delta_w"`        // Acceptable weight deviation
 	CommitteeSize int     `mapstructure:"committee_size"` // Size of the committee to be formed
 	Delay         int     `mapstructure:"delay"`          // Delay for the VDF in seconds
+
+	// Simulation-only: when true, all messages are assumed honest; enables cheaper vk-only caching.
+	NoAdversarial bool `mapstructure:"no_adversarial"`
 }
 
 type Synchronization struct {

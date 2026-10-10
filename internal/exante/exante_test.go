@@ -1,7 +1,6 @@
 package exante
 
 import (
-	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
@@ -135,14 +134,14 @@ func (suite *ExAnteTestSuite) SetupTest() {
 		d:             suite.testD,
 		D:             suite.testBigD,
 		gradeFunction: suite.mockGradeFunction,
-		messages:      make(map[int][]*pb.TimestampMessage), // changed
+		messages:      make(map[int][]*pb.TimestampMessage),
 		sid:           suite.testSID,
 		isRunning:     true,
-		R:             suite.testD * suite.testBigD, // R is the product of d and D
+		R:             suite.testD * suite.testBigD,
 		nodeID:        suite.testNodeID,
-
-		validMessages: make([]int, suite.testD*suite.testBigD),
-		totalMessages: make([]int, suite.testD*suite.testBigD),
+		roundAcc:      make(map[int]*common.RoundAcc),
+		tickTimes:     make(map[int]time.Time),
+		currentRound:  -1,
 	}
 }
 
@@ -422,9 +421,9 @@ func (suite *ExAnteTestSuite) TestHandleMessage_MultipleMessages() {
 
 // TestValidateMerklePath_Success tests successful Merkle path validation
 func (suite *ExAnteTestSuite) TestValidateMerklePath_Success() {
-	merklePath := [][][]byte{
-		{[]byte("path1"), []byte("path2")},
-		{[]byte("path3"), []byte("oracle-result")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1"), []byte("path2")}},
+		{Row: [][]byte{[]byte("path3"), []byte("oracle-result")}},
 	}
 	round := 2
 
@@ -446,8 +445,8 @@ func (suite *ExAnteTestSuite) TestValidateMerklePath_Success() {
 
 // TestValidateMerklePath_InvalidLength tests Merkle path with invalid length
 func (suite *ExAnteTestSuite) TestValidateMerklePath_InvalidLength() {
-	merklePath := [][][]byte{
-		{[]byte("path1")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1")}},
 	}
 	round := 3 // Expecting more paths than provided
 
@@ -458,9 +457,9 @@ func (suite *ExAnteTestSuite) TestValidateMerklePath_InvalidLength() {
 
 // TestValidateMerklePath_InvalidStateLength tests with insufficient state length
 func (suite *ExAnteTestSuite) TestValidateMerklePath_InvalidStateLength() {
-	merklePath := [][][]byte{
-		{[]byte("path1")},
-		{[]byte("path2")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1")}},
+		{Row: [][]byte{[]byte("path2")}},
 	}
 	round := 2
 
@@ -476,10 +475,10 @@ func (suite *ExAnteTestSuite) TestValidateMerklePath_InvalidStateLength() {
 
 // TestValidateMerklePath_OracleNotInNextLevel tests when oracle result is not found in next level
 func (suite *ExAnteTestSuite) TestValidateMerklePath_OracleNotInNextLevel() {
-	merklePath := [][][]byte{
-		{[]byte("path1"), []byte("path2")},
-		{[]byte("path3"), []byte("path4")}, // Oracle result will NOT be found here
-		{[]byte("path5"), []byte("path6")},
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1"), []byte("path2")}},
+		{Row: [][]byte{[]byte("path3"), []byte("path4")}}, // Oracle result will NOT be found here
+		{Row: [][]byte{[]byte("path5"), []byte("path6")}},
 	}
 	round := 3
 
@@ -503,10 +502,10 @@ func (suite *ExAnteTestSuite) TestValidateMerklePath_OracleNotInNextLevel() {
 
 // TestValidateMerklePath_MultipleRoundsSuccess tests successful validation with multiple rounds
 func (suite *ExAnteTestSuite) TestValidateMerklePath_MultipleRoundsSuccess() {
-	merklePath := [][][]byte{
-		{[]byte("path1"), []byte("path2")},
-		{[]byte("oracle-result1"), []byte("path4")}, // First oracle result found here
-		{[]byte("oracle-result2"), []byte("path6")}, // Second oracle result found here
+	merklePath := []*pb.State{
+		{Row: [][]byte{[]byte("path1"), []byte("path2")}},
+		{Row: [][]byte{[]byte("oracle-result1"), []byte("path4")}}, // First oracle result found here
+		{Row: [][]byte{[]byte("oracle-result2"), []byte("path6")}}, // Second oracle result found here
 	}
 	round := 3
 
@@ -642,26 +641,6 @@ func (suite *ExAnteTestSuite) TestIsValueInState_NotFound() {
 	result := isValueInState(value, state)
 
 	suite.False(result)
-}
-
-// TestConvertTimestampToBytes tests conversion of protobuf message to bytes
-func (suite *ExAnteTestSuite) TestConvertTimestampToBytes() {
-	msg := &pb.TimestampMessage{
-		MerklePath: []*pb.State{
-			{Row: [][]byte{[]byte("row1"), []byte("row2")}},
-			{Row: [][]byte{[]byte("row3")}},
-			nil,        // Test nil state
-			{Row: nil}, // Test nil row
-		},
-	}
-
-	result := convertTimestampToBytes(msg)
-
-	suite.Len(result, 4)
-	suite.Equal([][]byte{[]byte("row1"), []byte("row2")}, result[0])
-	suite.Equal([][]byte{[]byte("row3")}, result[1])
-	suite.Nil(result[2])
-	suite.Equal([][]byte{}, result[3])
 }
 
 // Helper functions for creating test messages
@@ -862,9 +841,7 @@ func (suite *ExAnteTestSuite) TestVerify_WithIncomingMessages() {
 	suite.False(suite.exante.isRunning)
 
 	// Verify that the message was processed and included in results
-	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
-	)
+	r, exists := result.Get(string(suite.testVK))
 	suite.True(exists)
 	suite.Equal(2, r.Grade)
 
@@ -959,9 +936,7 @@ func (suite *ExAnteTestSuite) TestVerify_MessageGradeComparison() {
 	suite.NotNil(result)
 
 	// Should only have one entry for the key (higher grade wins)
-	r, exists := result.Get(
-		base64.StdEncoding.EncodeToString(suite.testVK), base64.StdEncoding.EncodeToString(suite.testChallenge),
-	)
+	r, exists := result.Get(string(suite.testVK))
 	suite.True(exists)
 	suite.Equal(result.Len(), 1)
 	suite.Equal(3, r.Grade) // Should take the higher grade from node2

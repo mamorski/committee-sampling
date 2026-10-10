@@ -2,12 +2,12 @@ package network
 
 import (
 	"context"
-	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-msgio"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
@@ -99,40 +99,23 @@ func (n *P2PNode) verifyData(data []byte, signature []byte, peerID peer.ID, pubK
 }
 
 // newMessageData helper method - generate message data shared between all node's p2p protocols
-// messageId: unique for requests, copied from request for responses
-func (n *P2PNode) newMessageData(messageID string, gossip bool) *pproto.MessageData {
-	// Add proto bin data for a message author public key
-	// this is useful for authenticating messages forwarded by a node authored by another node
-	nodePubKey, err := crypto.MarshalPublicKey(n.host.Peerstore().PubKey(n.host.ID()))
-
-	if err != nil {
-		n.logger.Fatal("Failed to get public key for sender from local peer store", zap.Error(err))
-	}
-
+func (n *P2PNode) newMessageData() *pproto.MessageData {
+	// NodeId and NodePubKey are constant per node and cached at construction
+	// (n.nodeID, n.nodePubKey); the author pubkey lets nodes authenticate
+	// messages forwarded on behalf of another node. Each call returns a fresh
+	// struct so the per-message Sign can be set under concurrent fan-out.
 	return &pproto.MessageData{
-		ClientVersion: clientVersion,
-		NodeId:        n.host.ID().String(),
-		NodePubKey:    nodePubKey,
-		Timestamp:     time.Now().UTC().Unix(),
-		Id:            messageID,
-		Gossip:        gossip,
+		NodeId:     n.nodeID,
+		NodePubKey: n.nodePubKey,
 	}
 }
 
+// send marshals and writes data to peer over protocol p. It returns true on
+// success and false on any failure.
 func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) bool {
-	s, err := n.host.NewStream(context.Background(), addrInfo.ID, p)
-	if err != nil {
-		// Attempt to establish a connection and retry once
-		if errConn := n.host.Connect(context.Background(), addrInfo); errConn != nil {
-			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
-			return false
-		}
-
-		s, err = n.host.NewStream(context.Background(), addrInfo.ID, p)
-		if err != nil {
-			n.logger.Error("Failed to create stream", zap.Error(err))
-			return false
-		}
+	s, ok := n.openStream(addrInfo, p)
+	if !ok {
+		return false
 	}
 
 	defer func(s network.Stream) {
@@ -156,6 +139,91 @@ func (n *P2PNode) send(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message
 	}
 
 	return true
+}
+
+// openStream opens a stream to the peer, dialing and retrying once if the first
+// attempt fails. Stream creation is bounded by sendTimeout so a stuck peer
+// cannot block the caller indefinitely.
+func (n *P2PNode) openStream(addrInfo peer.AddrInfo, p protocol.ID) (network.Stream, bool) {
+	ctx, cancel := context.WithTimeout(n.ctx, n.dialTimeout)
+	defer cancel()
+
+	s, err := n.host.NewStream(ctx, addrInfo.ID, p)
+	if err != nil {
+		// Attempt to establish a connection and retry once.
+		if errConn := n.host.Connect(ctx, addrInfo); errConn != nil {
+			n.logger.Error("Failed to connect to peer", zap.Error(errConn))
+			n.recordConnectFailure(addrInfo.ID)
+			return nil, false
+		}
+
+		s, err = n.host.NewStream(ctx, addrInfo.ID, p)
+		if err != nil {
+			n.logger.Error("Failed to create stream", zap.Error(err))
+			n.recordConnectFailure(addrInfo.ID)
+			return nil, false
+		}
+	}
+
+	n.recordConnectSuccess(addrInfo.ID)
+	return s, true
+}
+
+// sendFramed writes data as a length-prefixed frame over a reusable stream kept
+// in the pool, keyed by (peer, protocol). The stream stays open so the receiver
+// reads successive frames without per-message negotiation/close overhead. On a
+// write error the stream is reset and evicted, then reopened once; the next send
+// reopens lazily. Returns the marshaled envelope size and whether the send
+// succeeded.
+func (n *P2PNode) sendFramed(addrInfo peer.AddrInfo, p protocol.ID, data proto.Message) (int64, bool) {
+	buf, err := proto.Marshal(data)
+	if err != nil {
+		n.logger.Error("Failed to marshal proto message", zap.Error(err))
+		return 0, false
+	}
+
+	key := streamKey{peer: addrInfo.ID, proto: p}
+	n.poolMu.Lock()
+	ps := n.streamPool[key]
+	if ps == nil {
+		ps = &pooledStream{}
+		n.streamPool[key] = ps
+	}
+	n.poolMu.Unlock()
+
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	// Try once on the existing stream, then once more after a forced reopen.
+	// A pooled stream whose connection was torn down (peer churn, connmgr trim)
+	// fails the first write; that is expected and recovered by reopening, so the
+	// per-attempt failure is logged at debug. Only a failure that survives the
+	// reopen is a real send error.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if ps.s == nil {
+			s, ok := n.openStream(addrInfo, p)
+			if !ok {
+				return 0, false
+			}
+			ps.s = s
+			ps.w = msgio.NewVarintWriter(s)
+		}
+
+		if err := ps.w.WriteMsg(buf); err != nil {
+			lastErr = err
+			n.logger.Debug("Framed write failed, reopening stream", zap.Error(err))
+			_ = ps.s.Reset()
+			ps.s = nil
+			ps.w = nil
+			continue
+		}
+
+		return int64(len(buf)), true
+	}
+
+	n.logger.Error("Failed to write framed message after reopen", zap.Error(lastErr))
+	return 0, false
 }
 
 func (n *P2PNode) remainingOutboundCapacity() int {

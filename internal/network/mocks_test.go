@@ -229,6 +229,11 @@ func (m *MockStream) Reset() error {
 	return args.Error(0)
 }
 
+func (m *MockStream) ResetWithError(code network.StreamErrorCode) error {
+	args := m.Called(code)
+	return args.Error(0)
+}
+
 func (m *MockStream) SetDeadline(t time.Time) error {
 	args := m.Called(t)
 	return args.Error(0)

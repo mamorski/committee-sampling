@@ -1,7 +1,6 @@
 package expost
 
 import (
-	"encoding/base64"
 	"testing"
 	"time"
 
@@ -127,9 +126,9 @@ func (suite *ExPostTestSuite) SetupTest() {
 		protocolID:   "/expost/1.0.0/" + suite.sid,
 		nodeID:       "test-node",
 		R:            3 * 5,
-
-		validMessages: make([]int, 15),
-		totalMessages: make([]int, 15),
+		roundAcc:     make(map[int]*common.RoundAcc),
+		tickTimes:    make(map[int]time.Time),
+		currentRound: -1,
 	}
 }
 
@@ -969,9 +968,7 @@ func (suite *ExPostTestSuite) TestVerifyWithMessageProcessingAndPropagation() {
 	suite.Equal(results.Len(), 1) // Should have one result from the processed message
 
 	// Verify the result contains the expected data
-	result, exists := results.Get(
-		base64.StdEncoding.EncodeToString([]byte("test-vk")), base64.StdEncoding.EncodeToString([]byte("test-value")),
-	)
+	result, exists := results.Get("test-vk")
 	suite.True(exists)
 	suite.Equal("test-node", result.ID)
 	suite.Equal(3, result.Grade) // min(d-r/D, gradeFunc) = min(3-1/5, 5) = min(3, 5) = 3

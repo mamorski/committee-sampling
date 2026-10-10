@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	mdagpb "github.com/mamorski/committee-sampling/pkg/proto"
 
@@ -39,9 +37,10 @@ type MDAG struct {
 	protocolType   string           // type of the protocol (e.g., "ExPost", "ExAnte")
 	step           common.Step      // synchronizer step (ExPostMDAG or ExAnteMDAG)
 
-	validMessages []int
-	totalMessages []int
-	isRunning     bool // flag indicating if the protocol is running
+	roundAcc     map[int]*common.RoundAcc
+	tickTimes    map[int]time.Time
+	currentRound int
+	isRunning    bool // flag indicating if the protocol is running
 }
 
 // New creates a new MDAG instance with the specified parameters.
@@ -80,8 +79,9 @@ func New(
 		sessionID:      sid,
 		step:           step,
 		protocolType:   protocolType,
-		validMessages:  make([]int, rounds+1),
-		totalMessages:  make([]int, rounds+1),
+		roundAcc:       make(map[int]*common.RoundAcc),
+		tickTimes:      make(map[int]time.Time),
+		currentRound:   -1,
 	}
 
 	network.RegisterHandler(fmt.Sprintf("%s/%s/%s", protocolID, protocolType, sid), m.handleMessage)
@@ -112,7 +112,6 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 		m.logger.Info(
 			"Generate completed", zap.Duration("elapsed", elapsed),
 		)
-		m.logger.Info("Message counts", zap.Ints("valid_messages", m.validMessages), zap.Ints("total_messages", m.totalMessages))
 	}()
 
 	m.mu.Lock()
@@ -163,18 +162,26 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 
 		start := time.Now()
 		m.logger.Info("Starting round", zap.Int("round", r))
 
-		// Lock to safely access messages
+		// Lock to safely access messages and advance round tracking
 		m.mu.Lock()
-		// Get messages received in the previous round
+		m.currentRound = r
+		m.tickTimes[r] = tickNow
 		prevRoundMsgs, exists := m.messages[r-1]
 		if !exists || len(prevRoundMsgs) == 0 {
 			m.logger.Warn("No messages received in previous round", zap.Int("round", r-1))
 		}
+		prevAcc := m.roundAcc[r-1]
+		delete(m.roundAcc, r-1)
 		m.mu.Unlock()
+
+		if prevAcc != nil {
+			m.flushRoundStats(r-1, prevAcc)
+		}
 
 		sortedLabels := make([][]byte, len(prevRoundMsgs)+1)
 		sortedLabels[0] = m.currentLabel
@@ -213,21 +220,18 @@ func (m *MDAG) Generate(sid string, vki []byte, vi ...[]byte) ([][][]byte, error
 	// Mark the protocol as completed
 	m.mu.Lock()
 	m.isRunning = false
+	remaining := m.roundAcc
+	m.roundAcc = make(map[int]*common.RoundAcc)
 	m.mu.Unlock()
+
+	for round, a := range remaining {
+		m.flushRoundStats(round, a)
+	}
 
 	return m.state, nil
 }
 
 // handleMessage processes incoming messages from the network.
-//
-// The function validates that the message is from a known neighbor, has a matching session ID,
-// and is received while the protocol is running.
-//
-// Parameters:
-//   - from: The peer ID of the sender
-//   - payload: Raw message bytes received from the network
-//
-// Returns an error if validation fails, nil otherwise.
 func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 	m.mu.Lock()
 	running := m.isRunning
@@ -251,43 +255,87 @@ func (m *MDAG) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
-	m.totalMessages[round]++
+	arrival := time.Now()
 
+	// Single critical section: snapshot state and record total/late/lag.
+	m.mu.Lock()
+	acc := m.getAcc(round)
+	acc.Total++
+	curRound := m.currentRound
+	tt := m.tickTimes[round]
+	if curRound >= 0 && round < curRound {
+		acc.LateCount++
+		if late := curRound - round; late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if !m.network.IsNeighbor(from) {
-		err := errors.New("message from unknown neighbor")
 		m.logger.Warn(
 			"Received message from unknown neighbor", zap.String("from", from.String()),
 		)
-		return err
+		return errors.New("message from unknown neighbor")
 	}
 
 	if m.sessionID != "" && pbMsg.SessionId != m.sessionID {
-		err := errors.New("session id mismatch")
 		m.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", m.sessionID), zap.String("received", pbMsg.SessionId),
 		)
-		return err
+		return errors.New("session id mismatch")
 	}
-
-	m.mu.Lock()
-	if _, exists := m.messages[round]; !exists {
-		m.messages[round] = make([][]byte, 0, 16)
-	}
-	m.messages[round] = append(m.messages[round], pbMsg.Label)
-	m.mu.Unlock()
-
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), m.protocolType, m.network.GetNodeID(), m.sessionID).Inc()
-	m.validMessages[round]++
 
 	if m.logger.Core().Enabled(zap.DebugLevel) {
 		m.logger.Debug(
 			"Received message", zap.String("from", from.String()), zap.Int("round", round), zap.Binary("label", pbMsg.Label),
 		)
 	}
+
+	// Phase 2: brief lock to record valid message.
+	m.mu.Lock()
+	if _, exists := m.messages[round]; !exists {
+		m.messages[round] = make([][]byte, 0, 16)
+	}
+	m.messages[round] = append(m.messages[round], pbMsg.Label)
+	acc.Valid++
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *MDAG) getAcc(round int) *common.RoundAcc {
+	a, ok := m.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		m.roundAcc[round] = a
+	}
+	return a
+}
+
+func (m *MDAG) flushRoundStats(round int, a *common.RoundAcc) {
+	if a.Total == 0 {
+		return
+	}
+	var meanNs int64
+	if a.LagCount > 0 {
+		meanNs = a.LagSumNs / int64(a.LagCount)
+	}
+	m.logger.Warn("round stats",
+		zap.String("proto", m.protocolType), zap.String("step", string(m.step)),
+		zap.Int("round", round), zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+		zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+		zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+		zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
 }
 
 // broadcast sends a message to all network peers.
@@ -339,11 +387,23 @@ func (m *MDAG) GetComputedLabel(roundIndex int) []byte {
 	return nil
 }
 
+// oracleBufPool reuses concat buffers for Oracle, which is called per merkle layer
+// per gossiped message. The previous per-call bytes.Buffer allocation was pure GC
+// churn. m.oracle copies its input into a fresh digest slice, so the buffer can be
+// returned to the pool immediately after.
+var oracleBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
 func (m *MDAG) Oracle(h ...[]byte) []byte {
-	var buffer bytes.Buffer
+	buf := oracleBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
 	for _, v := range h {
-		buffer.Write(v)
+		buf.Write(v)
 	}
 
-	return m.oracle(buffer.Bytes())
+	out := m.oracle(buf.Bytes())
+	oracleBufPool.Put(buf)
+
+	return out
 }

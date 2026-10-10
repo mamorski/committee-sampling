@@ -5,6 +5,8 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/pprof"
 	"syscall"
 
 	"github.com/mamorski/committee-sampling/internal/boot"
@@ -19,6 +21,10 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "path to config file (optional, defaults to ./configs/{env}.json)")
+	cpuprofile := flag.String("cpuprofile", "", "write CPU profile to this file (empty = off)")
+	memprofile := flag.String("memprofile", "", "write heap profile to this file at shutdown (empty = off)")
+	blockprofile := flag.String("blockprofile", "", "write goroutine blocking profile to this file at shutdown (empty = off)")
+	mutexprofile := flag.String("mutexprofile", "", "write mutex contention profile to this file at shutdown (empty = off)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -28,6 +34,18 @@ func main() {
 
 	ctx := context.Background()
 	logger := createLogger(cfg)
+
+	stopProfiling := startProfiling(logger, *cpuprofile, *memprofile, *blockprofile, *mutexprofile)
+	defer stopProfiling()
+
+	gomaxprocs := cfg.Runtime.GOMAXPROCS
+	if gomaxprocs == 0 {
+		gomaxprocs = 2 // default cap; set a negative value in config for all host cores
+	}
+	if gomaxprocs > 0 {
+		runtime.GOMAXPROCS(gomaxprocs)
+		logger.Info("Pinned GOMAXPROCS", zap.Int("gomaxprocs", gomaxprocs))
+	}
 
 	// Create a synchronizer instance
 	sync, err := synchronizer.New(ctx, cfg, logger)
@@ -94,6 +112,71 @@ func main() {
 
 	if err := node.Close(); err != nil {
 		logger.Error("Failed to close network node", zap.Error(err))
+	}
+}
+
+// startProfiling enables the requested profiles (empty path = off) and returns
+// a function that flushes and closes them; call it once at shutdown.
+func startProfiling(logger *zap.Logger, cpuPath, memPath, blockPath, mutexPath string) func() {
+	var cpuFile *os.File
+	if cpuPath != "" {
+		f, err := os.Create(cpuPath) //nolint:gosec // operator-supplied CLI flag
+		if err != nil {
+			logger.Fatal("could not create CPU profile", zap.Error(err))
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			logger.Fatal("could not start CPU profile", zap.Error(err))
+		}
+		cpuFile = f
+		logger.Info("CPU profiling enabled", zap.String("file", cpuPath))
+	}
+	if blockPath != "" {
+		// Record every blocking event; adds overhead, so only enable on sampled nodes.
+		runtime.SetBlockProfileRate(1)
+		logger.Info("Block profiling enabled", zap.String("file", blockPath))
+	}
+	if mutexPath != "" {
+		// Report all mutex contention events; adds overhead, sample nodes only.
+		runtime.SetMutexProfileFraction(1)
+		logger.Info("Mutex profiling enabled", zap.String("file", mutexPath))
+	}
+
+	return func() {
+		if mutexPath != "" {
+			writeProfile(logger, "mutex", mutexPath)
+		}
+		if blockPath != "" {
+			writeProfile(logger, "block", blockPath)
+		}
+		if memPath != "" {
+			runtime.GC() // get up-to-date statistics
+			writeProfile(logger, "heap", memPath)
+		}
+		if cpuFile != nil {
+			// StopCPUProfile flushes the profile, so it must run before Close.
+			pprof.StopCPUProfile()
+			if err := cpuFile.Close(); err != nil {
+				logger.Error("could not close CPU profile", zap.Error(err))
+			}
+		}
+	}
+}
+
+// writeProfile dumps a runtime/pprof named profile (e.g. "heap", "block",
+// "mutex") to path.
+func writeProfile(logger *zap.Logger, name, path string) {
+	f, err := os.Create(path) //nolint:gosec // operator-supplied CLI flag
+	if err != nil {
+		logger.Error("could not create profile", zap.String("profile", name), zap.Error(err))
+		return
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			logger.Error("could not close profile", zap.String("profile", name), zap.Error(err))
+		}
+	}()
+	if err := pprof.Lookup(name).WriteTo(f, 0); err != nil {
+		logger.Error("could not write profile", zap.String("profile", name), zap.Error(err))
 	}
 }
 

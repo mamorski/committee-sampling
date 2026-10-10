@@ -544,29 +544,40 @@ Process:
 
 ### 3.10 Metrics and Observability
 
-**Location**: `internal/metrics/metrics.go`, `internal/metrics/collector.go`
+**Location**: `internal/metrics/collector.go`
 
 **Purpose**: Comprehensive protocol monitoring and analysis capabilities.
 
 #### 3.10.1 Metric Collection
 
-**Prometheus Metrics**:
+**Structured-log metrics** (Prometheus counters removed):
 
-1. **total_messages**: Counter with labels:
-   - `round`: Protocol round number
-   - `protocol`: Protocol type (mdag/expost/exante)
-   - `node_id`: Node identifier
-   - `sid`: Session identifier
+Each protocol accumulates per-round counters locally (`common.RoundAcc`, under its own
+mutex) and flushes them once per round via `flushRoundStats`, which emits a single
+`zap.Warn("round stats", …)` line carrying:
 
-2. **valid_messages**: Counter with same labels
-   - Subset of total_messages passing all validation checks
+- `proto`/`step`/`round`
+- `total`, `valid` — messages parsed vs. passing all validation
+- `late`, `max_lateness` — out-of-round arrivals
+- `lag_mean_ns`, `lag_max_ns`, `lag_last_ns`, `lag_count` — arrival lag distribution
 
 **Collection Points**:
+
 - MDAG: Message reception and validation
 - Ex-Post: Message reception and validation per round
 - Ex-Ante: Message reception and validation per round
 
+Byte volumes (`round bytes` / `final bytes`), cache hit/miss, committee, neighbor
+lists and peer-drops are logged the same way. Running with `logger.level: warn` keeps
+only this signal. The former per-node stats daemon and its `total_messages`/
+`valid_messages` Prometheus counters were removed — at 1000 nodes the `node_id`-labelled
+cardinality and the daemon's accumulation/JSON output added too much load.
+
 #### 3.10.2 Export Mechanisms
+
+`internal/metrics` still hosts an optional `/metrics` HTTP server and Pushgateway
+pusher, but **no application counters are registered**, so both export nothing on
+their own. They remain for callers that register their own collectors.
 
 **Push Gateway Mode**:
 - Periodic push to Prometheus Pushgateway
@@ -578,8 +589,6 @@ Process:
 - Exposes `/metrics` endpoint
 - Configurable port
 - Suitable for Prometheus scraping
-
-**Dual Mode Support**: Can enable both simultaneously for different monitoring architectures.
 
 ### 3.11 Configuration Management
 
@@ -697,8 +706,7 @@ pool.Close()
    └─> Register protocol handlers
 
 5. Metrics Initialization
-   └─> Register Prometheus metrics
-   └─> Start push gateway (if enabled)
+   └─> Start push gateway (if enabled)   # no app counters registered
    └─> Start HTTP server (if enabled)
 
 6. Bootstrap Module Creation
@@ -1207,10 +1215,9 @@ func operation() error {
 - Language-agnostic schemas
 - Forward/backward compatibility
 
-**Prometheus**:
-- Industry-standard metrics
-- Rich ecosystem
-- Flexible collection models
+**Prometheus** (collector scaffolding only):
+- `/metrics` server + Pushgateway pusher retained as optional scaffolding
+- No application counters registered — per-run stats go to the structured logs (`WARN`)
 
 ### 11.2 Architectural Decisions
 

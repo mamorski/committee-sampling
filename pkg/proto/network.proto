@@ -5,10 +5,8 @@ option go_package = "committee/proto";
 
 message MessageData {
   // shared between all requests
-  string clientVersion = 1; // client version
-  int64 timestamp = 2;     // unix time
-  string id = 3;           // allows requesters to use request data when processing a response
-  bool gossip = 4;         // true to have receiver peer gossip the message to neighbors
+  reserved 1, 2, 3, 4;
+  reserved "clientVersion", "timestamp", "id", "gossip";
   string nodeId = 5;       // id of node that created the message (not the peer that may have sent it). =base58(multihash(nodePubKey))
   bytes nodePubKey = 6;    // Authoring node Secp256k1 public key (32bytes) - protobufs serialized
   bytes sign = 7;         // signature of message data + method specific data by message authoring node.
@@ -17,12 +15,6 @@ message MessageData {
 message GraphProposal {
   MessageData messageData = 1;
   int32 round = 2;
-}
-
-message GraphResponse {
-  MessageData messageData = 1;
-  int32 round = 2;
-  bool accepted = 3;
 }
 
 message GraphDrop {

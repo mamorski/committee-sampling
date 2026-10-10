@@ -1,10 +1,10 @@
 package exante
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
 
@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/mamorski/committee-sampling/internal/common"
-	"github.com/mamorski/committee-sampling/internal/metrics"
 	"github.com/mamorski/committee-sampling/internal/network"
 	"github.com/mamorski/committee-sampling/internal/threadpool"
 	pb "github.com/mamorski/committee-sampling/pkg/proto"
@@ -117,14 +116,14 @@ type ExAnte struct {
 	threadPool   *threadpool.ThreadPool
 
 	gradeFunction common.GradeFunc
+	roundAcc      map[int]*common.RoundAcc
+	tickTimes     map[int]time.Time
+	currentRound  int
 
 	protocolID string
 	nodeID     string
 	sid        string
 	challenge  []byte
-
-	validMessages []int
-	totalMessages []int
 
 	d         int
 	D         int
@@ -161,8 +160,9 @@ func New(
 		protocolID:    protocolID,
 		nodeID:        net.GetNodeID(),
 		R:             d * D,
-		validMessages: make([]int, d*D),
-		totalMessages: make([]int, d*D),
+		roundAcc:      make(map[int]*common.RoundAcc),
+		tickTimes:     make(map[int]time.Time),
+		currentRound:  -1,
 	}
 
 	net.RegisterHandler(protocolID, e.handleMessage)
@@ -222,7 +222,6 @@ func (e *ExAnte) Verify(
 		e.logger.Info(
 			"Verify completed", zap.Duration("elapsed", elapsed),
 		)
-		e.logger.Info("Message counts", zap.Ints("valid_messages", e.validMessages), zap.Ints("total_messages", e.totalMessages))
 		e.threadPool.Close()
 	}()
 
@@ -300,7 +299,7 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to marshal initial message: %w", err)
 		}
 
-		results.Add(vk, e.challenge, e.nodeID, grade)
+		results.Add(vk, e.nodeID, grade)
 		e.network.SendProtocolMessage(e.protocolID, msgBytes)
 	}
 
@@ -312,11 +311,20 @@ func (e *ExAnte) Verify(
 			return nil, fmt.Errorf("failed to wait for round %d: %w", r, err)
 		}
 		<-waitChan
+		tickNow := time.Now()
 		e.logger.Info("ExAnte verification round", zap.Int("round", r))
 
 		e.mu.Lock()
+		e.currentRound = r
+		e.tickTimes[r] = tickNow
 		msgs := e.messages[r-1]
+		prevAcc := e.roundAcc[r-1]
+		delete(e.roundAcc, r-1)
 		e.mu.Unlock()
+
+		if prevAcc != nil {
+			e.flushRoundStats(r-1, prevAcc)
+		}
 
 		if len(msgs) == 0 {
 			e.logger.Debug("No messages received for round", zap.Int("round", r))
@@ -344,6 +352,15 @@ func (e *ExAnte) Verify(
 
 	e.isRunning = false
 	e.logger.Info("ExAnte verification phase completed")
+
+	// Flush stats for any rounds not yet flushed (including the last round).
+	e.mu.Lock()
+	remaining := e.roundAcc
+	e.roundAcc = make(map[int]*common.RoundAcc)
+	e.mu.Unlock()
+	for round, a := range remaining {
+		e.flushRoundStats(round, a)
+	}
 
 	return results, nil
 }
@@ -375,27 +392,46 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		return nil
 	}
 
-	// Increment total messages received metric
-	metrics.TotalMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
-	e.totalMessages[round]++
+	arrival := time.Now()
 
+	// Single critical section: snapshot state and record total/late/lag.
+	e.mu.Lock()
+	acc := e.getAcc(round)
+	acc.Total++
+	curRound := e.currentRound
+	tt := e.tickTimes[round]
+	if curRound >= 0 && round < curRound {
+		acc.LateCount++
+		if late := curRound - round; late > acc.MaxLateness {
+			acc.MaxLateness = late
+		}
+	}
+	if !tt.IsZero() {
+		if lag := arrival.Sub(tt).Nanoseconds(); lag > 0 {
+			acc.LagSumNs += lag
+			acc.LagCount++
+			acc.LagLastNs = lag
+			if lag > acc.LagMaxNs {
+				acc.LagMaxNs = lag
+			}
+		}
+	}
+	e.mu.Unlock()
+
+	// Validation outside lock — Warn calls must not hold mu.
 	if msg.SessionId != e.sid {
-		err := errors.New("session id mismatch")
 		e.logger.Warn(
 			"Received message with mismatched session id", zap.String("expected", e.sid), zap.String("received", msg.SessionId),
 		)
-		return err
+		return errors.New("session id mismatch")
 	}
 
 	if !e.network.IsNeighbor(from) {
-		err := errors.New("sender not in neighbors list")
 		e.logger.Warn(
 			"Received message from non-neighbor sender", zap.String("sender", from.String()),
 		)
-		return err
+		return errors.New("sender not in neighbors list")
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if e.logger.Core().Enabled(zapcore.DebugLevel) {
 		e.logger.Debug(
@@ -409,16 +445,40 @@ func (e *ExAnte) handleMessage(from peer.ID, payload []byte) error {
 		)
 	}
 
-	// Increment valid messages metric - message passed all validation checks
-	metrics.ValidMessages.WithLabelValues(strconv.Itoa(round), "exante", e.nodeID, e.sid).Inc()
-	e.validMessages[round]++
-
+	// Phase 2: brief lock to record valid message.
+	e.mu.Lock()
+	acc.Valid++
 	e.messages[round] = append(e.messages[round], &msg)
-
+	e.mu.Unlock()
 	return nil
 }
 
-func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
+func (e *ExAnte) getAcc(round int) *common.RoundAcc {
+	a, ok := e.roundAcc[round]
+	if !ok {
+		a = &common.RoundAcc{}
+		e.roundAcc[round] = a
+	}
+	return a
+}
+
+func (e *ExAnte) flushRoundStats(round int, a *common.RoundAcc) {
+	if a.Total == 0 {
+		return
+	}
+	var meanNs int64
+	if a.LagCount > 0 {
+		meanNs = a.LagSumNs / int64(a.LagCount)
+	}
+	e.logger.Warn("round stats",
+		zap.String("proto", "exante"), zap.Int("round", round),
+		zap.Int("total", a.Total), zap.Int("valid", a.Valid),
+		zap.Int("late", a.LateCount), zap.Int("max_lateness", a.MaxLateness),
+		zap.Int64("lag_mean_ns", meanNs), zap.Int64("lag_max_ns", a.LagMaxNs),
+		zap.Int64("lag_last_ns", a.LagLastNs), zap.Int("lag_count", a.LagCount))
+}
+
+func (e *ExAnte) validateMerklePath(merklePath []*pb.State, round int) bool {
 
 	if len(merklePath) < round {
 		e.logger.Warn(
@@ -434,10 +494,10 @@ func (e *ExAnte) validateMerklePath(merklePath [][][]byte, round int) bool {
 	}
 
 	for i := 0; i < round; i++ {
-		h := e.mdag.Oracle(merklePath[i]...)
+		h := e.mdag.Oracle(merklePath[i].Row...)
 		if i == round-1 {
-			return isValueInState(h, e.state[round])
-		} else if !isValueInState(h, merklePath[i+1]) {
+			return isValueInState(h, e.state[round]) //nolint:gosec // len(e.state) >= round+1 checked above
+		} else if !isValueInState(h, merklePath[i+1].Row) {
 			return false
 		}
 	}
@@ -463,14 +523,14 @@ func (e *ExAnte) isMessageValid(msg *pb.TimestampMessage, auxLocal float64, filt
 		return false
 	}
 	if !isValueInState(
-		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), convertTimestampToBytes(msg)[0],
+		e.mdag.Oracle([]byte(msg.SessionId), msg.VerificationKey, msg.Value, msg.Aux.PiRP), msg.MerklePath[0].Row,
 	) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
 		return false
 	}
-	if !e.validateMerklePath(convertTimestampToBytes(msg), r) {
+	if !e.validateMerklePath(msg.MerklePath, r) {
 		e.logger.Warn(
 			"Message filtered out by merkle path", zap.String("sender_id", msg.Id),
 		)
@@ -499,7 +559,7 @@ func (e *ExAnte) processMessage(
 				"Processing valid message", zap.String("sender_id", msg.Id), zap.Int("round", r), zap.Int("grade", g),
 			)
 		}
-		if results.Add(msg.VerificationKey, msg.Value, msg.Id, g) {
+		if results.Add(msg.VerificationKey, msg.Id, g) {
 			e.logger.Info(
 				"Added to results",
 				zap.String("sender_id", msg.Id),
@@ -541,7 +601,7 @@ func (e *ExAnte) processMessage(
 		pMsg.MerklePath = make([]*pb.State, r+1)
 		for i := 0; i < r; i++ {
 			state := getExAnteState()
-			state.Row = convertTimestampToBytes(msg)[i]
+			state.Row = msg.MerklePath[i].Row
 			pMsg.MerklePath[i] = state
 		}
 		lastState := getExAnteState()
@@ -564,34 +624,10 @@ func (e *ExAnte) processMessage(
 }
 
 func isValueInState(value []byte, state [][]byte) bool {
-
-	for _, state := range state {
-		if string(state) == string(value) {
+	for _, s := range state {
+		if bytes.Equal(s, value) {
 			return true
 		}
 	}
-
 	return false
-}
-
-func convertTimestampToBytes(msg *pb.TimestampMessage) [][][]byte {
-
-	result := make([][][]byte, len(msg.MerklePath))
-
-	for i, state := range msg.MerklePath {
-		if state == nil {
-			result[i] = nil
-			continue
-		}
-
-		if state.Row == nil {
-			result[i] = [][]byte{}
-			continue
-		}
-
-		result[i] = make([][]byte, len(state.Row))
-		copy(result[i], state.Row)
-	}
-
-	return result
 }

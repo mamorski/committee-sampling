@@ -2,6 +2,29 @@
 
 A simulation platform for setup-free committee election protocols. This software implements the algorithms and protocols described in **Setup-Free Committee Sampling with Subquadratic Communication** (Asiacrypt 2025).
 
+> **Disclaimer: verification is split into two streams and is not hardened against spam.**
+>
+> `RbExp.Verify` (`internal/resourcebound/rbexp.go`) runs the ex-post and ex-ante
+> timestamp verification protocols as two independent gossip streams and intersects
+> their output sets only after both finish. This follows Protocol 3 of the paper
+> literally. Within each stream every message is checked for the resource proof,
+> VDF, VRF, grade, and that stream's own Merkle path before it is forwarded, but a
+> message is never checked against the *other* stream's Merkle path. The informal
+> walkthrough in Section 2 of the paper instead sends one message carrying both
+> Merkle paths and drops it if either path fails.
+>
+> Consequence: the ex-ante stream does not establish that the challenge is fresh, so
+> an adversary can commit precomputed resource-proof tuples during initialization and
+> have honest nodes verify and forward them for all rounds. The final committee is
+> unaffected because the intersection removes them, but the communication and
+> verification cost is already paid. This is a protocol-level gap in Protocol 3 as
+> written, inherited by this implementation.
+>
+> It does not affect the published measurements. All experiments run under honest
+> execution, where both streams produce identical sets and the split and combined
+> variants yield the same committees and the same traffic. A combined-message variant
+> that verifies both paths before forwarding is listed as future work.
+
 ## About the Paper
 
 📄 **[View on IACR CryptoDB](https://iacr.org/cryptodb/data/paper.php?pubkey=36134)**
@@ -60,7 +83,7 @@ The binary entry point is `cmd/committee-sampling/main.go`. At startup the follo
 2. **Logging** – `createLogger` builds a zap logger configured by `logger.level`.
 3. **Time Synchronization** – `internal/synchronizer` queries the configured NTP server, computes per-step start times, and exposes `WaitForRound(step, round)` channels that gate protocol progress.
 4. **Networking** – `internal/network` spins up a libp2p host, joins the discovery DHT, handles neighbor churn, authenticates protobuf messages, and applies optional simulation behaviors.
-5. **Metrics** – `internal/metrics` registers Prometheus counters and optionally launches a `/metrics` HTTP server or Pushgateway pusher.
+5. **Metrics** – `internal/metrics` optionally launches a `/metrics` HTTP server or Pushgateway pusher. No application counters are registered; per-round message/byte/cache statistics are emitted to the structured logs at `WARN` level (see Observability).
 6. **Protocol Bootstrapping** – `internal/boot` wires together the building blocks:
    - `internal/resourceproof` provides proof-of-work based resource certificates.
    - `internal/resourcebound` runs Ex-Post and Ex-Ante timestamp protocols in parallel and intersects their outputs.
@@ -132,14 +155,15 @@ Single field `level` (`debug`, `info`, `warn`, `error`).
 }
 ```
 
-The collector always registers Prometheus counters:
+The collector registers no application counters. The former Prometheus counters
+(`total_messages`, `valid_messages`) were removed: with 1000 nodes per run their
+`node_id`-labelled cardinality made scraping/pushing impractical. Per-round message
+counts, arrival lag/lateness, byte volumes, cache hit/miss, committee, neighbors and
+peer-drops are instead emitted to the structured logs at `WARN` level, so a run with
+`logger.level: warn` keeps only that signal.
 
-| Metric           | Labels                                | Meaning                                                  |
-|------------------|---------------------------------------|----------------------------------------------------------|
-| `total_messages` | `round`, `protocol`, `node_id`, `sid` | Every inbound MDAG/ExAnte/ExPost packet the node parsed. |
-| `valid_messages` | Same as above                         | Subset that passed all validation checks.                |
-
-When `push_gateway.enabled` is true, metrics are pushed on the configured interval and optionally deleted on shutdown. The HTTP server exposes live metrics if `http_server.enabled` is set. Disable the entire block (`enabled: false`) for bare-bones runs.
+The push gateway / HTTP server blocks remain configurable but export nothing on their
+own now; leave `enabled: false` unless you register your own metrics.
 
 ---
 
@@ -173,8 +197,7 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 
 ## Observability & Troubleshooting
 
-* **Logs** – zap outputs to stdout/stderr with structured JSON format.
-* **Metrics** – visit the HTTP endpoint or query the Pushgateway / Prometheus instance you configured.
+* **Logs** – zap outputs to stdout/stderr with structured JSON format. Per-round stats (message counts, lag/lateness, byte volumes), cache hit/miss, committee, neighbor lists and peer-drops are logged at `WARN`; run with `logger.level: warn` to keep only these.
 * **Neighbor Topology** – final neighbor lists are logged at the end of each run for quick sanity checks.
 * **Committee Output** – elected members are printed both to stdout and to the structured logs with grade details.
 
@@ -200,7 +223,7 @@ Shutdown with `Ctrl+C`. Logs land in the current working directory; peer IDs, el
 | `internal/mdag`, `internal/exante`, `internal/expost` | Protocol sub-components.                                |
 | `internal/resourceproof`, `internal/resourcebound`    | Resource-bounded proofs.                                |
 | `internal/synchronizer`                               | Time-based round scheduler.                             |
-| `internal/metrics`                                    | Prometheus collector.                                   |
+| `internal/metrics`                                    | Optional metrics server (no app counters).              |
 | `pkg/config`                                          | Config loader.                                          |
 | `pkg/proto`                                           | Generated protobuf stubs.                               |
 
